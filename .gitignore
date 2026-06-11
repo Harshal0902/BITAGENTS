@@ -1,0 +1,12 @@
+node_modules
+.next
+dist
+.turbo
+.data
+.env
+.env.local
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

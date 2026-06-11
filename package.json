@@ -1,0 +1,35 @@
+{
+  "name": "bitagents",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BITAGENTS hackathon MVP: AI agents powered by decentralized compute on Solana devnet.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n web,worker -c coral,cyan \"npm run dev:web\" \"npm run dev:worker\"",
+    "dev:web": "npm run dev -w @bitagents/web",
+    "dev:worker": "npm run dev -w @bitagents/provider-worker",
+    "build": "npm run build -w @bitagents/shared && npm run build -w @bitagents/web && npm run build -w @bitagents/provider-worker",
+    "typecheck": "npm run typecheck -w @bitagents/shared && npm run typecheck -w @bitagents/web && npm run typecheck -w @bitagents/provider-worker",
+    "lint": "npm run lint -w @bitagents/web"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "typescript": "^5.5.4"
+  },
+  "engines": {
+    "node": ">=18.18"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "overrides": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7"
+  }
+}
