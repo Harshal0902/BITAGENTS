@@ -1,26 +1,83 @@
 "use client";
 
-import { useState, ReactNode } from "react";
-import type { Metadata } from "next";
+import { useMemo, useState, ReactNode } from "react";
 import { AppShell, Panel, Stat } from "@/components/AppShell";
+import { addListing } from "@/lib/marketplaceStore";
+import {
+  useWallet,
+} from "@solana/wallet-adapter-react";
+import { buildProviderMessage } from "@/lib/solana/providers";
+import { toast } from "sonner";
 
 export default function ProviderPage() {
+  const { publicKey, connected, signMessage } = useWallet();
+
   const [gpu, setGpu] = useState("H100");
   const [count, setCount] = useState(4);
   const [hours, setHours] = useState(1000);
   const [price, setPrice] = useState(0.42);
+  const [loading, setLoading] = useState(false);
+
+  const canSubmit = useMemo(() => {
+    return connected && publicKey && signMessage;
+  }, [connected, publicKey, signMessage]);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+
+    if (!canSubmit || !publicKey || !signMessage) {
+      alert("Connect wallet first");
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const message = buildProviderMessage({
+        wallet: publicKey,
+        gpu,
+        hours: count * hours,
+        price,
+      });
+
+      const encoded = new TextEncoder().encode(message);
+      const signature = await signMessage(encoded);
+
+      const signatureBase64 = Buffer.from(signature).toString("base64");
+
+      // 🔥 "devent" simulation (replace later with real event bus / backend)
+      console.log("📡 DEVENT: provider_listing_signed", {
+        wallet: publicKey.toBase58(),
+        gpu,
+        hours: count * hours,
+        price,
+        signature: signatureBase64,
+      });
+
+      toast.success('Listing signed and submitted!');
+
+      addListing({
+        provider: publicKey.toBase58().slice(0, 6) + "...",
+        gpu,
+        hours: count * hours,
+        price,
+      });
+    } catch (err) {
+      console.error(err);
+      alert("Signature failed");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <AppShell
       title="Provider Dashboard"
-      subtitle="Register GPU capacity. Mint cGPU. Earn on every consumed GPU-hour."
+      subtitle="Register GPU capacity. Sign listings on-chain identity. Earn cGPU yield."
     >
       <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
         <Panel title="// Register GPU">
-          <form
-            className="space-y-5"
-            onSubmit={(e) => e.preventDefault()}
-          >
+          <form className="space-y-5" onSubmit={handleSubmit}>
             <Field label="GPU Type">
               <div className="grid grid-cols-3 gap-px bg-[color:var(--border)]">
                 {["H100", "A100", "4090"].map((g) => (
@@ -29,8 +86,8 @@ export default function ProviderPage() {
                     type="button"
                     onClick={() => setGpu(g)}
                     className={`bg-background py-2.5 font-mono text-xs uppercase tracking-[0.16em] transition ${gpu === g
-                        ? "text-signal"
-                        : "text-muted-foreground hover:text-foreground"
+                      ? "text-signal"
+                      : "text-muted-foreground hover:text-foreground"
                       }`}
                   >
                     {g}
@@ -40,31 +97,27 @@ export default function ProviderPage() {
             </Field>
 
             <Field label="GPU Count">
-              <Input
-                value={count}
-                onChange={(v) => setCount(Number(v))}
-              />
+              <Input value={count} onChange={(v) => setCount(Number(v))} />
             </Field>
 
             <Field label="Available Hours">
-              <Input
-                value={hours}
-                onChange={(v) => setHours(Number(v))}
-              />
+              <Input value={hours} onChange={(v) => setHours(Number(v))} />
             </Field>
 
             <Field label="Expected Price ($ / GPU-hr)">
-              <Input
-                value={price}
-                onChange={(v) => setPrice(Number(v))}
-              />
+              <Input value={price} onChange={(v) => setPrice(Number(v))} />
             </Field>
 
             <button
               type="submit"
-              className="w-full bg-signal py-3 font-mono text-xs font-semibold uppercase tracking-[0.16em] text-primary-foreground transition hover:opacity-90"
+              disabled={!canSubmit || loading}
+              className={`w-full py-3 font-mono text-xs font-semibold uppercase tracking-[0.16em] transition
+                ${!canSubmit
+                  ? "bg-gray-600 text-gray-300 cursor-not-allowed"
+                  : "bg-signal text-primary-foreground hover:opacity-90"
+                }`}
             >
-              List Capacity →
+              {loading ? "Signing..." : "Sign & List Capacity →"}
             </button>
           </form>
         </Panel>
@@ -92,10 +145,7 @@ export default function ProviderPage() {
             </div>
 
             <div className="mt-4 h-2 w-full bg-surface-2">
-              <div
-                className="h-full bg-signal"
-                style={{ width: "68%" }}
-              />
+              <div className="h-full bg-signal" style={{ width: "68%" }} />
             </div>
 
             <div className="mt-2 flex justify-between font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -105,17 +155,9 @@ export default function ProviderPage() {
           </Panel>
 
           <div className="grid gap-4 sm:grid-cols-3">
-            <Stat
-              label="Revenue Earned"
-              value="$284.40"
-              accent="signal"
-            />
+            <Stat label="Revenue Earned" value="$284.40" accent="signal" />
             <Stat label="cGPU Minted" value="1,000" />
-            <Stat
-              label="Utilization"
-              value="68%"
-              accent="warn"
-            />
+            <Stat label="Utilization" value="68%" accent="warn" />
           </div>
         </div>
       </div>
@@ -135,7 +177,6 @@ function Field({
       <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
         {label}
       </span>
-
       <div className="mt-2">{children}</div>
     </label>
   );

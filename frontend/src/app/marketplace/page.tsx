@@ -1,14 +1,6 @@
-import type { Metadata } from "next";
 import Link from "next/link";
 import { AppShell, Panel, Stat } from "@/components/AppShell";
-
-const listings = [
-    { provider: "GPUFarm01", gpu: "H100", hours: 1000, price: 0.5 },
-    { provider: "CloudNodeA", gpu: "A100", hours: 500, price: 0.35 },
-    { provider: "NodeXYZ", gpu: "4090", hours: 200, price: 0.2 },
-    { provider: "EdgeCluster7", gpu: "H100", hours: 1800, price: 0.48 },
-    { provider: "ColoMesh", gpu: "A100", hours: 720, price: 0.33 },
-];
+import { getListings } from "@/lib/marketplaceStore";
 
 const buys = [
     { px: 0.412, sz: 1200, by: "alpha-7" },
@@ -25,6 +17,8 @@ const sells = [
 ];
 
 export default function MarketplacePage() {
+    const listings = getListings();
+
     return (
         <AppShell
             title="Compute Marketplace"
@@ -52,22 +46,13 @@ export default function MarketplacePage() {
 
                         <tbody className="divide-y divide-[color:var(--border)]">
                             {listings.map((listing) => (
-                                <tr
-                                    key={listing.provider}
-                                    className="hover:bg-surface/60"
-                                >
+                                <tr key={`${listing.provider}-${listing.gpu}`} className="hover:bg-surface/60">
                                     <td className="py-3">{listing.provider}</td>
-
                                     <td className="text-warn">{listing.gpu}</td>
-
-                                    <td className="tabular-nums">
-                                        {listing.hours.toLocaleString()}
-                                    </td>
-
+                                    <td className="tabular-nums">{listing.hours.toLocaleString()}</td>
                                     <td className="text-signal tabular-nums">
                                         ${listing.price.toFixed(2)}
                                     </td>
-
                                     <td className="text-right">
                                         <button className="border border-grid px-3 py-1.5 text-[10px] uppercase tracking-[0.16em] transition hover:border-signal hover:text-signal">
                                             Buy Compute
@@ -100,7 +85,6 @@ export default function MarketplacePage() {
                                 <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
                                     24h Volume
                                 </div>
-
                                 <div className="mt-1 font-display text-lg font-semibold tabular-nums">
                                     84.2k
                                 </div>
@@ -110,7 +94,6 @@ export default function MarketplacePage() {
                                 <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
                                     Supply
                                 </div>
-
                                 <div className="mt-1 font-display text-lg font-semibold tabular-nums">
                                     1.92M
                                 </div>
@@ -135,15 +118,9 @@ export default function MarketplacePage() {
                                 key={index}
                                 className="grid grid-cols-[1fr_1fr_1.5fr] gap-2 py-2.5 tabular-nums"
                             >
-                                <span className="text-signal">
-                                    {order.px.toFixed(3)}
-                                </span>
-
+                                <span className="text-signal">{order.px.toFixed(3)}</span>
                                 <span>{order.sz.toLocaleString()}</span>
-
-                                <span className="truncate text-muted-foreground">
-                                    {order.by}
-                                </span>
+                                <span className="truncate text-muted-foreground">{order.by}</span>
                             </li>
                         ))}
                     </ul>
@@ -156,15 +133,9 @@ export default function MarketplacePage() {
                                 key={index}
                                 className="grid grid-cols-[1fr_1fr_1.5fr] gap-2 py-2.5 tabular-nums"
                             >
-                                <span className="text-warn">
-                                    {order.px.toFixed(3)}
-                                </span>
-
+                                <span className="text-warn">{order.px.toFixed(3)}</span>
                                 <span>{order.sz.toLocaleString()}</span>
-
-                                <span className="truncate text-muted-foreground">
-                                    {order.by}
-                                </span>
+                                <span className="truncate text-muted-foreground">{order.by}</span>
                             </li>
                         ))}
                     </ul>

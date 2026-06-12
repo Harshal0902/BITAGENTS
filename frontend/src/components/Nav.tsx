@@ -8,7 +8,7 @@ import { usePathname } from "next/navigation";
 const appLinks = [
   { href: "/marketplace", label: "Marketplace" },
   { href: "/provider", label: "Provider" },
-  { href: "/vaults", label: "Vaults" },
+  // { href: "/vaults", label: "Vaults" },
   { href: "/agents", label: "Agents" },
   { href: "/analytics", label: "Analytics" }
 ];

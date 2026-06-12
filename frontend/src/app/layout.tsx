@@ -3,6 +3,7 @@ import "@solana/wallet-adapter-react-ui/styles.css";
 import type { Metadata } from "next";
 import { Nav } from "@/components/Nav";
 import { SolanaProviders } from "@/components/SolanaProviders";
+import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
   title: "BIT Agents",
@@ -16,6 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <SolanaProviders>
           <Nav>{children}</Nav>
         </SolanaProviders>
+        <Toaster />
       </body>
     </html>
   );

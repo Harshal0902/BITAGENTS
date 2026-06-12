@@ -71,8 +71,8 @@ export default function VaultsPage() {
                         action={
                             <span
                                 className={`font-mono text-[10px] ${vault.perf >= 0
-                                        ? "text-signal"
-                                        : "text-destructive"
+                                    ? "text-signal"
+                                    : "text-destructive"
                                     }`}
                             >
                                 {vault.perf >= 0 ? "+" : ""}
@@ -97,8 +97,8 @@ export default function VaultsPage() {
 
                                 <div
                                     className={`mt-1 font-display text-2xl font-bold tabular-nums ${vault.perf >= 0
-                                            ? "text-signal"
-                                            : "text-destructive"
+                                        ? "text-signal"
+                                        : "text-destructive"
                                         }`}
                                 >
                                     {vault.perf >= 0 ? "+" : ""}
@@ -141,10 +141,10 @@ function Cell({ k, v, accent }: CellProps) {
 
             <div
                 className={`mt-1 font-display text-base font-semibold tabular-nums ${accent === "signal"
-                        ? "text-signal"
-                        : accent === "warn"
-                            ? "text-warn"
-                            : ""
+                    ? "text-signal"
+                    : accent === "warn"
+                        ? "text-warn"
+                        : ""
                     }`}
             >
                 {v}
