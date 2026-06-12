@@ -23,11 +23,11 @@ The MVP proves the full loop on Solana devnet:
          | devnet SOL transfer          | poll/claim/result
          v                               v
 +--------+------------------------------------------------+
-| apps/web                                                |
+| frontend                                                |
 | Next.js 14 UI + API routes                              |
-| - /dashboard creates tasks and records payment sigs     |
-| - /provider registers compute providers                 |
-| - /demo shows task lifecycle and payout links           |
+| - /marketplace shows compute listings and cGPU orders   |
+| - /vaults and /agents show vault and agent dashboards    |
+| - /dashboard creates tasks and records payment sigs      |
 | - local JSON DB stores providers/tasks                  |
 +--------+------------------------------------------------+
          |
@@ -39,15 +39,18 @@ The MVP proves the full loop on Solana devnet:
 +------------------+
 ```
 
-## Monorepo
+## Repository layout
+
+This repository intentionally avoids an npm-workspace monorepo setup. Each major app/package has its own folder, package file, dependencies, and code.
 
 ```text
-/apps/web              Next.js app, API routes, wallet UI, demo pages
-/apps/provider-worker  Node worker that runs provider computation
-/packages/shared       Shared task/provider/result types and helpers
-.env.example           Environment template
-DEMO.md                Exact hackathon demo script
+/frontend                 Next.js app, API routes, wallet UI, marketplace, vaults, agents, analytics
+/workers/provider-worker  Node worker that polls tasks and runs provider computation
+/shared                   Shared task/provider/result types and helpers used by the apps
+.env.example              Environment template
 ```
+
+The root `package.json` only provides convenience scripts for running the separate folders together.
 
 ## Agent task types
 
@@ -87,9 +90,16 @@ The worker runs real CPU work:
 
 ## Install
 
+Install the lightweight root orchestration dependencies, then install each standalone package folder:
+
 ```bash
 npm install
+npm --prefix shared install
+npm --prefix frontend install
+npm --prefix workers/provider-worker install
 ```
+
+Each folder now keeps its own `package.json` and `package-lock.json`.
 
 ## Environment
 
@@ -128,18 +138,20 @@ You can also use Phantom:
 
 ## Run the MVP
 
-Run the web app and worker together:
+Run the frontend and worker together from the repository root:
 
 ```bash
 npm run dev
 ```
 
-Or run them separately:
+Or run each standalone folder separately:
 
 ```bash
-npm run dev:web
-npm run dev:worker
+npm --prefix frontend run dev
+npm --prefix workers/provider-worker run dev
 ```
+
+You can also `cd` into `frontend`, `workers/provider-worker`, or `shared` and use that folder's own `package.json` scripts directly.
 
 The web app runs at:
 
@@ -222,13 +234,21 @@ Set `BITAGENTS_DATA_DIR` to use another local directory.
 
 ## Hackathon demo script
 
-See [DEMO.md](./DEMO.md) for a live walkthrough.
-
 ## Build and checks
+
+From the repository root:
 
 ```bash
 npm run typecheck
 npm run build
+```
+
+Or run checks inside a single folder:
+
+```bash
+npm --prefix frontend run typecheck
+npm --prefix workers/provider-worker run typecheck
+npm --prefix shared run typecheck
 ```
 
 ## Notes

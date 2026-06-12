@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@bitagents/shared": "file:../../packages/shared",
+    "@bitagents/shared": "file:../../shared",
     "@solana/web3.js": "^1.95.3",
     "dotenv": "^16.4.5"
   },
