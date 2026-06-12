@@ -1,120 +1,77 @@
-"use client";
-
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
-import { ArrowUpRight, Cpu, LayoutDashboard, RadioTower, ScrollText } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import type { ReactNode } from "react";
+import { Logo } from "@/components/Logo";
 
-const appLinks = [
-  { href: "/dashboard", label: "Tasks", icon: LayoutDashboard },
-  { href: "/provider", label: "Provider", icon: Cpu },
-  { href: "/demo", label: "Demo", icon: RadioTower },
-  { href: "/utility", label: "Utility", icon: ScrollText }
+const NAV = [
+  { to: "/marketplace", label: "Marketplace" },
+  { to: "/provider", label: "Provider" },
+  { to: "/vaults", label: "Vaults" },
+  { to: "/agents", label: "Agents" },
+  { to: "/analytics", label: "Analytics" },
 ];
 
-const marketingLinks = [
-  { href: "/#product", label: "Product" },
-  { href: "/#compute", label: "Compute" },
-  { href: "/#token-utility", label: "Token Utility" },
-  { href: "/#roadmap", label: "Roadmap" }
-];
-
-export function AppShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
-  const isPublicPage = pathname === "/" || pathname === "/coming-soon";
-
+export function AppShell({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
   return (
-    <div className={isPublicPage ? "min-h-screen bg-[#f5efe6]" : "min-h-screen"}>
-      <header className={isPublicPage ? "sticky top-0 z-30 border-b border-[#ded2c3] bg-[#f5efe6] backdrop-blur" : "sticky top-0 z-30 border-b border-line/80 bg-ink/90 backdrop-blur"}>
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
-          <Link href="/" className="flex items-center">
-            <Wordmark compact />
+    <div className="min-h-screen text-foreground">
+      {/* <header className="sticky top-0 z-40 border-b border-grid bg-background/70 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3.5">
+          <Link href="/" className="flex items-center gap-3">
+            <Logo className="h-7 w-auto" />
+            <span className="ml-1 hidden text-[10px] font-mono uppercase tracking-[0.18em] text-muted-foreground md:inline">/ devnet</span>
           </Link>
-
-          {isPublicPage ? (
-            <>
-              <nav className="hidden items-center gap-1 md:flex">
-                {marketingLinks.map(({ href, label }) => (
-                  <Link
-                    key={href}
-                    href={href}
-                    className="rounded-md px-3 py-2 text-sm font-bold text-[#4c4036] transition hover:bg-[#eadfd2] hover:text-[#211912]"
-                  >
-                    {label}
-                  </Link>
-                ))}
-              </nav>
+          <nav className="hidden items-center gap-1 text-xs font-mono uppercase tracking-[0.14em] md:flex">
+            {NAV.map((l) => (
               <Link
-                href="/coming-soon"
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-[#d76545] px-4 py-2 text-sm font-black text-[#fff8ef] transition hover:bg-[#bd5134]"
+                key={l.to}
+                href={l.to}
+                className="px-3 py-1.5 text-muted-foreground transition hover:text-foreground"
+                // activeProps={{ className: "px-3 py-1.5 text-signal border border-grid bg-surface/60" }}
               >
-                Launch App <ArrowUpRight size={16} />
+                {l.label}
               </Link>
-            </>
-          ) : (
-            <>
-              <nav className="hidden items-center gap-1 md:flex">
-                {appLinks.map(({ href, label, icon: Icon }) => {
-                  const active = pathname === href;
-                  return (
-                    <Link
-                      key={href}
-                      href={href}
-                      className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm font-bold transition ${
-                        active
-                          ? "bg-ember text-ink"
-                          : "text-slate-300 hover:bg-panel hover:text-white"
-                      }`}
-                    >
-                      <Icon size={16} />
-                      {label}
-                    </Link>
-                  );
-                })}
-              </nav>
-              <div className="hidden sm:block">
-                <WalletMultiButton />
-              </div>
-            </>
-          )}
-        </div>
-
-        {!isPublicPage && (
-          <div className="mx-auto flex max-w-7xl items-center gap-1 overflow-x-auto px-4 pb-3 sm:hidden">
-            {appLinks.map(({ href, label, icon: Icon }) => {
-              const active = pathname === href;
-              return (
-                <Link
-                  key={href}
-                  href={href}
-                  className={`flex min-w-fit items-center gap-2 rounded-md px-3 py-2 text-sm font-bold ${
-                    active ? "bg-ember text-ink" : "bg-panel text-slate-300"
-                  }`}
-                >
-                  <Icon size={15} />
-                  {label}
-                </Link>
-              );
-            })}
+            ))}
+          </nav>
+          <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+            <span className="h-1.5 w-1.5 rounded-full bg-signal animate-pulse-dot" />
+            <span className="hidden sm:inline">wallet · 7Hk…q4Px</span>
           </div>
-        )}
-      </header>
-      <main>{children}</main>
+        </div>
+      </header> */}
+      <div className="mx-auto max-w-7xl px-6 py-10">
+        <div className="mb-8 flex flex-col items-start justify-between gap-2 border-b border-grid pb-6 md:flex-row md:items-end">
+          <div>
+            <h1 className="font-display text-3xl font-bold leading-tight md:text-4xl">{title}</h1>
+            {subtitle && <p className="mt-2 text-sm text-muted-foreground">{subtitle}</p>}
+          </div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+            block 284,193,402 · slot 18.4k
+          </div>
+        </div>
+        {children}
+      </div>
     </div>
   );
 }
 
-export function Wordmark({ compact = false }: { compact?: boolean }) {
-  const width = compact ? 132 : 390;
-
+export function Panel({ title, action, children, className = "" }: { title?: string; action?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <img
-      src="/bit-agents-logo-transparent.png"
-      alt="BIT Agents"
-      width={width}
-      height={Math.round(width * 0.8)}
-      className={compact ? "block h-12 object-contain object-left" : "block h-auto max-w-full object-contain object-left"}
-      style={{ width: compact ? 132 : "min(390px, 100%)" }}
-    />
+    <div className={`border border-grid bg-surface/40 ${className}`}>
+      {title && (
+        <div className="flex items-center justify-between border-b border-grid px-4 py-2.5">
+          <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">{title}</span>
+          {action}
+        </div>
+      )}
+      <div className="p-4">{children}</div>
+    </div>
+  );
+}
+
+export function Stat({ label, value, accent }: { label: string; value: string; accent?: "signal" | "warn" }) {
+  return (
+    <div className="border border-grid bg-surface/40 p-4">
+      <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">{label}</div>
+      <div className={`mt-2 font-display text-2xl font-bold tabular-nums ${accent === "signal" ? "text-signal" : accent === "warn" ? "text-warn" : ""}`}>{value}</div>
+    </div>
   );
 }
