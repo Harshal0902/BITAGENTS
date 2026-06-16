@@ -2,16 +2,18 @@
 
 import {
   JUPITER_MIN_ORDER_USD,
+  WSOL_MINT,
   makeExplorerTxUrl,
   type DcaPlan
 } from "@bitagents/shared";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
-import { ArrowUp, Loader2, ShieldCheck, Sparkles, Wallet, Zap } from "lucide-react";
+import { ArrowUp, Bot, Loader2, ShieldCheck, Sparkles, Wallet, Zap } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useNetwork } from "@/components/NetworkProvider";
 import { ActionButton, Panel, Tag } from "@/components/primitives";
+import { AgentWalletBot } from "@/components/dca/AgentWalletBot";
 import { PlanCard } from "@/components/dca/PlanCard";
 import { PlanPreview } from "@/components/dca/PlanPreview";
 import { useDcaWallet } from "@/components/dca/useDcaWallet";
@@ -48,6 +50,7 @@ function renderMessageText(text: string) {
 
 const EXAMPLES = [
   "Buy BITAGENTS every 10 minutes with 0.01 SOL using 1 SOL total",
+  "Buy BITAGENTS every 1 minute with 0.01 SOL for 3 buys",
   "Buy SOL every day with 10 USDC for 30 days",
   "Buy iu3A7azWTm3zQSk81SUC1JctB4zPYnxLmcmqq71EASY every hour with 0.05 SOL for 10 buys"
 ];
@@ -81,6 +84,7 @@ export function DcaAgent() {
   const [draft, setDraft] = useState<DcaPlan | null>(null);
   const [fallback, setFallback] = useState<Fallback | null>(null);
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
+  const [agentBot, setAgentBot] = useState<DcaPlan | null>(null);
 
   const { network, dcaModeLabel, mainnetDcaEnabled } = useNetwork();
   const wallet = useDcaWallet();
@@ -260,6 +264,34 @@ export function DcaAgent() {
     [connection, network, pushAgent, sendTransaction, setVisible, wallet.address, wallet.connected]
   );
 
+  // Experimental Agent Wallet Mode: run the plan as a self-signing throwaway
+  // wallet so small buys auto-execute on schedule (no Jupiter minimum, no
+  // per-buy popup). The key stays in the browser; funds are user-swept.
+  const launchAgentBot = useCallback(
+    (plan: DcaPlan) => {
+      if (network !== "mainnet") {
+        toast.error("Switch to Mainnet Safe Mode to run an agent wallet bot.");
+        return;
+      }
+      if (!wallet.connected || !wallet.address) {
+        toast.error("Connect your wallet to set up an agent wallet.");
+        setVisible(true);
+        return;
+      }
+      if (plan.inputMint !== WSOL_MINT) {
+        toast.error("The agent wallet bot currently funds buys with SOL only.");
+        return;
+      }
+      setDraft(null);
+      setFallback(null);
+      setAgentBot(plan);
+      pushAgent(
+        "Agent wallet bot ready. I generated a throwaway wallet in your browser — fund it with a little SOL, then it auto-buys on schedule. Withdraw back to your wallet anytime."
+      );
+    },
+    [network, pushAgent, setVisible, wallet.address, wallet.connected]
+  );
+
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
       <Panel
@@ -335,6 +367,10 @@ export function DcaAgent() {
       </Panel>
 
       <div className="space-y-5">
+        {agentBot && wallet.address ? (
+          <AgentWalletBot plan={agentBot} userAddress={wallet.address} onExit={() => setAgentBot(null)} />
+        ) : null}
+
         <Panel title="dca.plan.preview" bodyClassName="space-y-4">
           {draft ? (
             <>
@@ -353,15 +389,25 @@ export function DcaAgent() {
                 Create DCA Agent
               </ActionButton>
               {draft.executionMode === "jupiter_recurring" ? (
-                <ActionButton
-                  variant="outline"
-                  onClick={() => buyNow(draft)}
-                  disabled={buying || confirming}
-                  className="w-full"
-                >
-                  {buying ? <Loader2 className="animate-spin" size={15} /> : <Zap size={15} />}
-                  Buy {trimAmount(draft.perOrderAmountUi)} {draft.inputSymbol} of {draft.outputSymbol} now
-                </ActionButton>
+                <>
+                  <ActionButton
+                    variant="outline"
+                    onClick={() => buyNow(draft)}
+                    disabled={buying || confirming}
+                    className="w-full"
+                  >
+                    {buying ? <Loader2 className="animate-spin" size={15} /> : <Zap size={15} />}
+                    Buy {trimAmount(draft.perOrderAmountUi)} {draft.inputSymbol} of {draft.outputSymbol} now
+                  </ActionButton>
+                  <ActionButton
+                    variant="outline"
+                    onClick={() => launchAgentBot(draft)}
+                    disabled={buying || confirming}
+                    className="w-full"
+                  >
+                    <Bot size={15} /> Automate with an agent wallet
+                  </ActionButton>
+                </>
               ) : null}
               <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
                 Nothing is created until you confirm. {draft.executionMode === "jupiter_recurring"
@@ -383,6 +429,14 @@ export function DcaAgent() {
                 A one-time market buy has no per-order minimum, so this small amount goes through. You sign it in your
                 wallet — no funds are custodied.
               </p>
+              <ActionButton
+                variant="outline"
+                onClick={() => launchAgentBot(fallback.plan)}
+                disabled={confirming || buying}
+                className="w-full"
+              >
+                <Bot size={15} /> Run it as an auto-bot (agent wallet)
+              </ActionButton>
               <ActionButton
                 variant="outline"
                 onClick={() => create(fallback.plan, "devnet")}
