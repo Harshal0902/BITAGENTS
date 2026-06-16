@@ -28,6 +28,9 @@ interface NetworkContextValue {
   rpcUrl: string;
   config: PublicConfig;
   configLoaded: boolean;
+  // DCA: mainnet "Safe Mode" is only available when the deployment enables it.
+  mainnetDcaEnabled: boolean;
+  dcaModeLabel: string;
 }
 
 const NetworkContext = createContext<NetworkContextValue | null>(null);
@@ -86,7 +89,10 @@ export function NetworkProvider({ children }: { children: ReactNode }) {
       paymentsEnabled: network === "devnet",
       rpcUrl: rpcUrlFor(config, network),
       config,
-      configLoaded
+      configLoaded,
+      mainnetDcaEnabled: config.enableMainnetDca,
+      dcaModeLabel:
+        network === "mainnet" && config.enableMainnetDca ? "Mainnet Safe Mode" : "Devnet Demo Mode"
     }),
     [network, setNetwork, toggleNetwork, config, configLoaded]
   );

@@ -7,6 +7,10 @@ export interface PublicConfig {
   taskFeeSol: number;
   devnetRpc: string;
   mainnetRpc: string;
+  bitagentsMint: string;
+  bitagentsSymbol: string;
+  enableMainnetDca: boolean;
+  enableAgentWalletMode: boolean;
 }
 
 export const FALLBACK_CONFIG: PublicConfig = {
@@ -15,7 +19,11 @@ export const FALLBACK_CONFIG: PublicConfig = {
   defaultNetwork: "devnet",
   taskFeeSol: DEFAULT_TASK_PRICE_SOL,
   devnetRpc: "https://api.devnet.solana.com",
-  mainnetRpc: "https://api.mainnet-beta.solana.com"
+  mainnetRpc: "https://api.mainnet-beta.solana.com",
+  bitagentsMint: "iu3A7azWTm3zQSk81SUC1JctB4zPYnxLmcmqq71EASY",
+  bitagentsSymbol: "BITAGENTS",
+  enableMainnetDca: false,
+  enableAgentWalletMode: false
 };
 
 export function rpcUrlFor(config: PublicConfig, network: SolanaNetwork): string {
