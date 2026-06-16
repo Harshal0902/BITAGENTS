@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WSOL_MINT } from "@bitagents/shared";
 import {
   buildCreateOrderBody,
+  buildSwapTransaction,
   cancelJupiterRecurringOrder,
   createJupiterRecurringOrder,
   type CreateRecurringOrderInput
@@ -85,6 +86,35 @@ describe("createJupiterRecurringOrder", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toBe("boom");
+  });
+});
+
+describe("buildSwapTransaction", () => {
+  const quote = { inputMint: WSOL_MINT, outputMint: BITAGENTS_MINT, outAmount: "53193192594" };
+
+  it("returns the unsigned transaction and lastValidBlockHeight on success", async () => {
+    mockFetchOnce(200, { swapTransaction: "SWAP_TX_BASE64", lastValidBlockHeight: 404954490 });
+    const result = await buildSwapTransaction(quote, baseInput.user);
+    expect(result).not.toBeNull();
+    expect(result?.swapTransaction).toBe("SWAP_TX_BASE64");
+    expect(result?.lastValidBlockHeight).toBe(404954490);
+  });
+
+  it("returns null when Jupiter omits the transaction", async () => {
+    mockFetchOnce(200, { error: "no route" });
+    const result = await buildSwapTransaction(quote, baseInput.user);
+    expect(result).toBeNull();
+  });
+
+  it("returns null on a network error instead of throwing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("boom");
+      })
+    );
+    const result = await buildSwapTransaction(quote, baseInput.user);
+    expect(result).toBeNull();
   });
 });
 

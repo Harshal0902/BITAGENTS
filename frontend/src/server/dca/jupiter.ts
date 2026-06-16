@@ -305,6 +305,48 @@ export async function fetchSwapTransaction(
   }
 }
 
+export interface BuiltSwapTransaction {
+  swapTransaction: string;
+  lastValidBlockHeight: number | null;
+}
+
+/**
+ * Build an unsigned base64 swap transaction for a one-time market buy. Unlike
+ * the Recurring API this has no per-order minimum, so it powers the immediate
+ * "Buy now" path that lets a small purchase go through. The user signs and
+ * sends it from their own wallet — no custody, no integrator fee.
+ */
+export async function buildSwapTransaction(
+  quoteResponse: Record<string, unknown>,
+  userPublicKey: string,
+  config: DcaServerConfig = dcaConfig()
+): Promise<BuiltSwapTransaction | null> {
+  try {
+    const response = await fetch(`${config.jupiterBaseUrl}/swap/v1/swap`, {
+      method: "POST",
+      headers: jupiterHeaders(config),
+      body: JSON.stringify({
+        quoteResponse,
+        userPublicKey,
+        wrapAndUnwrapSol: true,
+        dynamicComputeUnitLimit: true
+      })
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json().catch(() => null)) as
+      | { swapTransaction?: string; lastValidBlockHeight?: number }
+      | null;
+    if (!payload?.swapTransaction) return null;
+    return {
+      swapTransaction: payload.swapTransaction,
+      lastValidBlockHeight:
+        typeof payload.lastValidBlockHeight === "number" ? payload.lastValidBlockHeight : null
+    };
+  } catch {
+    return null;
+  }
+}
+
 export interface PriceResult {
   usdPrice: number | null;
   decimals: number | null;

@@ -42,6 +42,35 @@ export interface PlanDetail {
   executions: DcaExecution[];
 }
 
+export interface MarketBuyQuote {
+  inputSymbol: string;
+  outputSymbol: string;
+  inputMint: string;
+  outputMint: string;
+  inputAmountUi: number;
+  outputAmountUi: number;
+  priceImpactPct: number | null;
+  slippageBps: number;
+}
+
+export type MarketBuyResponse =
+  | { ok: true; transaction: string; lastValidBlockHeight: number | null; quote: MarketBuyQuote }
+  | { ok: false; error: string };
+
+export async function marketBuy(input: {
+  walletAddress: string;
+  network: SolanaNetwork;
+  outputMint: string;
+  inputMint?: string;
+  amountUi: number;
+  slippageBps?: number;
+}): Promise<MarketBuyResponse> {
+  return apiFetch<MarketBuyResponse>("/api/dca/buy", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
 export async function parseDcaMessage(input: {
   message: string;
   walletAddress?: string;

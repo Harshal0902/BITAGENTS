@@ -2,21 +2,49 @@
 
 import {
   JUPITER_MIN_ORDER_USD,
+  makeExplorerTxUrl,
   type DcaPlan
 } from "@bitagents/shared";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
-import { ArrowUp, Loader2, ShieldCheck, Sparkles, Wallet } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowUp, Loader2, ShieldCheck, Sparkles, Wallet, Zap } from "lucide-react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useNetwork } from "@/components/NetworkProvider";
 import { ActionButton, Panel, Tag } from "@/components/primitives";
 import { PlanCard } from "@/components/dca/PlanCard";
 import { PlanPreview } from "@/components/dca/PlanPreview";
 import { useDcaWallet } from "@/components/dca/useDcaWallet";
-import { createDcaPlan, executeDcaPlan, parseDcaMessage } from "@/lib/dca";
-import { signBase64Transaction } from "@/lib/solana";
+import { createDcaPlan, executeDcaPlan, marketBuy, parseDcaMessage } from "@/lib/dca";
+import { sendAndConfirmBase64Transaction, signBase64Transaction } from "@/lib/solana";
 import { cn } from "@/lib/utils";
+
+function trimAmount(value: number, max = 6): string {
+  if (!Number.isFinite(value)) return "0";
+  return value.toFixed(max).replace(/\.?0+$/, "");
+}
+
+const URL_SPLIT_PATTERN = /(https?:\/\/[^\s]+)/g;
+
+/** Render chat text with any URLs as clickable links (e.g. Solana Explorer). */
+function renderMessageText(text: string) {
+  const parts = text.split(URL_SPLIT_PATTERN);
+  return parts.map((part, index) =>
+    /^https?:\/\//.test(part) ? (
+      <a
+        key={`${part}-${index}`}
+        href={part}
+        target="_blank"
+        rel="noreferrer"
+        className="text-signal underline underline-offset-2 hover:text-signal-soft"
+      >
+        {part}
+      </a>
+    ) : (
+      <Fragment key={`t-${index}`}>{part}</Fragment>
+    )
+  );
+}
 
 const EXAMPLES = [
   "Buy BITAGENTS every 10 minutes with 0.01 SOL using 1 SOL total",
@@ -42,20 +70,22 @@ function makeMessage(role: "user" | "agent", text: string): ChatMessage {
 }
 
 const GREETING =
-  "Tell me what token to buy, how much to spend, and how often. For example: \"Buy BITAGENTS every 10 minutes with 0.01 SOL using 1 SOL total.\" I'll turn it into a recurring buy plan for you to confirm.";
+  "Tell me what token to buy, how much to spend, and how often. For example: \"Buy BITAGENTS every 10 minutes with 0.01 SOL using 1 SOL total.\" I'll turn it into a buy plan for you to confirm — and you can always make a one-time \"Buy now\" purchase (no minimum) instead.";
 
 export function DcaAgent() {
   const [messages, setMessages] = useState<ChatMessage[]>([makeMessage("agent", GREETING)]);
   const [input, setInput] = useState("");
   const [parsing, setParsing] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [buying, setBuying] = useState(false);
   const [draft, setDraft] = useState<DcaPlan | null>(null);
   const [fallback, setFallback] = useState<Fallback | null>(null);
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
 
   const { network, dcaModeLabel, mainnetDcaEnabled } = useNetwork();
   const wallet = useDcaWallet();
-  const { signTransaction } = useWallet();
+  const { signTransaction, sendTransaction } = useWallet();
+  const { connection } = useConnection();
   const { setVisible } = useWalletModal();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -171,6 +201,65 @@ export function DcaAgent() {
     [network, pushAgent, setVisible, signTransaction, wallet.address, wallet.connected]
   );
 
+  // One-time market buy via Jupiter's Swap API — no per-order minimum, so a
+  // small purchase (e.g. 0.01 SOL of BITAGENTS) goes through immediately.
+  const buyNow = useCallback(
+    async (plan: DcaPlan) => {
+      if (network !== "mainnet") {
+        toast.error("Switch to Mainnet Safe Mode to make a real buy.");
+        return;
+      }
+      if (!wallet.connected || !wallet.address) {
+        toast.error("Connect your wallet to buy.");
+        setVisible(true);
+        return;
+      }
+      if (!sendTransaction) {
+        toast.error("Wallet cannot send transactions.");
+        return;
+      }
+      setBuying(true);
+      try {
+        const result = await marketBuy({
+          walletAddress: wallet.address,
+          network,
+          outputMint: plan.outputMint,
+          inputMint: plan.inputMint,
+          amountUi: plan.perOrderAmountUi,
+          slippageBps: plan.slippageBps
+        });
+        if (!result.ok) {
+          pushAgent(result.error);
+          return;
+        }
+        pushAgent(
+          `Live quote: ${trimAmount(result.quote.inputAmountUi)} ${result.quote.inputSymbol} → ~${trimAmount(
+            result.quote.outputAmountUi
+          )} ${result.quote.outputSymbol}. Approve the swap in your wallet.`
+        );
+        const signature = await sendAndConfirmBase64Transaction({
+          base64: result.transaction,
+          connection,
+          sendTransaction,
+          lastValidBlockHeight: result.lastValidBlockHeight
+        });
+        setFallback(null);
+        setDraft(null);
+        pushAgent(
+          `Done — bought ~${trimAmount(result.quote.outputAmountUi)} ${result.quote.outputSymbol}. View it on Solana Explorer: ${makeExplorerTxUrl(
+            signature,
+            "mainnet"
+          )}`
+        );
+      } catch (error) {
+        pushAgent((error as Error).message);
+      } finally {
+        setBuying(false);
+      }
+    },
+    [connection, network, pushAgent, sendTransaction, setVisible, wallet.address, wallet.connected]
+  );
+
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
       <Panel
@@ -192,7 +281,7 @@ export function DcaAgent() {
                     : "border border-border bg-surface-2 text-foreground/90"
                 )}
               >
-                {message.text}
+                {renderMessageText(message.text)}
               </div>
             </div>
           ))}
@@ -259,13 +348,24 @@ export function DcaAgent() {
                   <Wallet size={13} /> connect wallet {draft.executionMode === "jupiter_recurring" ? "(required for mainnet)" : "(optional for demo)"}
                 </button>
               ) : null}
-              <ActionButton onClick={() => create(draft)} disabled={confirming} className="w-full">
+              <ActionButton onClick={() => create(draft)} disabled={confirming || buying} className="w-full">
                 {confirming ? <Loader2 className="animate-spin" size={15} /> : <ShieldCheck size={15} />}
                 Create DCA Agent
               </ActionButton>
+              {draft.executionMode === "jupiter_recurring" ? (
+                <ActionButton
+                  variant="outline"
+                  onClick={() => buyNow(draft)}
+                  disabled={buying || confirming}
+                  className="w-full"
+                >
+                  {buying ? <Loader2 className="animate-spin" size={15} /> : <Zap size={15} />}
+                  Buy {trimAmount(draft.perOrderAmountUi)} {draft.inputSymbol} of {draft.outputSymbol} now
+                </ActionButton>
+              ) : null}
               <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
                 Nothing is created until you confirm. {draft.executionMode === "jupiter_recurring"
-                  ? "You will sign the order in your wallet — funds are never custodied."
+                  ? "You will sign in your wallet — funds are never custodied. “Buy now” is a one-time market swap with no minimum."
                   : "Devnet Demo simulates executions; no real tokens are bought."}
               </p>
             </>
@@ -275,9 +375,22 @@ export function DcaAgent() {
                 <Sparkles size={14} className="mt-0.5 shrink-0" /> {fallback.reason}
               </div>
               <PlanPreview plan={fallback.plan} />
-              <ActionButton onClick={() => create(fallback.plan, "devnet")} disabled={confirming} className="w-full">
+              <ActionButton onClick={() => buyNow(fallback.plan)} disabled={buying} className="w-full">
+                {buying ? <Loader2 className="animate-spin" size={15} /> : <Zap size={15} />}
+                Buy {trimAmount(fallback.plan.perOrderAmountUi)} {fallback.plan.inputSymbol} of {fallback.plan.outputSymbol} now
+              </ActionButton>
+              <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
+                A one-time market buy has no per-order minimum, so this small amount goes through. You sign it in your
+                wallet — no funds are custodied.
+              </p>
+              <ActionButton
+                variant="outline"
+                onClick={() => create(fallback.plan, "devnet")}
+                disabled={confirming || buying}
+                className="w-full"
+              >
                 {confirming ? <Loader2 className="animate-spin" size={15} /> : null}
-                Try in Devnet Demo Mode
+                Try recurring in Devnet Demo Mode
               </ActionButton>
             </div>
           ) : (

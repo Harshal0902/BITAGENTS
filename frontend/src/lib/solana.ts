@@ -59,3 +59,33 @@ export async function signBase64Transaction({
   const signed = await signTransaction(transaction);
   return Buffer.from(signed.serialize()).toString("base64");
 }
+
+// Jupiter's Swap API returns an unsigned base64 VersionedTransaction for a
+// one-time market buy. The wallet adapter signs and submits it (the private key
+// never leaves the wallet); we then confirm against the blockhash baked into
+// the transaction and return the signature.
+export async function sendAndConfirmBase64Transaction({
+  base64,
+  connection,
+  sendTransaction,
+  lastValidBlockHeight
+}: {
+  base64: string;
+  connection: Connection;
+  sendTransaction: (
+    transaction: VersionedTransaction,
+    connection: Connection
+  ) => Promise<string>;
+  lastValidBlockHeight?: number | null;
+}): Promise<string> {
+  const bytes = Uint8Array.from(Buffer.from(base64, "base64"));
+  const transaction = VersionedTransaction.deserialize(bytes);
+  const signature = await sendTransaction(transaction, connection);
+  const blockhash = transaction.message.recentBlockhash;
+  const lastValid =
+    typeof lastValidBlockHeight === "number"
+      ? lastValidBlockHeight
+      : (await connection.getLatestBlockhash("confirmed")).lastValidBlockHeight;
+  await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight: lastValid }, "confirmed");
+  return signature;
+}
