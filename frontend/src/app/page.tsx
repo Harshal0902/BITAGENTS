@@ -138,7 +138,7 @@ export default function LandingPage() {
           <div>
             <h2 className="font-display text-2xl font-bold text-foreground">Ready to plan your first DCA?</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Devnet Demo Mode is on by default. No mainnet funds move without your signature.
+              Mainnet Safe Mode is on by default — no funds move without your wallet signature. Switch to Devnet Demo Mode anytime to simulate first.
             </p>
           </div>
           <LinkButton href="/app">

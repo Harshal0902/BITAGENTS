@@ -16,13 +16,13 @@ export interface PublicConfig {
 export const FALLBACK_CONFIG: PublicConfig = {
   treasuryWallet: "",
   treasuryConfigured: false,
-  defaultNetwork: "devnet",
+  defaultNetwork: "mainnet",
   taskFeeSol: DEFAULT_TASK_PRICE_SOL,
   devnetRpc: "https://api.devnet.solana.com",
   mainnetRpc: "https://api.mainnet-beta.solana.com",
   bitagentsMint: "iu3A7azWTm3zQSk81SUC1JctB4zPYnxLmcmqq71EASY",
   bitagentsSymbol: "BITAGENTS",
-  enableMainnetDca: false,
+  enableMainnetDca: true,
   enableAgentWalletMode: false
 };
 

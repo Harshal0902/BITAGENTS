@@ -31,8 +31,8 @@ mainnet transaction requires your wallet signature.
 
 | Mode | When | What happens |
 | --- | --- | --- |
-| **Mainnet Safe Mode** | Mainnet wallet **and** `ENABLE_MAINNET_DCA=true` | Creates a real **Jupiter Recurring** (time-based) order. You sign the create + cancel transactions. No custody, no server-held keys. |
-| **Devnet Demo Mode** | Default everywhere else | Simulates scheduled executions every ~10s using **real** mainnet reference prices, hashes + timestamps each fill, and clearly labels it `Devnet simulation — no real token purchase`. |
+| **Mainnet Safe Mode** | **Default.** Mainnet wallet connected (`NEXT_PUBLIC_ENABLE_MAINNET_DCA=true`, the default) | Creates a real **Jupiter Recurring** (time-based) order. You sign the create + cancel transactions. No custody, no server-held keys. |
+| **Devnet Demo Mode** | When you flip the toggle to Devnet (or set `NEXT_PUBLIC_DEFAULT_NETWORK=devnet`) | Simulates scheduled executions every ~10s using **real** mainnet reference prices, hashes + timestamps each fill, and clearly labels it `Devnet simulation — no real token purchase`. |
 | **Experimental Agent Wallet Mode** | `ENABLE_AGENT_WALLET_MODE=true` + allowlisted user | A server-scheduled, encrypted, capped agent wallet signs swaps for you. **Disabled by default**, behind a flag, with hard caps. Opt-in only. |
 
 > **Why two modes?** Jupiter Recurring is **mainnet-only** and enforces a
@@ -62,9 +62,11 @@ cp .env.example .env.local                      # all keys optional for the demo
 npm run dev:frontend     # Next.js app on http://localhost:3000
 ```
 
-Open http://localhost:3000 → **Launch DCA Agent**. With zero configuration the
-app runs in **Devnet Demo Mode** and the deterministic parser handles the
-example prompts — no wallet, RPC, or API keys required.
+Open http://localhost:3000 → **Launch DCA Agent**. The app defaults to
+**Mainnet Safe Mode** (real Jupiter Recurring orders you sign in your wallet).
+Flip the network toggle to **Devnet Demo** to simulate the full flow with no
+wallet, RPC, or API keys — the deterministic parser handles the example prompts
+out of the box.
 
 To advance Devnet Demo plans automatically while developing, run the local
 scheduler in a second terminal:
@@ -91,8 +93,8 @@ full annotated list. The most important ones:
 
 | Variable | Purpose |
 | --- | --- |
-| `NEXT_PUBLIC_DEFAULT_NETWORK` | `devnet` (default) or `mainnet` for the initial UI network. |
-| `NEXT_PUBLIC_ENABLE_MAINNET_DCA` / `ENABLE_MAINNET_DCA` | Allow real Jupiter Recurring orders (set **both**). Default `false`. |
+| `NEXT_PUBLIC_DEFAULT_NETWORK` | `mainnet` (default) or `devnet` for the initial UI network. |
+| `NEXT_PUBLIC_ENABLE_MAINNET_DCA` | Allow real Jupiter Recurring orders. Default `true`; set `false` to force Devnet Demo Mode. |
 | `NEXT_PUBLIC_BITAGENTS_MINT` / `NEXT_PUBLIC_BITAGENTS_SYMBOL` | The `BITAGENTS` token alias used by the parser. |
 | `JUPITER_API_KEY` / `JUPITER_API_BASE` | Blank = free `lite-api.jup.ag` (no key). A key switches to the pro host. |
 | `OPENROUTER_API_KEY`, `OLLAMA_BASE_URL`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | Optional LLM parsing. Tried OpenRouter → Ollama → OpenAI → Anthropic → deterministic fallback. |
@@ -111,7 +113,7 @@ automatically targets the pro host `https://api.jup.ag`.
 
 ## Mainnet Safe Mode (Jupiter Recurring)
 
-1. Connect a **mainnet** Phantom wallet and ensure `ENABLE_MAINNET_DCA=true`.
+1. Connect a **mainnet** Phantom wallet (Mainnet Safe Mode is the default; `NEXT_PUBLIC_ENABLE_MAINNET_DCA=true`).
 2. Describe a buy whose **per-order value is ≥ ~50 USDC** (the Jupiter minimum).
 3. Confirm the plan. The server calls Jupiter `recurring/v1/createOrder` and
    returns an **unsigned** transaction.

@@ -48,7 +48,7 @@ Try the other examples too:
 
 **Goal:** show a full plan lifecycle with real compute and zero risk.
 
-1. Ensure the network toggle reads **Devnet Demo** (the default).
+1. Flip the network toggle to **Devnet Demo** (the deployment defaults to Mainnet Safe Mode).
 2. Submit `Buy BITAGENTS every 10 minutes with 0.01 SOL using 1 SOL total`.
 3. Click **Create DCA Agent**. A demo wallet is generated locally if you have no
    wallet connected, so the plan is created immediately.
@@ -66,10 +66,10 @@ Try the other examples too:
 
 **Goal:** show the safest real on-chain path — user-signed, no custody.
 
-Prerequisites: `ENABLE_MAINNET_DCA=true` **and** `NEXT_PUBLIC_ENABLE_MAINNET_DCA=true`,
+Prerequisites: Mainnet Safe Mode (the default; `NEXT_PUBLIC_ENABLE_MAINNET_DCA=true`),
 a Phantom wallet on **mainnet**, and an order **≥ ~50 USDC per buy**.
 
-1. Flip the toggle to **Mainnet Safe** and connect the wallet.
+1. The toggle already reads **Mainnet Safe** by default — connect your wallet.
 2. Submit a large enough order, e.g.:
 
    ```

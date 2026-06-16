@@ -48,14 +48,16 @@ export function dcaConfig(): DcaServerConfig {
   const jupiterBaseUrl =
     clean(process.env.JUPITER_API_BASE) ?? (jupiterApiKey ? "https://api.jup.ag" : "https://lite-api.jup.ag");
 
+  // Mainnet is the default network for this deployment. Set
+  // NEXT_PUBLIC_DEFAULT_NETWORK=devnet to fall back to Devnet Demo Mode.
   const defaultNetwork: SolanaNetwork =
-    clean(process.env.NEXT_PUBLIC_DEFAULT_NETWORK) === "mainnet" ? "mainnet" : "devnet";
+    clean(process.env.NEXT_PUBLIC_DEFAULT_NETWORK) === "devnet" ? "devnet" : "mainnet";
 
   return {
     bitagentsMint: clean(process.env.NEXT_PUBLIC_BITAGENTS_MINT) ?? DEFAULT_BITAGENTS_MINT,
     bitagentsSymbol: clean(process.env.NEXT_PUBLIC_BITAGENTS_SYMBOL) ?? DEFAULT_BITAGENTS_SYMBOL,
     defaultNetwork,
-    enableMainnetDca: bool(process.env.NEXT_PUBLIC_ENABLE_MAINNET_DCA, false),
+    enableMainnetDca: bool(process.env.NEXT_PUBLIC_ENABLE_MAINNET_DCA, true),
     enableAgentWalletMode:
       bool(process.env.ENABLE_AGENT_WALLET_MODE, false) ||
       bool(process.env.NEXT_PUBLIC_ENABLE_AGENT_WALLET_MODE, false),
