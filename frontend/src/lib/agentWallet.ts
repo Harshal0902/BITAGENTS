@@ -129,27 +129,30 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Public RPCs are unreliable over the websocket subscription that
-// `connection.confirmTransaction` relies on, so it frequently throws a false
-// "block height exceeded" even when the transaction actually lands. Confirm by
-// polling getSignatureStatuses over HTTP instead, optionally rebroadcasting the
-// raw transaction to help it land, and do a final history check before giving up.
+// `connection.confirmTransaction` relies on a websocket signature subscription
+// and/or a block-height comparison. Both are unreliable on a public, load-
+// balanced RPC like PublicNode: the websocket is flaky, and consecutive HTTP
+// requests can hit different backend nodes sitting at slightly different slots,
+// so a getBlockHeight from one node can race ahead of the blockhash's
+// lastValidBlockHeight from another and trigger a *false* "expired" error even
+// though the transaction lands. Instead, confirm purely by polling
+// getSignatureStatuses over HTTP on a wall-clock budget (no cross-node height
+// comparison), rebroadcasting the raw transaction periodically to help it land.
 async function confirmSignature({
   connection,
   signature,
-  lastValidBlockHeight,
   rawTransaction
 }: {
   connection: Connection;
   signature: string;
-  lastValidBlockHeight?: number | null;
   rawTransaction?: Uint8Array;
 }): Promise<void> {
   const startedAt = Date.now();
-  const hardTimeoutMs = 120_000;
+  const timeoutMs = 90_000;
+  let lastRebroadcast = 0;
 
   for (;;) {
-    const { value } = await connection.getSignatureStatuses([signature]);
+    const { value } = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
     const status = value[0];
     if (status) {
       if (status.err) {
@@ -160,22 +163,20 @@ async function confirmSignature({
       }
     }
 
-    let expired = false;
-    if (typeof lastValidBlockHeight === "number") {
-      const height = await connection.getBlockHeight("confirmed");
-      expired = height > lastValidBlockHeight;
-    } else {
-      expired = Date.now() - startedAt > hardTimeoutMs;
-    }
-
-    if (expired) {
-      const final = (await connection.getSignatureStatuses([signature], { searchTransactionHistory: true })).value[0];
-      if (final && !final.err) return;
-      if (final?.err) throw new Error(`Transaction failed on-chain: ${JSON.stringify(final.err)}`);
+    if (Date.now() - startedAt > timeoutMs) {
+      // Grace checks: the tx may have landed right at the deadline but not yet be
+      // visible on the node we just hit. Re-poll a few times before giving up.
+      for (let i = 0; i < 4; i += 1) {
+        await sleep(2500);
+        const final = (await connection.getSignatureStatuses([signature], { searchTransactionHistory: true })).value[0];
+        if (final && !final.err) return;
+        if (final?.err) throw new Error(`Transaction failed on-chain: ${JSON.stringify(final.err)}`);
+      }
       throw new Error("Transaction was not confirmed in time. It may still land — check the explorer before retrying.");
     }
 
-    if (rawTransaction) {
+    if (rawTransaction && Date.now() - lastRebroadcast > 4000) {
+      lastRebroadcast = Date.now();
       try {
         await connection.sendRawTransaction(rawTransaction, { skipPreflight: true, maxRetries: 0 });
       } catch {
@@ -208,7 +209,7 @@ export async function fundAgentWallet({
   transaction.recentBlockhash = latest.blockhash;
   transaction.feePayer = from;
   const signature = await sendTransaction(transaction, connection);
-  await confirmSignature({ signature, connection, lastValidBlockHeight: latest.lastValidBlockHeight });
+  await confirmSignature({ signature, connection });
   return signature;
 }
 
@@ -216,23 +217,17 @@ export async function fundAgentWallet({
 export async function signAndSendSwap({
   base64,
   connection,
-  keypair,
-  lastValidBlockHeight
+  keypair
 }: {
   base64: string;
   connection: Connection;
   keypair: Keypair;
-  lastValidBlockHeight?: number | null;
 }): Promise<string> {
   const transaction = VersionedTransaction.deserialize(Uint8Array.from(Buffer.from(base64, "base64")));
   transaction.sign([keypair]);
   const raw = transaction.serialize();
   const signature = await connection.sendRawTransaction(raw, { maxRetries: 3 });
-  const lastValid =
-    typeof lastValidBlockHeight === "number"
-      ? lastValidBlockHeight
-      : (await connection.getLatestBlockhash("confirmed")).lastValidBlockHeight;
-  await confirmSignature({ signature, connection, lastValidBlockHeight: lastValid, rawTransaction: raw });
+  await confirmSignature({ signature, connection, rawTransaction: raw });
   return signature;
 }
 
@@ -247,12 +242,7 @@ async function sendWithKeypair(
   transaction.sign(keypair);
   const raw = transaction.serialize();
   const signature = await connection.sendRawTransaction(raw, { maxRetries: 3 });
-  await confirmSignature({
-    signature,
-    connection,
-    lastValidBlockHeight: latest.lastValidBlockHeight,
-    rawTransaction: raw
-  });
+  await confirmSignature({ signature, connection, rawTransaction: raw });
   return signature;
 }
 

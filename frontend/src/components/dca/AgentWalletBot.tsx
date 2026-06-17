@@ -176,8 +176,7 @@ export function AgentWalletBot({
         const signature = await signAndSendSwap({
           base64: result.transaction,
           connection,
-          keypair,
-          lastValidBlockHeight: result.lastValidBlockHeight
+          keypair
         });
         ordersDoneRef.current = index;
         addExecution({
