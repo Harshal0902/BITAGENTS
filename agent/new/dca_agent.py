@@ -277,7 +277,8 @@ def get_wallet_status() -> dict:
             "note": "Set DCA_WALLET_PRIVATE_KEY (base58 or JSON array) to enable live swaps.",
         }
     try:
-        lamports = sol_rpc("getBalance", [pubkey])
+        resp = sol_rpc("getBalance", [pubkey])
+        lamports = resp.get("value", 0) if isinstance(resp, dict) else resp
         balance = lamports / 1e9
         return {
             "wallet_configured": True,
