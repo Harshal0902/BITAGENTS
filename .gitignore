@@ -12,3 +12,4 @@ yarn-error.log*
 pnpm-debug.log*
 venv
 temp
+__pycache__

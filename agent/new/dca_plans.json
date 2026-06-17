@@ -1,0 +1,43 @@
+[
+  {
+    "id": "63309a2f",
+    "name": "USDC to JUP DCA",
+    "input_token": "USDC",
+    "output_token": "JUP",
+    "input_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "output_mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+    "amount_per_buy": "0.0001",
+    "interval": "every_15_minutes",
+    "interval_minutes": 15,
+    "total_budget": "null",
+    "spent_so_far": 0.0,
+    "max_executions": "null",
+    "executions_count": 0,
+    "slippage_bps": "100",
+    "status": "active",
+    "created_at": "2026-06-17T17:50:03.358668+00:00",
+    "next_execution_at": "2026-06-17T17:50:03.358668+00:00",
+    "executions": [
+      {
+        "at": "2026-06-17T18:10:45.199312+00:00",
+        "amount": 0.0001,
+        "input_token": "USDC",
+        "output_token": "JUP",
+        "result": {
+          "error": "HTTPSConnectionPool(host='quote-api.jup.ag', port=443): Max retries exceeded with url: /v6/quote?inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN&amount=100&slippageBps=100 (Caused by NameResolutionError(\"HTTPSConnection(host='quote-api.jup.ag', port=443): Failed to resolve 'quote-api.jup.ag' ([Errno -5] No address associated with hostname)\"))"
+        },
+        "dry_run": false
+      },
+      {
+        "at": "2026-06-17T18:11:14.088984+00:00",
+        "amount": 0.0001,
+        "input_token": "USDC",
+        "output_token": "JUP",
+        "result": {
+          "error": "HTTPSConnectionPool(host='quote-api.jup.ag', port=443): Max retries exceeded with url: /v6/quote?inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN&amount=100&slippageBps=100 (Caused by NameResolutionError(\"HTTPSConnection(host='quote-api.jup.ag', port=443): Failed to resolve 'quote-api.jup.ag' ([Errno -5] No address associated with hostname)\"))"
+        },
+        "dry_run": false
+      }
+    ]
+  }
+]
