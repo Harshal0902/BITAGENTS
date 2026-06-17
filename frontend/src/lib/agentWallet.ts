@@ -125,6 +125,68 @@ export async function getSolBalance(connection: Connection, publicKey: PublicKey
   return lamports / 1e9;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Public RPCs are unreliable over the websocket subscription that
+// `connection.confirmTransaction` relies on, so it frequently throws a false
+// "block height exceeded" even when the transaction actually lands. Confirm by
+// polling getSignatureStatuses over HTTP instead, optionally rebroadcasting the
+// raw transaction to help it land, and do a final history check before giving up.
+async function confirmSignature({
+  connection,
+  signature,
+  lastValidBlockHeight,
+  rawTransaction
+}: {
+  connection: Connection;
+  signature: string;
+  lastValidBlockHeight?: number | null;
+  rawTransaction?: Uint8Array;
+}): Promise<void> {
+  const startedAt = Date.now();
+  const hardTimeoutMs = 120_000;
+
+  for (;;) {
+    const { value } = await connection.getSignatureStatuses([signature]);
+    const status = value[0];
+    if (status) {
+      if (status.err) {
+        throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err)}`);
+      }
+      if (status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized") {
+        return;
+      }
+    }
+
+    let expired = false;
+    if (typeof lastValidBlockHeight === "number") {
+      const height = await connection.getBlockHeight("confirmed");
+      expired = height > lastValidBlockHeight;
+    } else {
+      expired = Date.now() - startedAt > hardTimeoutMs;
+    }
+
+    if (expired) {
+      const final = (await connection.getSignatureStatuses([signature], { searchTransactionHistory: true })).value[0];
+      if (final && !final.err) return;
+      if (final?.err) throw new Error(`Transaction failed on-chain: ${JSON.stringify(final.err)}`);
+      throw new Error("Transaction was not confirmed in time. It may still land — check the explorer before retrying.");
+    }
+
+    if (rawTransaction) {
+      try {
+        await connection.sendRawTransaction(rawTransaction, { skipPreflight: true, maxRetries: 0 });
+      } catch {
+        /* rebroadcast is best-effort */
+      }
+    }
+
+    await sleep(2000);
+  }
+}
+
 /** Move SOL from the user's connected wallet into the agent wallet (user signs). */
 export async function fundAgentWallet({
   connection,
@@ -142,9 +204,11 @@ export async function fundAgentWallet({
   const transaction = new Transaction().add(
     SystemProgram.transfer({ fromPubkey: from, toPubkey: to, lamports: solToLamports(amountSol) })
   );
-  const signature = await sendTransaction(transaction, connection);
   const latest = await connection.getLatestBlockhash("confirmed");
-  await connection.confirmTransaction({ signature, ...latest }, "confirmed");
+  transaction.recentBlockhash = latest.blockhash;
+  transaction.feePayer = from;
+  const signature = await sendTransaction(transaction, connection);
+  await confirmSignature({ signature, connection, lastValidBlockHeight: latest.lastValidBlockHeight });
   return signature;
 }
 
@@ -162,13 +226,13 @@ export async function signAndSendSwap({
 }): Promise<string> {
   const transaction = VersionedTransaction.deserialize(Uint8Array.from(Buffer.from(base64, "base64")));
   transaction.sign([keypair]);
-  const signature = await connection.sendRawTransaction(transaction.serialize(), { maxRetries: 3 });
-  const blockhash = transaction.message.recentBlockhash;
+  const raw = transaction.serialize();
+  const signature = await connection.sendRawTransaction(raw, { maxRetries: 3 });
   const lastValid =
     typeof lastValidBlockHeight === "number"
       ? lastValidBlockHeight
       : (await connection.getLatestBlockhash("confirmed")).lastValidBlockHeight;
-  await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight: lastValid }, "confirmed");
+  await confirmSignature({ signature, connection, lastValidBlockHeight: lastValid, rawTransaction: raw });
   return signature;
 }
 
@@ -181,8 +245,14 @@ async function sendWithKeypair(
   transaction.recentBlockhash = latest.blockhash;
   transaction.feePayer = keypair.publicKey;
   transaction.sign(keypair);
-  const signature = await connection.sendRawTransaction(transaction.serialize(), { maxRetries: 3 });
-  await connection.confirmTransaction({ signature, ...latest }, "confirmed");
+  const raw = transaction.serialize();
+  const signature = await connection.sendRawTransaction(raw, { maxRetries: 3 });
+  await confirmSignature({
+    signature,
+    connection,
+    lastValidBlockHeight: latest.lastValidBlockHeight,
+    rawTransaction: raw
+  });
   return signature;
 }
 
