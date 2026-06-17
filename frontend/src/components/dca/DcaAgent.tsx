@@ -86,7 +86,7 @@ export function DcaAgent() {
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
   const [agentBot, setAgentBot] = useState<DcaPlan | null>(null);
 
-  const { network, dcaModeLabel, mainnetDcaEnabled } = useNetwork();
+  const { network, dcaModeLabel, mainnetDcaEnabled, config } = useNetwork();
   const wallet = useDcaWallet();
   const { signTransaction, sendTransaction } = useWallet();
   const { connection } = useConnection();
@@ -152,14 +152,26 @@ export function DcaAgent() {
         const result = await createDcaPlan({ plan, walletAddress: wallet.address, network: useNetworkValue });
         if (!result.ok) {
           if (result.minOrder && result.plan) {
+            // Small plans can't use Jupiter Recurring (~$50/buy floor). When the
+            // agent-wallet auto-DCA is enabled and the plan is SOL-funded, route
+            // straight into it instead of dead-ending on a rejection.
+            if (config.enableAgentWalletMode && result.plan.inputMint === WSOL_MINT) {
+              setDraft(null);
+              setFallback(null);
+              setAgentBot(result.plan);
+              pushAgent(
+                `This buy (${trimAmount(result.plan.perOrderAmountUi)} ${result.plan.inputSymbol} per order) is below Jupiter Recurring's ~$${JUPITER_MIN_ORDER_USD} minimum, so I set it up as an agent-wallet auto-DCA instead — that path has no minimum. Fund the agent wallet on the right and it buys on your schedule.`
+              );
+              return;
+            }
             setFallback({
               reason:
                 result.jupiterError ??
-                `Jupiter Recurring requires at least ~${JUPITER_MIN_ORDER_USD} USDC per buy. Increase the per-buy size, or run it in Devnet Demo Mode.`,
+                `Jupiter Recurring needs ~${JUPITER_MIN_ORDER_USD} USDC per buy. For a small amount like this, use "Buy now" (one-time, no minimum) or increase the per-buy size.`,
               plan: result.plan
             });
             pushAgent(
-              "Jupiter Recurring rejected this order size. You can increase the per-buy amount, switch to Devnet Demo Mode, or (if enabled) use Experimental Agent Wallet Mode. Your plan is kept on the right."
+              "This buy is below Jupiter Recurring's ~$50/buy minimum — that's a Jupiter rule, not an error. You can buy it once now (no minimum) with the button on the right, increase the per-buy size, or run it in Devnet Demo Mode."
             );
           } else {
             pushAgent(result.jupiterError ?? result.error ?? result.clarification ?? "Could not create the plan.");
@@ -202,7 +214,7 @@ export function DcaAgent() {
         setConfirming(false);
       }
     },
-    [network, pushAgent, setVisible, signTransaction, wallet.address, wallet.connected]
+    [config, network, pushAgent, setVisible, signTransaction, wallet.address, wallet.connected]
   );
 
   // One-time market buy via Jupiter's Swap API — no per-order minimum, so a
@@ -411,7 +423,7 @@ export function DcaAgent() {
               ) : null}
               <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
                 Nothing is created until you confirm. {draft.executionMode === "jupiter_recurring"
-                  ? "You will sign in your wallet — funds are never custodied. “Buy now” is a one-time market swap with no minimum."
+                  ? "“Create DCA Agent” uses Jupiter Recurring (≈$50/buy minimum); for a small amount it switches to the agent wallet automatically. “Buy now” is a one-time market swap with no minimum. Funds are never custodied."
                   : "Devnet Demo simulates executions; no real tokens are bought."}
               </p>
             </>
