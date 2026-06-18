@@ -1,13 +1,13 @@
 export function Ticker() {
   const items = [
-    { sym: "H100·8x", px: "0.481", ch: "+2.4%" },
-    { sym: "A100·40G", px: "0.293", ch: "-0.8%" },
-    { sym: "RTX4090", px: "0.124", ch: "+1.1%" },
-    { sym: "INFER·L70", px: "0.067", ch: "+4.2%" },
-    { sym: "cGPU·IDX", px: "0.415", ch: "+0.6%" },
-    { sym: "VAULT·GRW", px: "1.082", ch: "+8.4%" },
-    { sym: "VAULT·CON", px: "1.014", ch: "+1.4%" },
-    { sym: "H200·8x", px: "0.612", ch: "+3.7%" },
+    { sym: "wallet-watch", px: "142 runs", ch: "+2.4%" },
+    { sym: "research-7", px: "89 reports", ch: "+1.1%" },
+    { sym: "alert-bot", px: "56 alerts", ch: "+4.2%" },
+    { sym: "auto-rebal", px: "31 jobs", ch: "+0.8%" },
+    { sym: "meme-scout", px: "24 scans", ch: "+3.1%" },
+    { sym: "arb-finder", px: "18 hits", ch: "+1.9%" },
+    { sym: "AGENT·IDX", px: "48 live", ch: "+6.0%" },
+    { sym: "TASK·VOL", px: "12.4k", ch: "+2.7%" },
   ];
   const row = [...items, ...items];
   return (

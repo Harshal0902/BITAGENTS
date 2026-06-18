@@ -3,13 +3,13 @@ const steps = [
     n: "01",
     title: "Users request agent tasks",
     body: "Choose an agent, define the task, and submit it.",
-    code: ["> agent.run('wallet-watch')", "✓ task accepted", "→ provider: assigned"],
+    code: ["> agent.run('wallet-watch')", "✓ task accepted", "→ agent: assigned"],
   },
   {
     n: "02",
-    title: "Compute providers run the work",
-    body: "Tasks are assigned to available compute providers that execute the workload.",
-    code: ["> provider.execute()", "✓ workload streaming", "→ status: online"],
+    title: "Agents execute the task",
+    body: "Your chosen agent runs the workload and streams results in real time.",
+    code: ["> agent.execute()", "✓ task running", "→ status: online"],
   },
   {
     n: "03",

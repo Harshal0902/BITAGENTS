@@ -3,7 +3,6 @@ import { Hero } from '@/components/home/Hero';
 import { Ticker } from '@/components/home/Ticker';
 import { Product } from '@/components/home/Product';
 import { HowItWorks } from '@/components/home/HowItWorks';
-import { Compute } from '@/components/home/Compute';
 import { TokenUtility } from '@/components/home/TokenUtility';
 import { Roadmap } from '@/components/home/Roadmap';
 import { Platform } from '@/components/home/Platform';
@@ -17,7 +16,6 @@ export default function page() {
         <Ticker />
         <Product />
         <HowItWorks />
-        <Compute />
         <TokenUtility />
         <Roadmap />
         <Platform />

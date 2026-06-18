@@ -3,9 +3,6 @@ import type { ReactNode } from "react";
 import { Logo } from "@/components/Logo";
 
 const NAV = [
-  { to: "/marketplace", label: "Marketplace" },
-  { to: "/provider", label: "Provider" },
-  { to: "/vaults", label: "Vaults" },
   { to: "/agents", label: "Agents" },
   { to: "/analytics", label: "Analytics" },
 ];

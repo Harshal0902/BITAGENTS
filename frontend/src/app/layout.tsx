@@ -7,13 +7,13 @@ import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
   title: "BIT Agents",
-  description: "AI agents powered by decentralized compute."
+  description: "The on-chain marketplace for autonomous AI agents."
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body>
+    <html lang="en" className="dark">
+      <body className="bg-background text-foreground">
         <SolanaProviders>
           <Nav>{children}</Nav>
         </SolanaProviders>

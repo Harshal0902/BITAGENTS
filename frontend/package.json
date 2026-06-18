@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
+    "dev:reset": "node -e \"try{require('fs').rmSync('.next',{recursive:true,force:true});console.log('Removed .next cache')}catch(e){}\" && next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -43,5 +44,8 @@
     "eslint-config-next": "^14.2.5",
     "postcss": "^8.4.39",
     "typescript": "^5.5.4"
+  },
+  "optionalDependencies": {
+    "lightningcss-win32-x64-msvc": "1.32.0"
   }
 }

@@ -2,8 +2,8 @@
 Solana DCA (Dollar-Cost Averaging) Agent
 Independent agent — run directly: python dca_agent.py
 
-Schedules recurring token buys on Solana via Jupiter (mainnet) or SOL transfers (devnet).
-Powered by Ollama for natural-language plan management.
+Schedules recurring token buys on Solana via Jupiter v2 build API (mainnet)
+or SOL transfers (devnet). Powered by Ollama for natural-language plan management.
 """
 
 import base64
@@ -22,7 +22,6 @@ import requests
 try:
     import base58
     from solders.keypair import Keypair
-    from solders.message import to_bytes_versioned
     from solders.pubkey import Pubkey
     from solders.transaction import VersionedTransaction
     HAS_SOLDERS = True
@@ -70,8 +69,11 @@ SOLANA_CLUSTER = os.environ.get(
     "SOLANA_CLUSTER",
     os.environ.get("NEXT_PUBLIC_SOLANA_CLUSTER", "devnet"),
 )
-JUPITER_QUOTE_API = os.environ.get("JUPITER_QUOTE_API", "https://quote-api.jup.ag/v6/quote")
-JUPITER_SWAP_API = os.environ.get("JUPITER_SWAP_API", "https://quote-api.jup.ag/v6/swap")
+
+# ── Jupiter v2 build API (replaces deprecated quote-api.jup.ag/v6) ────────────
+JUPITER_API_KEY    = os.environ.get("JUPITER_API_KEY", "")
+JUPITER_BUILD_API  = os.environ.get("JUPITER_BUILD_API", "https://api.jup.ag/swap/v2/build")
+
 COINGECKO_API = "https://api.coingecko.com/api/v3"
 
 _plans_path = os.environ.get("DCA_PLANS_FILE", "").strip()
@@ -79,44 +81,49 @@ PLANS_FILE = Path(_plans_path) if _plans_path else AGENT_DIR / "dca_plans.json"
 SCHEDULER_POLL_SECONDS = int(os.environ.get("DCA_SCHEDULER_POLL_SECONDS", "30"))
 HEADERS = {"User-Agent": "SolanaDCAAgent/1.0", "Content-Type": "application/json"}
 
+SOL_ADDRESS_SHORT = "11111111111111111111111111111111"
+SOL_ADDRESS_FULL  = "So11111111111111111111111111111111111111112"
+
 INTERVAL_PRESETS = {
-    "every_30_seconds": 0.5,   # 0.5 minutes
-    "every_minute": 1,
-    "every_5_minutes": 5,
+    "every_30_seconds": 0.5,
+    "every_minute":     1,
+    "every_5_minutes":  5,
     "every_15_minutes": 15,
-    "hourly": 60,
-    "every_4_hours": 240,
-    "every_12_hours": 720,
-    "daily": 1440,
-    "weekly": 10080,
-    "biweekly": 20160,
-    "monthly": 43200,
+    "hourly":           60,
+    "every_4_hours":    240,
+    "every_12_hours":   720,
+    "daily":            1440,
+    "weekly":           10080,
+    "biweekly":         20160,
+    "monthly":          43200,
 }
 
-# Mainnet mints (Jupiter). Devnet uses SOL-only execution.
 TOKEN_MINTS = {
-    "SOL":  {"mint": "So11111111111111111111111111111111111111112", "decimals": 9,  "coingecko_id": "solana"},
-    "WSOL": {"mint": "So11111111111111111111111111111111111111112", "decimals": 9,  "coingecko_id": "solana"},
-    "USDC": {"mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "decimals": 6,  "coingecko_id": "usd-coin"},
-    "USDT": {"mint": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", "decimals": 6,  "coingecko_id": "tether"},
-    "JUP":  {"mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",  "decimals": 6,  "coingecko_id": "jupiter-exchange-solana"},
-    "BONK": {"mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "decimals": 5,  "coingecko_id": "bonk"},
-    "WIF":  {"mint": "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",  "decimals": 6,  "coingecko_id": "dogwifcoin"},
-    "RAY":  {"mint": "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",  "decimals": 6,  "coingecko_id": "raydium"},
-    "ORCA": {"mint": "orcaEKTdK7LKz57vaAYr9QeNs490PNsTPTvJaq2qDz8",  "decimals": 6,  "coingecko_id": "orca"},
-    "PYTH": {"mint": "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",  "decimals": 6,  "coingecko_id": "pyth-network"},
-    "JTO":  {"mint": "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",  "decimals": 9,  "coingecko_id": "jito-governance-token"},
-    "RENDER": {"mint": "rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof", "decimals": 8, "coingecko_id": "render-token"},
+    "SOL":    {"mint": SOL_ADDRESS_FULL,                                    "decimals": 9,  "coingecko_id": "solana"},
+    "WSOL":   {"mint": SOL_ADDRESS_FULL,                                    "decimals": 9,  "coingecko_id": "solana"},
+    "USDC":   {"mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",    "decimals": 6,  "coingecko_id": "usd-coin"},
+    "USDT":   {"mint": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",    "decimals": 6,  "coingecko_id": "tether"},
+    "JUP":    {"mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",     "decimals": 6,  "coingecko_id": "jupiter-exchange-solana"},
+    "BONK":   {"mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",   "decimals": 5,  "coingecko_id": "bonk"},
+    "WIF":    {"mint": "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",   "decimals": 6,  "coingecko_id": "dogwifcoin"},
+    "RAY":    {"mint": "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",   "decimals": 6,  "coingecko_id": "raydium"},
+    "ORCA":   {"mint": "orcaEKTdK7LKz57vaAYr9QeNs490PNsTPTvJaq2qDz8",    "decimals": 6,  "coingecko_id": "orca"},
+    "PYTH":   {"mint": "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",   "decimals": 6,  "coingecko_id": "pyth-network"},
+    "JTO":    {"mint": "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",    "decimals": 9,  "coingecko_id": "jito-governance-token"},
+    "RENDER": {"mint": "rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof",    "decimals": 8,  "coingecko_id": "render-token"},
 }
 
-_scheduler_lock = threading.Lock()
+_scheduler_lock    = threading.Lock()
 _scheduler_running = False
+
+# Rate-limit state (mirrors jupiterFetch in Node.js)
+_last_jupiter_call_at: float = 0.0
+_jupiter_lock = threading.Lock()
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _coerce_nullable_float(val) -> Optional[float]:
-    """Convert string 'null'/'none'/'' to None, otherwise float."""
     if val is None:
         return None
     if isinstance(val, str):
@@ -127,7 +134,6 @@ def _coerce_nullable_float(val) -> Optional[float]:
 
 
 def _coerce_nullable_int(val) -> Optional[int]:
-    """Convert string 'null'/'none'/'' to None, otherwise int."""
     if val is None:
         return None
     if isinstance(val, str):
@@ -138,12 +144,80 @@ def _coerce_nullable_int(val) -> Optional[int]:
 
 
 def _coerce_bool(val) -> bool:
-    """Convert string 'true'/'false'/'1'/'0' to bool."""
     if isinstance(val, bool):
         return val
     if isinstance(val, str):
         return val.strip().lower() in ("true", "1", "yes")
     return bool(val)
+
+
+def _jupiter_headers() -> dict:
+    """Build Jupiter request headers, including API key when configured."""
+    h = {**HEADERS}
+    if JUPITER_API_KEY:
+        h["x-api-key"] = JUPITER_API_KEY
+    return h
+
+
+def _jupiter_get(url: str, params: dict, max_retries: int = 4) -> requests.Response:
+    """
+    GET wrapper for Jupiter API with:
+      • 1-second minimum spacing between calls (mirrors lastApiCallAt logic)
+      • Exponential back-off on 429 Too Many Requests
+    """
+    global _last_jupiter_call_at
+    with _jupiter_lock:
+        wait = 1.0 - (time.time() - _last_jupiter_call_at)
+        if wait > 0:
+            time.sleep(wait)
+
+    backoff = 1.0
+    for attempt in range(1, max_retries + 1):
+        resp = requests.get(url, params=params, headers=_jupiter_headers(), timeout=30)
+        with _jupiter_lock:
+            _last_jupiter_call_at = time.time()
+        if resp.status_code != 429:
+            return resp
+        retry_after = resp.headers.get("Retry-After")
+        wait_ms = (int(retry_after) if retry_after else backoff)
+        print(f"  ⚠️  429 Too Many Requests. Retrying after {wait_ms:.1f}s (attempt {attempt}/{max_retries})...")
+        time.sleep(wait_ms)
+        backoff = min(backoff * 2, 16.0)
+
+    # Final attempt after exhausting retries
+    resp = requests.get(url, params=params, headers=_jupiter_headers(), timeout=30)
+    with _jupiter_lock:
+        _last_jupiter_call_at = time.time()
+    return resp
+
+
+def _jupiter_post(url: str, payload: dict, max_retries: int = 4) -> requests.Response:
+    """
+    POST wrapper for Jupiter API with the same rate-limit / back-off logic.
+    """
+    global _last_jupiter_call_at
+    with _jupiter_lock:
+        wait = 1.0 - (time.time() - _last_jupiter_call_at)
+        if wait > 0:
+            time.sleep(wait)
+
+    backoff = 1.0
+    for attempt in range(1, max_retries + 1):
+        resp = requests.post(url, json=payload, headers=_jupiter_headers(), timeout=30)
+        with _jupiter_lock:
+            _last_jupiter_call_at = time.time()
+        if resp.status_code != 429:
+            return resp
+        retry_after = resp.headers.get("Retry-After")
+        wait_ms = (int(retry_after) if retry_after else backoff)
+        print(f"  ⚠️  429 Too Many Requests. Retrying after {wait_ms:.1f}s (attempt {attempt}/{max_retries})...")
+        time.sleep(wait_ms)
+        backoff = min(backoff * 2, 16.0)
+
+    resp = requests.post(url, json=payload, headers=_jupiter_headers(), timeout=30)
+    with _jupiter_lock:
+        _last_jupiter_call_at = time.time()
+    return resp
 
 
 # ─── Wallet & RPC ─────────────────────────────────────────────────────────────
@@ -201,6 +275,26 @@ def _fmt_ts(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
+# ─── ATA check (mirrors ataExists in Node.js) ─────────────────────────────────
+
+def _ata_exists(wallet_pubkey: str, mint_address: str) -> bool:
+    """Return True if the wallet already has a token account for this mint."""
+    if mint_address in (SOL_ADDRESS_FULL, SOL_ADDRESS_SHORT):
+        return True  # Native SOL never needs an ATA
+    try:
+        result = sol_rpc(
+            "getTokenAccountsByOwner",
+            [
+                wallet_pubkey,
+                {"mint": mint_address},
+                {"encoding": "jsonParsed"},
+            ],
+        )
+        return bool(result and result.get("value"))
+    except Exception:
+        return False
+
+
 # ─── Plan persistence ─────────────────────────────────────────────────────────
 
 def _load_plans() -> list:
@@ -236,7 +330,6 @@ def _update_plan(plan_id: str, updates: dict) -> Optional[dict]:
 # ─── Solana reads ─────────────────────────────────────────────────────────────
 
 def get_wallet_status() -> dict:
-    """Return wallet pubkey, SOL balance, cluster, and whether signing is available."""
     pubkey = get_wallet_pubkey()
     if not pubkey:
         return {
@@ -264,7 +357,6 @@ def get_wallet_status() -> dict:
 
 
 def get_token_price(symbol: str) -> dict:
-    """Fetch USD price and 24h change from CoinGecko."""
     tok = resolve_token(symbol)
     if "error" in tok:
         return tok
@@ -290,13 +382,21 @@ def get_token_price(symbol: str) -> dict:
         return {"error": str(e)}
 
 
+# ─── Jupiter v2 build API (replaces /v6/quote + /v6/swap) ─────────────────────
+
 def get_jupiter_quote(
     input_token: str,
     output_token: str,
     amount: float,
     slippage_bps: int = 100,
 ) -> dict:
-    """Get a Jupiter swap quote (mainnet only)."""
+    """
+    Preview a swap using the Jupiter v2 build API.
+
+    The v2 /build endpoint replaces the old two-step
+    quote-api.jup.ag/v6/quote → quote-api.jup.ag/v6/swap flow.
+    We call it in 'preview' mode (no wallet/taker) to get routing info.
+    """
     amount = float(amount)
     slippage_bps = int(slippage_bps)
 
@@ -305,126 +405,357 @@ def get_jupiter_quote(
             "error": "Jupiter quotes require mainnet RPC. Current cluster is devnet.",
             "hint": "Set SOLANA_RPC_URL to a mainnet endpoint for token swaps.",
         }
+
     inp = resolve_token(input_token)
     out = resolve_token(output_token)
     if "error" in inp:
         return inp
     if "error" in out:
         return out
+
+    raw_amount = _lamports(amount, inp["decimals"])
+
+    params = {
+        "inputMint":               inp["mint"],
+        "outputMint":              out["mint"],
+        "amount":                  str(raw_amount),
+        "slippageBps":             str(slippage_bps),
+        "wrapAndUnwrapSol":        "true",
+        "computeUnitPricePercentile": "high",
+        "maxAccounts":             "54",
+    }
+
     try:
-        params = {
-            "inputMint": inp["mint"],
-            "outputMint": out["mint"],
-            "amount": str(_lamports(amount, inp["decimals"])),
-            "slippageBps": str(slippage_bps),
-        }
-        r = requests.get(JUPITER_QUOTE_API, params=params, headers=HEADERS, timeout=20)
-        quote = r.json()
-        if "error" in quote:
-            return {"error": quote["error"]}
-        out_amt = int(quote.get("outAmount", 0)) / (10 ** out["decimals"])
-        impact = quote.get("priceImpactPct")
+        resp = _jupiter_get(JUPITER_BUILD_API, params)
+        if not resp.ok:
+            err = {}
+            try:
+                err = resp.json()
+            except Exception:
+                pass
+            return {"error": f"Jupiter /build HTTP {resp.status_code}: {err}"}
+
+        data = resp.json()
+        if "error" in data:
+            return {"error": data["error"]}
+
+        out_amount_raw = int(data.get("outAmount", 0))
+        out_amount     = out_amount_raw / (10 ** out["decimals"])
+
         return {
-            "input_token": inp["symbol"],
-            "output_token": out["symbol"],
-            "input_amount": amount,
-            "estimated_output": round(out_amt, 8),
-            "price_impact_pct": impact,
-            "slippage_bps": slippage_bps,
-            "route_plan_steps": len(quote.get("routePlan", [])),
-            "quote": quote,
+            "input_token":       inp["symbol"],
+            "output_token":      out["symbol"],
+            "input_amount":      amount,
+            "estimated_output":  round(out_amount, 8),
+            "price_impact_pct":  data.get("priceImpactPct"),
+            "slippage_bps":      slippage_bps,
+            "build_data":        data,   # retained for _execute_jupiter_swap
         }
     except Exception as e:
         return {"error": str(e)}
 
 
-def _send_signed_tx(encoded_tx: str) -> str:
-    result = sol_rpc(
-        "sendTransaction",
-        [encoded_tx, {"encoding": "base64", "skipPreflight": False, "maxRetries": 3}],
-    )
-    return result
+def _confirm_transaction(sig: str, timeout_s: int = 60, poll_s: float = 2.0) -> dict:
+    """
+    Poll the RPC for signature confirmation — mirrors the polling loop
+    in executeSwap() in the Node.js collateral-swap script.
+    """
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        time.sleep(poll_s)
+        try:
+            result = sol_rpc(
+                "getSignatureStatuses",
+                [[sig], {"searchTransactionHistory": False}],
+            )
+            info = result["value"][0] if result and result.get("value") else None
+            if info:
+                if info.get("err"):
+                    return {"confirmed": False, "error": info["err"]}
+                status = info.get("confirmationStatus", "")
+                if status in ("confirmed", "finalized"):
+                    return {"confirmed": True}
+        except Exception:
+            pass  # RPC hiccup — keep polling
+
+    return {"confirmed": False, "error": f"Confirmation timed out after {timeout_s}s"}
 
 
-def _sign_jupiter_tx(swap_b64: str, keypair: "Keypair") -> str:
-    raw_tx = VersionedTransaction.from_bytes(base64.b64decode(swap_b64))
-    signature = keypair.sign_message(to_bytes_versioned(raw_tx.message))
-    signed_tx = VersionedTransaction.populate(raw_tx.message, [signature])
-    return base64.b64encode(bytes(signed_tx)).decode("utf-8")
+def _to_instruction(ix_data: dict):
+    """
+    Convert a Jupiter instruction dict to a solders AccountMeta + instruction tuple.
+
+    Mirrors toTxInstruction() in the Node.js script.
+    ix_data keys: programId, accounts [{pubkey, isWritable, isSigner}], data (base64)
+    """
+    from solders.instruction import Instruction, AccountMeta
+    from solders.pubkey import Pubkey as SPubkey
+
+    program_id = SPubkey.from_string(ix_data["programId"])
+    accounts = [
+        AccountMeta(
+            pubkey=SPubkey.from_string(a["pubkey"]),
+            is_writable=a["isWritable"],
+            is_signer=a["isSigner"],
+        )
+        for a in ix_data.get("accounts", [])
+    ]
+    data = base64.b64decode(ix_data["data"])
+    return Instruction(program_id, data, accounts)
 
 
-def _execute_jupiter_swap(quote: dict, slippage_bps: int = 100) -> dict:
-    keypair = load_keypair()
-    if not keypair:
-        return {"error": "No wallet keypair. Set DCA_WALLET_PRIVATE_KEY."}
+def _fetch_lookup_tables(addresses_by_table: Optional[dict]) -> list:
+    """
+    Fetch Address Lookup Table accounts from the RPC.
+
+    Mirrors fetchLookupTables() in the Node.js script.
+    addresses_by_table: { tableAddress: [addr, ...], ... }
+    Returns list of dicts: {key, addresses} for use with MessageV0.try_compile.
+    """
+    if not addresses_by_table:
+        return []
+
+    table_keys = list(addresses_by_table.keys())
+    if not table_keys:
+        return []
+
+    try:
+        result = sol_rpc(
+            "getMultipleAccounts",
+            [table_keys, {"encoding": "base64", "commitment": "confirmed"}],
+        )
+        accounts = result.get("value", []) if result else []
+    except Exception as e:
+        print(f"  ⚠️  Failed to fetch LUTs: {e}")
+        return []
+
+    from solders.pubkey import Pubkey as SPubkey
+    from solders.address_lookup_table_account import AddressLookupTableAccount
+
+    luts = []
+    for i, key in enumerate(table_keys):
+        acct = accounts[i] if i < len(accounts) else None
+        if not acct or not acct.get("data"):
+            print(f"  ⚠️  LUT not found on-chain: {key[:10]}...")
+            continue
+        try:
+            raw = base64.b64decode(acct["data"][0])
+            luts.append(
+                AddressLookupTableAccount(
+                    key=SPubkey.from_string(key),
+                    addresses=[SPubkey.from_string(a) for a in addresses_by_table[key]],
+                )
+            )
+        except Exception as e:
+            print(f"  ⚠️  Failed to parse LUT {key[:10]}...: {e}")
+
+    return luts
+
+
+def _execute_jupiter_swap_v2(build_data: dict, wallet_pubkey: str, keypair: "Keypair") -> dict:
+    """
+    Assemble, sign, and send a Jupiter v2 swap transaction.
+
+    The /swap/v2/build endpoint returns raw instructions (NOT a pre-built tx blob):
+      - computeBudgetInstructions  (list)
+      - setupInstructions          (list)
+      - swapInstruction            (single)
+      - cleanupInstruction         (single, optional)
+      - otherInstructions          (list)
+      - addressesByLookupTableAddress  (dict of LUT key → [addresses])
+
+    This mirrors the full flow in executeSwap() in the Node.js collateral script:
+      1. Convert each instruction dict → solders Instruction
+      2. Fetch Address Lookup Table accounts from RPC
+      3. Get latest blockhash
+      4. Compile MessageV0 with LUTs
+      5. Sign VersionedTransaction
+      6. Send via RPC sendTransaction (skipPreflight=True)
+      7. Poll for confirmation
+    """
     if not HAS_SOLDERS:
         return {"error": "Install solders + base58: pip install solders base58"}
-    if not _is_mainnet():
-        return {"error": "Jupiter swaps require mainnet RPC."}
-
-    pubkey = str(keypair.pubkey())
-    try:
-        swap_resp = requests.post(
-            JUPITER_SWAP_API,
-            json={
-                "quoteResponse": quote,
-                "userPublicKey": pubkey,
-                "wrapAndUnwrapSol": True,
-                "dynamicComputeUnitLimit": True,
-                "prioritizationFeeLamports": "auto",
-            },
-            headers=HEADERS,
-            timeout=30,
-        ).json()
-        if "error" in swap_resp:
-            return {"error": swap_resp["error"]}
-
-        swap_tx = swap_resp.get("swapTransaction")
-        if not swap_tx:
-            return {"error": "No swapTransaction in Jupiter response"}
-
-        encoded = _sign_jupiter_tx(swap_tx, keypair)
-        sig = _send_signed_tx(encoded)
-        explorer = f"https://explorer.solana.com/tx/{sig}?cluster=mainnet"
-        return {"status": "success", "signature": sig, "explorer_url": explorer}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-def _execute_devnet_sol_transfer(amount_sol: float) -> dict:
-    """Devnet fallback: small SOL transfer to self as proof-of-execution."""
-    keypair = load_keypair()
-    if not keypair or not HAS_SOLDERS:
-        return {"error": "Wallet + solders required for devnet execution."}
 
     try:
-        from solders.system_program import TransferParams, transfer
         from solders.message import MessageV0
         from solders.hash import Hash
+        from solders.pubkey import Pubkey as SPubkey
+    except ImportError as e:
+        return {"error": f"solders import failed: {e}"}
 
-        pubkey = keypair.pubkey()
-        lamports = int(float(amount_sol) * 1e9)
-        if lamports < 5000:
-            lamports = 5000
+    # ── 1. Collect all instructions in order (mirrors Node.js) ────────────────
+    try:
+        instructions = []
 
-        blockhash_resp = sol_rpc("getLatestBlockhash", [{"commitment": "finalized"}])
-        blockhash = Hash.from_string(blockhash_resp["value"]["blockhash"])
+        for ix in build_data.get("computeBudgetInstructions") or []:
+            instructions.append(_to_instruction(ix))
 
-        ix = transfer(TransferParams(from_pubkey=pubkey, to_pubkey=pubkey, lamports=lamports))
-        msg = MessageV0.try_compile(pubkey, [ix], [], blockhash)
-        tx = VersionedTransaction(msg, [keypair])
-        encoded = base64.b64encode(bytes(tx)).decode("utf-8")
-        sig = _send_signed_tx(encoded)
-        explorer = f"https://explorer.solana.com/tx/{sig}?cluster=devnet"
-        return {
-            "status": "success",
-            "mode": "devnet_sol_self_transfer",
-            "signature": sig,
-            "explorer_url": explorer,
-            "note": "Devnet cannot use Jupiter. Executed SOL self-transfer as scheduled tx proof.",
-        }
+        for ix in build_data.get("setupInstructions") or []:
+            instructions.append(_to_instruction(ix))
+
+        swap_ix = build_data.get("swapInstruction")
+        if not swap_ix:
+            return {"error": "No swapInstruction in Jupiter v2 build response", "keys": list(build_data.keys())}
+        instructions.append(_to_instruction(swap_ix))
+
+        cleanup_ix = build_data.get("cleanupInstruction")
+        if cleanup_ix:
+            instructions.append(_to_instruction(cleanup_ix))
+
+        for ix in build_data.get("otherInstructions") or []:
+            instructions.append(_to_instruction(ix))
+
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"Instruction assembly failed: {e}"}
+
+    # ── 2. Fetch Address Lookup Tables ─────────────────────────────────────────
+    luts = _fetch_lookup_tables(build_data.get("addressesByLookupTableAddress"))
+
+    # ── 3. Get latest blockhash ────────────────────────────────────────────────
+    try:
+        bh_result = sol_rpc("getLatestBlockhash", [{"commitment": "finalized"}])
+        blockhash = Hash.from_string(bh_result["value"]["blockhash"])
+    except Exception as e:
+        return {"error": f"Failed to fetch blockhash: {e}"}
+
+    # ── 4. Compile MessageV0 with LUTs + sign ──────────────────────────────────
+    try:
+        payer = SPubkey.from_string(wallet_pubkey)
+        msg   = MessageV0.try_compile(payer, instructions, luts, blockhash)
+        tx    = VersionedTransaction(msg, [keypair])
+        encoded = base64.b64encode(bytes(tx)).decode("utf-8")
+    except Exception as e:
+        return {"error": f"Transaction compilation/signing failed: {e}"}
+
+    # ── 5. Send via RPC (skipPreflight mirrors Node.js) ───────────────────────
+    try:
+        sig = sol_rpc(
+            "sendTransaction",
+            [encoded, {
+                "encoding":            "base64",
+                "skipPreflight":       True,   # preflight uses stale state; real errors surface on-chain
+                "preflightCommitment": "confirmed",
+                "maxRetries":          3,
+            }],
+        )
+    except Exception as e:
+        return {"error": f"sendTransaction failed: {e}"}
+
+    print(f"    Signature: {sig}")
+
+    # ── 6. Poll for confirmation ───────────────────────────────────────────────
+    confirm = _confirm_transaction(sig)
+    if not confirm["confirmed"]:
+        err     = confirm.get("error", "unknown")
+        err_str = json.dumps(err)
+        if "'Custom':1" in err_str or (isinstance(err, dict) and err.get("InstructionError")):
+            print("    ↳ Custom:1 usually means insufficient SOL for ATA rent (~0.002 SOL per new token account)")
+        return {"status": "failed", "signature": sig, "error": err}
+
+    print("    Status: ✅ Success")
+    explorer_cluster = "mainnet" if _is_mainnet() else "devnet"
+    return {
+        "status":       "success",
+        "signature":    sig,
+        "explorer_url": f"https://explorer.solana.com/tx/{sig}?cluster={explorer_cluster}",
+    }
+
+
+def _build_and_execute_swap(
+    input_mint: str,
+    output_mint: str,
+    raw_amount: int,
+    wallet_pubkey: str,
+    keypair: "Keypair",
+    slippage_bps: int = 100,
+    retries: int = 2,
+) -> dict:
+    """
+    Build + sign + send a swap via Jupiter v2.
+
+    Mirrors executeSwap() in the Node.js script — one call to /build,
+    then sign and submit via the Solana RPC.
+
+    Retry logic:
+      • Expired / timed-out → retry up to `retries` times
+      • Transaction too large → retry once with higher slippage (200 bps)
+    """
+    for attempt in range(1, retries + 1):
+        params = {
+            "inputMint":                  input_mint,
+            "outputMint":                 output_mint,
+            "amount":                     str(raw_amount),
+            "taker":                      wallet_pubkey,
+            "payer":                      wallet_pubkey,
+            "slippageBps":                str(slippage_bps),
+            "wrapAndUnwrapSol":           "true",
+            "computeUnitPricePercentile": "high",
+            "maxAccounts":                "54",
+            "skipUserAccountsRpcCalls":   "true",
+        }
+
+        try:
+            resp = _jupiter_get(JUPITER_BUILD_API, params)
+
+            if not resp.ok:
+                err = {}
+                try:
+                    err = resp.json()
+                except Exception:
+                    pass
+                msg = f"/build HTTP {resp.status_code}: {err}"
+
+                # "Transaction too large" can appear as an HTTP error body
+                if "too large" in str(err).lower() or "too large" in str(resp.text).lower():
+                    if slippage_bps < 200:
+                        print("    ↳ Transaction too large, retrying with higher slippage for simpler route...")
+                        return _build_and_execute_swap(
+                            input_mint, output_mint, raw_amount,
+                            wallet_pubkey, keypair, slippage_bps=200, retries=1,
+                        )
+                    print("    ↳ Transaction too large even with higher slippage, skipping")
+                    return {"status": "failed", "error": msg}
+
+                raise RuntimeError(msg)
+
+            build_data = resp.json()
+            if "error" in build_data:
+                raise RuntimeError(f"/build error: {build_data['error']}")
+
+            result = _execute_jupiter_swap_v2(build_data, wallet_pubkey, keypair)
+
+            if result.get("status") == "failed":
+                err_str = str(result.get("error", ""))
+                is_expiry = any(k in err_str.lower() for k in ("block height exceeded", "expired", "timed out"))
+                is_too_large = "too large" in err_str.lower()
+
+                if is_too_large:
+                    if slippage_bps < 200:
+                        print("    ↳ Transaction too large, retrying with higher slippage for simpler route...")
+                        return _build_and_execute_swap(
+                            input_mint, output_mint, raw_amount,
+                            wallet_pubkey, keypair, slippage_bps=200, retries=1,
+                        )
+                    print("    ↳ Transaction too large even with higher slippage, skipping")
+                    return result
+
+                if is_expiry and attempt < retries:
+                    print(f"    ↳ Transaction expired, retrying (attempt {attempt}/{retries})...")
+                    time.sleep(1)
+                    continue
+
+            return result
+
+        except Exception as e:
+            msg = str(e)
+            is_expiry = any(k in msg.lower() for k in ("block height exceeded", "expired", "timed out"))
+            if is_expiry and attempt < retries:
+                print(f"    ↳ Transaction expired, retrying (attempt {attempt}/{retries})...")
+                time.sleep(1)
+                continue
+            return {"status": "failed", "error": msg}
+
+    return {"status": "failed", "error": "Max retries reached"}
 
 
 def execute_swap_buy(
@@ -434,50 +765,106 @@ def execute_swap_buy(
     slippage_bps: int = 100,
     dry_run: bool = False,
 ) -> dict:
-    """Execute one DCA buy: Jupiter swap on mainnet, SOL transfer on devnet."""
-    amount = float(amount)
+    """Execute one DCA buy: Jupiter v2 swap on mainnet, SOL self-transfer on devnet."""
+    amount       = float(amount)
     slippage_bps = int(slippage_bps)
-    dry_run = _coerce_bool(dry_run)
+    dry_run      = _coerce_bool(dry_run)
 
     if dry_run:
         quote = get_jupiter_quote(input_token, output_token, amount, slippage_bps)
-        if "error" in quote and _is_mainnet():
-            return quote
+        # Strip raw build_data from preview to keep output clean
+        preview = {k: v for k, v in quote.items() if k != "build_data"} if isinstance(quote, dict) else quote
         return {
-            "status": "dry_run",
-            "would_buy": f"{amount} {input_token.upper()} -> {output_token.upper()}",
-            "quote_preview": {k: v for k, v in quote.items() if k != "quote"} if isinstance(quote, dict) else quote,
+            "status":       "dry_run",
+            "would_buy":    f"{amount} {input_token.upper()} -> {output_token.upper()}",
+            "quote_preview": preview,
         }
 
     if _is_mainnet():
-        quote_data = get_jupiter_quote(input_token, output_token, amount, slippage_bps)
-        if "error" in quote_data:
-            return quote_data
-        result = _execute_jupiter_swap(quote_data["quote"], slippage_bps)
+        inp = resolve_token(input_token)
+        out = resolve_token(output_token)
+        if "error" in inp:
+            return inp
+        if "error" in out:
+            return out
+
+        keypair = load_keypair()
+        if not keypair:
+            return {"error": "No wallet keypair. Set DCA_WALLET_PRIVATE_KEY."}
+        if not HAS_SOLDERS:
+            return {"error": "Install solders + base58: pip install solders base58"}
+
+        wallet_pubkey = str(keypair.pubkey())
+        raw_amount    = _lamports(amount, inp["decimals"])
+
+        # Warn about missing ATAs (mirrors checkBalance in Node.js)
+        if not _ata_exists(wallet_pubkey, out["mint"]):
+            print(f"  ⚠️  ATA missing for {out['symbol']} — ~0.002 SOL needed for account creation")
+
+        result = _build_and_execute_swap(
+            inp["mint"], out["mint"], raw_amount,
+            wallet_pubkey, keypair, slippage_bps,
+        )
+
         if result.get("status") == "success":
-            result["input_token"] = input_token.upper()
-            result["output_token"] = output_token.upper()
+            result["input_token"]  = inp["symbol"]
+            result["output_token"] = out["symbol"]
             result["input_amount"] = amount
-            result["estimated_output"] = quote_data.get("estimated_output")
+
         return result
 
+    # ── Devnet fallback ────────────────────────────────────────────────────────
     return _execute_devnet_sol_transfer(min(amount, 0.001))
+
+
+def _execute_devnet_sol_transfer(amount_sol: float) -> dict:
+    """Devnet fallback: small SOL self-transfer as proof-of-execution."""
+    keypair = load_keypair()
+    if not keypair or not HAS_SOLDERS:
+        return {"error": "Wallet + solders required for devnet execution."}
+
+    try:
+        from solders.system_program import TransferParams, transfer
+        from solders.message import MessageV0
+        from solders.hash import Hash
+
+        pubkey   = keypair.pubkey()
+        lamports = max(int(float(amount_sol) * 1e9), 5000)
+
+        blockhash_resp = sol_rpc("getLatestBlockhash", [{"commitment": "finalized"}])
+        blockhash      = Hash.from_string(blockhash_resp["value"]["blockhash"])
+
+        ix  = transfer(TransferParams(from_pubkey=pubkey, to_pubkey=pubkey, lamports=lamports))
+        msg = MessageV0.try_compile(pubkey, [ix], [], blockhash)
+        tx  = VersionedTransaction(msg, [keypair])
+        encoded = base64.b64encode(bytes(tx)).decode("utf-8")
+        sig = sol_rpc(
+            "sendTransaction",
+            [encoded, {"encoding": "base64", "skipPreflight": False, "maxRetries": 3}],
+        )
+        return {
+            "status":       "success",
+            "mode":         "devnet_sol_self_transfer",
+            "signature":    sig,
+            "explorer_url": f"https://explorer.solana.com/tx/{sig}?cluster=devnet",
+            "note":         "Devnet cannot use Jupiter. Executed SOL self-transfer as scheduled tx proof.",
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # ─── DCA plan management ──────────────────────────────────────────────────────
 
 def _parse_interval(interval: str) -> float:
-    """Return interval in minutes (float to support sub-minute presets)."""
     key = interval.lower().replace(" ", "_").replace("-", "_")
     if key in INTERVAL_PRESETS:
         return INTERVAL_PRESETS[key]
-    # Support "30 seconds", "30s", "30sec"
     m = re.match(r"^(\d+)\s*(s|sec|secs|second|seconds)$", key)
     if m:
         return int(m.group(1)) / 60.0
     m = re.match(r"^(\d+)\s*(m|min|mins|minute|minutes|h|hr|hour|hours|d|day|days|w|week|weeks)?$", key)
     if m:
-        n = int(m.group(1))
+        n    = int(m.group(1))
         unit = (m.group(2) or "m").lower()
         if unit.startswith("h"):
             return n * 60
@@ -486,26 +873,38 @@ def _parse_interval(interval: str) -> float:
         if unit.startswith("w"):
             return n * 10080
         return float(n)
-    raise ValueError(f"Unknown interval '{interval}'. Try: daily, hourly, every_15_minutes, '30 seconds', or '30 minutes'.")
+    raise ValueError(
+        f"Unknown interval '{interval}'. Try: daily, hourly, every_15_minutes, "
+        "'30 seconds', or '30 minutes'."
+    )
+
+
+def _normalize_tool_args(func, tool_args: dict) -> dict:
+    """Keep only valid parameters; drop unknown keys from model output."""
+    import inspect
+
+    if not isinstance(tool_args, dict):
+        return {}
+    allowed = set(inspect.signature(func).parameters)
+    return {k: v for k, v in tool_args.items() if k in allowed}
 
 
 def create_dca_plan(
-    name: str,
     input_token: str,
     output_token: str,
     amount_per_buy: float,
     interval: str,
+    name: Optional[str] = None,
+    user_wallet: Optional[str] = None,
     total_budget: Optional[float] = None,
     max_executions: Optional[int] = None,
     slippage_bps: int = 100,
     start_immediately: bool = False,
 ) -> dict:
-    """Create a recurring DCA plan."""
-    # Coerce — Ollama sometimes passes numeric/bool values as strings
-    amount_per_buy = float(amount_per_buy)
-    slippage_bps = int(slippage_bps)
-    total_budget = _coerce_nullable_float(total_budget)
-    max_executions = _coerce_nullable_int(max_executions)
+    amount_per_buy  = float(amount_per_buy)
+    slippage_bps    = int(slippage_bps)
+    total_budget    = _coerce_nullable_float(total_budget)
+    max_executions  = _coerce_nullable_int(max_executions)
     start_immediately = _coerce_bool(start_immediately)
 
     inp = resolve_token(input_token)
@@ -514,33 +913,50 @@ def create_dca_plan(
         return inp
     if "error" in out:
         return out
+
+    if not name or not str(name).strip():
+        name = f"{inp['symbol']} → {out['symbol']} DCA"
+
+    from deposit_ledger import check_plan_budget
+
+    budget_check = check_plan_budget(
+        user_wallet or "",
+        inp["symbol"],
+        total_budget,
+        amount_per_buy,
+        max_executions,
+    )
+    if "error" in budget_check:
+        return budget_check
+
     try:
         interval_minutes = _parse_interval(interval)
     except ValueError as e:
         return {"error": str(e)}
 
-    now = datetime.now(timezone.utc)
+    now      = datetime.now(timezone.utc)
     next_run = now if start_immediately else now + timedelta(minutes=interval_minutes)
 
     plan = {
-        "id": str(uuid.uuid4())[:8],
-        "name": name,
-        "input_token": inp["symbol"],
-        "output_token": out["symbol"],
-        "input_mint": inp["mint"],
-        "output_mint": out["mint"],
-        "amount_per_buy": amount_per_buy,
-        "interval": interval,
-        "interval_minutes": interval_minutes,
-        "total_budget": total_budget,
-        "spent_so_far": 0.0,
-        "max_executions": max_executions,
-        "executions_count": 0,
-        "slippage_bps": slippage_bps,
-        "status": "active",
-        "created_at": now.isoformat(),
+        "id":                str(uuid.uuid4())[:8],
+        "name":              name,
+        "input_token":       inp["symbol"],
+        "output_token":      out["symbol"],
+        "input_mint":        inp["mint"],
+        "output_mint":       out["mint"],
+        "amount_per_buy":    amount_per_buy,
+        "interval":          interval,
+        "interval_minutes":  interval_minutes,
+        "total_budget":      total_budget,
+        "spent_so_far":      0.0,
+        "max_executions":    max_executions,
+        "executions_count":  0,
+        "slippage_bps":      slippage_bps,
+        "status":            "active",
+        "user_wallet":       user_wallet.strip() if user_wallet else None,
+        "created_at":        now.isoformat(),
         "next_execution_at": next_run.isoformat(),
-        "executions": [],
+        "executions":        [],
     }
 
     plans = _load_plans()
@@ -549,42 +965,37 @@ def create_dca_plan(
 
     return {
         "status": "created",
-        "plan": {
-            k: plan[k]
-            for k in (
-                "id", "name", "input_token", "output_token", "amount_per_buy",
-                "interval", "interval_minutes", "total_budget", "max_executions",
-                "status", "next_execution_at",
-            )
-        },
-        "wallet": get_wallet_pubkey(),
+        "plan": {k: plan[k] for k in (
+            "id", "name", "input_token", "output_token", "amount_per_buy",
+            "interval", "interval_minutes", "total_budget", "max_executions",
+            "status", "next_execution_at",
+        )},
+        "wallet":  get_wallet_pubkey(),
         "cluster": SOLANA_CLUSTER,
     }
 
 
 def list_dca_plans(status: Optional[str] = None) -> dict:
-    """List all DCA plans, optionally filtered by status."""
     plans = _load_plans()
     if status:
         plans = [p for p in plans if p.get("status") == status.lower()]
     summary = []
     for p in plans:
         summary.append({
-            "id": p["id"],
-            "name": p["name"],
-            "pair": f"{p['input_token']} -> {p['output_token']}",
-            "amount_per_buy": p["amount_per_buy"],
-            "interval": p["interval"],
-            "status": p["status"],
-            "executions": p["executions_count"],
-            "spent": p["spent_so_far"],
+            "id":               p["id"],
+            "name":             p["name"],
+            "pair":             f"{p['input_token']} -> {p['output_token']}",
+            "amount_per_buy":   p["amount_per_buy"],
+            "interval":         p["interval"],
+            "status":           p["status"],
+            "executions":       p["executions_count"],
+            "spent":            p["spent_so_far"],
             "next_execution_at": p.get("next_execution_at"),
         })
     return {"plans": summary, "count": len(summary)}
 
 
 def get_dca_plan(plan_id: str) -> dict:
-    """Get full details for one DCA plan."""
     plan = _find_plan(plan_id)
     if not plan:
         return {"error": f"Plan '{plan_id}' not found."}
@@ -592,9 +1003,8 @@ def get_dca_plan(plan_id: str) -> dict:
 
 
 def update_dca_plan_status(plan_id: str, action: str) -> dict:
-    """Pause, resume, or cancel a DCA plan."""
     action = action.lower()
-    valid = {"pause": "paused", "resume": "active", "cancel": "cancelled"}
+    valid  = {"pause": "paused", "resume": "active", "cancel": "cancelled"}
     if action not in valid:
         return {"error": f"Unknown action '{action}'. Use: pause, resume, cancel."}
     plan = _find_plan(plan_id)
@@ -604,27 +1014,24 @@ def update_dca_plan_status(plan_id: str, action: str) -> dict:
 
 
 def execute_dca_now(plan_id: str, dry_run: bool = False) -> dict:
-    """Force-run one DCA execution for a plan."""
     dry_run = _coerce_bool(dry_run)
     return _run_plan_execution(plan_id, dry_run=dry_run, force=True)
 
 
 def get_dca_history(plan_id: str) -> dict:
-    """Return execution history for a plan."""
     plan = _find_plan(plan_id)
     if not plan:
         return {"error": f"Plan '{plan_id}' not found."}
     return {
-        "plan_id": plan_id,
-        "name": plan["name"],
+        "plan_id":          plan_id,
+        "name":             plan["name"],
         "executions_count": plan["executions_count"],
-        "spent_so_far": plan["spent_so_far"],
-        "executions": plan.get("executions", []),
+        "spent_so_far":     plan["spent_so_far"],
+        "executions":       plan.get("executions", []),
     }
 
 
 def analyze_dca_timing(output_token: str, lookback_days: int = 7) -> dict:
-    """Price trend analysis to help decide DCA frequency and timing."""
     lookback_days = int(lookback_days)
     tok = resolve_token(output_token)
     if "error" in tok:
@@ -640,12 +1047,12 @@ def analyze_dca_timing(output_token: str, lookback_days: int = 7) -> dict:
         if len(prices) < 2:
             return {"error": "Insufficient price data."}
 
-        current = prices[-1]
-        low = min(prices)
-        high = max(prices)
-        avg = sum(prices) / len(prices)
-        change_pct = ((current / prices[0]) - 1) * 100
-        drawdown = ((current / high) - 1) * 100 if high else 0
+        current      = prices[-1]
+        low          = min(prices)
+        high         = max(prices)
+        avg          = sum(prices) / len(prices)
+        change_pct   = ((current / prices[0]) - 1) * 100
+        drawdown     = ((current / high) - 1) * 100 if high else 0
         dist_from_low = ((current / low) - 1) * 100 if low else 0
 
         if change_pct > 5:
@@ -656,19 +1063,17 @@ def analyze_dca_timing(output_token: str, lookback_days: int = 7) -> dict:
             trend = "sideways"
 
         return {
-            "token": tok["symbol"],
-            "lookback_days": lookback_days,
-            "current_price_usd": round(current, 6),
-            "period_low_usd": round(low, 6),
-            "period_high_usd": round(high, 6),
-            "period_avg_usd": round(avg, 6),
-            "period_change_pct": round(change_pct, 2),
+            "token":                 tok["symbol"],
+            "lookback_days":         lookback_days,
+            "current_price_usd":     round(current, 6),
+            "period_low_usd":        round(low, 6),
+            "period_high_usd":       round(high, 6),
+            "period_avg_usd":        round(avg, 6),
+            "period_change_pct":     round(change_pct, 2),
             "drawdown_from_high_pct": round(drawdown, 2),
-            "above_period_low_pct": round(dist_from_low, 2),
-            "trend": trend,
-            "dca_note": (
-                "Regular DCA smooths volatility — frequency depends on your horizon, not short-term trend."
-            ),
+            "above_period_low_pct":  round(dist_from_low, 2),
+            "trend":                 trend,
+            "dca_note":              "Regular DCA smooths volatility — frequency depends on your horizon, not short-term trend.",
         }
     except Exception as e:
         return {"error": str(e)}
@@ -681,11 +1086,10 @@ def _run_plan_execution(plan_id: str, dry_run: bool = False, force: bool = False
     if plan["status"] != "active" and not force:
         return {"error": f"Plan is {plan['status']}, not active."}
 
-    # Coerce stored values — guards against plans saved with string fields
-    amount = float(plan["amount_per_buy"])
-    spent = float(plan.get("spent_so_far", 0))
-    budget = _coerce_nullable_float(plan.get("total_budget"))
-    max_exec = _coerce_nullable_int(plan.get("max_executions"))
+    amount          = float(plan["amount_per_buy"])
+    spent           = float(plan.get("spent_so_far", 0))
+    budget          = _coerce_nullable_float(plan.get("total_budget"))
+    max_exec        = _coerce_nullable_int(plan.get("max_executions"))
     executions_count = int(plan.get("executions_count", 0))
     interval_minutes = float(plan.get("interval_minutes", 1440))
 
@@ -705,30 +1109,31 @@ def _run_plan_execution(plan_id: str, dry_run: bool = False, force: bool = False
         dry_run=dry_run,
     )
 
-    now = datetime.now(timezone.utc)
+    now         = datetime.now(timezone.utc)
     exec_record = {
-        "at": now.isoformat(),
-        "amount": amount,
-        "input_token": plan["input_token"],
+        "at":           now.isoformat(),
+        "amount":       amount,
+        "input_token":  plan["input_token"],
         "output_token": plan["output_token"],
-        "result": {k: v for k, v in result.items() if k != "quote"},
-        "dry_run": dry_run,
+        "result":       {k: v for k, v in result.items() if k not in ("build_data", "quote")},
+        "dry_run":      dry_run,
     }
 
     if dry_run:
         return {"plan_id": plan_id, "dry_run": True, "preview": result}
 
-    if result.get("status") == "success" or result.get("status") == "dry_run":
-        next_run = now + timedelta(minutes=interval_minutes)
+    success = result.get("status") in ("success", "dry_run")
+    if success:
+        next_run   = now + timedelta(minutes=interval_minutes)
         executions = plan.get("executions", []) + [exec_record]
         _update_plan(plan_id, {
-            "executions_count": executions_count + 1,
-            "spent_so_far": round(spent + amount, 8),
+            "executions_count":  executions_count + 1,
+            "spent_so_far":      round(spent + amount, 8),
             "next_execution_at": next_run.isoformat(),
-            "executions": executions[-50:],
+            "executions":        executions[-50:],
         })
-        result["plan_id"] = plan_id
-        result["next_execution_at"] = next_run.isoformat()
+        result["plan_id"]            = plan_id
+        result["next_execution_at"]  = next_run.isoformat()
         return result
 
     exec_record["result"] = result
@@ -736,6 +1141,8 @@ def _run_plan_execution(plan_id: str, dry_run: bool = False, force: bool = False
     _update_plan(plan_id, {"executions": executions[-50:]})
     return {"plan_id": plan_id, "execution_failed": True, **result}
 
+
+# ─── Scheduler ────────────────────────────────────────────────────────────────
 
 def _scheduler_loop(poll_seconds: int = SCHEDULER_POLL_SECONDS) -> None:
     global _scheduler_running
@@ -764,7 +1171,6 @@ def _scheduler_loop(poll_seconds: int = SCHEDULER_POLL_SECONDS) -> None:
 
 
 def start_scheduler() -> bool:
-    """Start background DCA scheduler thread."""
     global _scheduler_running
     with _scheduler_lock:
         if _scheduler_running:
@@ -780,9 +1186,83 @@ def stop_scheduler() -> None:
     _scheduler_running = False
 
 
+# ─── User deposit ledger (AI Agent wallet) ───────────────────────────────────
+
+def get_agent_wallet() -> dict:
+    from deposit_ledger import get_agent_wallet_info
+    return get_agent_wallet_info()
+
+
+def get_user_deposit_balance(user_wallet: str) -> dict:
+    from deposit_ledger import get_user_balances
+    return get_user_balances(user_wallet)
+
+
+def verify_user_deposit(signature: str, user_wallet: str) -> dict:
+    from deposit_ledger import verify_and_record_deposit
+    return verify_and_record_deposit(signature, user_wallet)
+
+
+def list_user_deposit_history(user_wallet: str, limit: int = 10) -> dict:
+    from deposit_ledger import list_user_deposits
+    return list_user_deposits(user_wallet, int(limit))
+
+
 # ─── Ollama tools ─────────────────────────────────────────────────────────────
 
 TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_agent_wallet",
+            "description": "Return the AI Agent custodial wallet address where users deposit tokens for DCA.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_user_deposit_balance",
+            "description": "Show a user's verified deposit balance available for DCA (deposited, reserved, spent, available per token).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_wallet": {"type": "string", "description": "User's Solana wallet public key"},
+                },
+                "required": ["user_wallet"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "verify_user_deposit",
+            "description": "Verify an on-chain deposit tx into the AI Agent wallet and record credited balance for a user.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "signature": {"type": "string", "description": "Solana transaction signature / hash"},
+                    "user_wallet": {"type": "string", "description": "Depositor wallet public key"},
+                },
+                "required": ["signature", "user_wallet"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_user_deposit_history",
+            "description": "List verified deposit records for a user wallet.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_wallet": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["user_wallet"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -813,9 +1293,9 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "input_token": {"type": "string"},
+                    "input_token":  {"type": "string"},
                     "output_token": {"type": "string"},
-                    "amount": {"type": "number", "description": "Amount of input token"},
+                    "amount":       {"type": "number", "description": "Amount of input token"},
                     "slippage_bps": {"type": "integer", "description": "Slippage in basis points (100 = 1%)"},
                 },
                 "required": ["input_token", "output_token", "amount"],
@@ -830,17 +1310,18 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string"},
-                    "input_token": {"type": "string", "description": "Token to spend e.g. USDC or SOL"},
-                    "output_token": {"type": "string", "description": "Token to accumulate e.g. JUP, BONK"},
-                    "amount_per_buy": {"type": "number"},
-                    "interval": {"type": "string", "description": "daily, hourly, every_15_minutes, weekly, every_30_seconds, or '30 minutes'"},
-                    "total_budget": {"type": "number", "description": "Optional max total input to spend"},
-                    "max_executions": {"type": "integer", "description": "Optional max number of buys"},
-                    "slippage_bps": {"type": "integer"},
+                    "name":             {"type": "string", "description": "Optional label; auto-generated if omitted"},
+                    "user_wallet":      {"type": "string", "description": "User's wallet — must have deposited sufficient input_token to the AI Agent wallet"},
+                    "input_token":      {"type": "string", "description": "Token to spend e.g. USDC or SOL"},
+                    "output_token":     {"type": "string", "description": "Token to accumulate e.g. JUP, BONK"},
+                    "amount_per_buy":   {"type": "number"},
+                    "interval":         {"type": "string", "description": "daily, hourly, every_15_minutes, weekly, every_30_seconds, or '30 minutes'"},
+                    "total_budget":     {"type": "number",  "description": "Optional max total input to spend"},
+                    "max_executions":   {"type": "integer", "description": "Optional max number of buys"},
+                    "slippage_bps":     {"type": "integer"},
                     "start_immediately": {"type": "boolean"},
                 },
-                "required": ["name", "input_token", "output_token", "amount_per_buy", "interval"],
+                "required": ["user_wallet", "input_token", "output_token", "amount_per_buy", "interval"],
             },
         },
     },
@@ -878,7 +1359,7 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "plan_id": {"type": "string"},
-                    "action": {"type": "string", "enum": ["pause", "resume", "cancel"]},
+                    "action":  {"type": "string", "enum": ["pause", "resume", "cancel"]},
                 },
                 "required": ["plan_id", "action"],
             },
@@ -907,11 +1388,11 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "input_token": {"type": "string"},
+                    "input_token":  {"type": "string"},
                     "output_token": {"type": "string"},
-                    "amount": {"type": "number"},
+                    "amount":       {"type": "number"},
                     "slippage_bps": {"type": "integer"},
-                    "dry_run": {"type": "boolean"},
+                    "dry_run":      {"type": "boolean"},
                 },
                 "required": ["input_token", "output_token", "amount"],
             },
@@ -947,20 +1428,32 @@ TOOLS = [
 ]
 
 TOOL_MAP = {
-    "get_wallet_status": get_wallet_status,
-    "get_token_price": get_token_price,
-    "get_jupiter_quote": get_jupiter_quote,
-    "create_dca_plan": create_dca_plan,
-    "list_dca_plans": list_dca_plans,
-    "get_dca_plan": get_dca_plan,
+    "get_agent_wallet":         get_agent_wallet,
+    "get_user_deposit_balance": get_user_deposit_balance,
+    "verify_user_deposit":      verify_user_deposit,
+    "list_user_deposit_history": list_user_deposit_history,
+    "get_wallet_status":      get_wallet_status,
+    "get_token_price":        get_token_price,
+    "get_jupiter_quote":      get_jupiter_quote,
+    "create_dca_plan":        create_dca_plan,
+    "list_dca_plans":         list_dca_plans,
+    "get_dca_plan":           get_dca_plan,
     "update_dca_plan_status": update_dca_plan_status,
-    "execute_dca_now": execute_dca_now,
-    "execute_swap_buy": execute_swap_buy,
-    "get_dca_history": get_dca_history,
-    "analyze_dca_timing": analyze_dca_timing,
+    "execute_dca_now":        execute_dca_now,
+    "execute_swap_buy":       execute_swap_buy,
+    "get_dca_history":        get_dca_history,
+    "analyze_dca_timing":     analyze_dca_timing,
 }
 
 SYSTEM_PROMPT = """You are a Solana DCA (Dollar-Cost Averaging) agent. You help users set up recurring token buys on Solana.
+
+## AI Agent wallet (custodial deposits)
+- Users deposit tokens to the **AI Agent wallet** before running DCA.
+- Always call get_agent_wallet to show the deposit address when asked.
+- After a user deposits, they (or the frontend) provide a tx signature — call verify_user_deposit(signature, user_wallet) to record on-chain proof.
+- Before create_dca_plan, call get_user_deposit_balance(user_wallet) and ensure available balance covers total_budget (or amount_per_buy × max_executions).
+- create_dca_plan **requires user_wallet** — never create a plan without it.
+- Each user's DCA spend is limited to their verified deposit balance for that input token.
 
 ## Capabilities
 - Create DCA plans: spend input_token (USDC/SOL) to buy output_token (JUP/BONK/etc.) on a schedule
@@ -973,7 +1466,7 @@ SYSTEM_PROMPT = """You are a Solana DCA (Dollar-Cost Averaging) agent. You help 
 Use: hourly, daily, weekly, every_15_minutes, every_5_minutes, every_30_seconds, or custom like "30 minutes" or "30 seconds".
 
 ## Network
-- **Mainnet**: real Jupiter token swaps (requires DCA_WALLET_PRIVATE_KEY + mainnet RPC)
+- **Mainnet**: real Jupiter v2 token swaps (requires DCA_WALLET_PRIVATE_KEY + mainnet RPC)
 - **Devnet** (default): scheduled SOL self-transfers as tx proof; Jupiter unavailable
 
 ## Workflow for new DCA
@@ -984,6 +1477,7 @@ Use: hourly, daily, weekly, every_15_minutes, every_5_minutes, every_30_seconds,
    "I'll set up: buy {amount} {output_token} with {input_token} every {interval}. Shall I proceed?"
    Use EXACTLY the tokens the user specified — do not substitute or infer different tokens.
 5. create_dca_plan — only after confirmation or when the user's intent is completely unambiguous
+   (name is optional; omit it unless the user gives a plan title)
 
 ## Safety
 - Always warn: DCA does not guarantee profit; crypto is volatile
@@ -998,39 +1492,55 @@ Supported tokens: SOL, USDC, USDT, JUP, BONK, WIF, RAY, ORCA, PYTH, JTO, RENDER
 
 def call_ollama(messages: list) -> Any:
     payload = {"model": MODEL, "messages": messages, "tools": TOOLS, "stream": False}
-    resp = requests.post(OLLAMA_URL, json=payload, timeout=180)
+    resp    = requests.post(OLLAMA_URL, json=payload, timeout=180)
     resp.raise_for_status()
     return resp.json()
 
 
-def execute_tool(tool_name: str, tool_args: dict) -> str:
+def execute_tool(tool_name: str, tool_args: dict, user_wallet: Optional[str] = None) -> str:
     func = TOOL_MAP.get(tool_name)
     if not func:
         return json.dumps({"error": f"Unknown tool: {tool_name}"})
     try:
-        return json.dumps(func(**tool_args), indent=2)
+        args = _normalize_tool_args(func, tool_args or {})
+        if user_wallet and tool_name == "create_dca_plan" and not args.get("user_wallet"):
+            args["user_wallet"] = user_wallet.strip()
+        if user_wallet and tool_name == "get_user_deposit_balance" and not args.get("user_wallet"):
+            args["user_wallet"] = user_wallet.strip()
+        return json.dumps(func(**args), indent=2)
+    except TypeError as e:
+        return json.dumps({"error": str(e), "received_args": tool_args})
     except Exception as e:
         return json.dumps({"error": str(e)})
 
 
-def run_agent(user_input: str, conversation_history: list) -> tuple[str, list]:
-    conversation_history.append({"role": "user", "content": user_input})
+def run_agent_with_actions(
+    user_input: str,
+    conversation_history: list,
+    user_wallet: Optional[str] = None,
+) -> tuple[str, list, list[dict[str, Any]]]:
+    """Run one user turn; returns reply, updated history, and tool action trace."""
+    actions: list[dict[str, Any]] = []
+    prompt = user_input.strip()
+    if user_wallet:
+        prompt = f"[Connected user wallet: {user_wallet}]\n{prompt}"
+    conversation_history.append({"role": "user", "content": prompt})
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history
 
     for i in range(12):
-        response = call_ollama(messages)
-        message = response["message"]
+        response   = call_ollama(messages)
+        message    = response["message"]
         tool_calls = message.get("tool_calls", [])
 
         if not tool_calls:
             reply = message.get("content", "")
             conversation_history.append({"role": "assistant", "content": reply})
-            return reply, conversation_history
+            return reply, conversation_history, actions
 
         print(f"\n  🔧 [{i + 1}] Tools: {[tc['function']['name'] for tc in tool_calls]}")
         messages.append({
-            "role": "assistant",
-            "content": message.get("content", ""),
+            "role":       "assistant",
+            "content":    message.get("content", ""),
             "tool_calls": tool_calls,
         })
 
@@ -1043,28 +1553,37 @@ def run_agent(user_input: str, conversation_history: list) -> tuple[str, list]:
                 except Exception:
                     args = {}
             print(f"  📡 {name}({args})")
-            result = execute_tool(name, args)
+            result = execute_tool(name, args, user_wallet=user_wallet)
             print("  ✅ Done")
+            actions.append({"tool": name, "args": args, "result": result})
             messages.append({"role": "tool", "content": result})
 
-    return "Agent reached max iterations.", conversation_history
+    reply = "Agent reached max iterations."
+    conversation_history.append({"role": "assistant", "content": reply})
+    return reply, conversation_history, actions
+
+
+def run_agent(user_input: str, conversation_history: list) -> tuple[str, list]:
+    reply, history, _ = run_agent_with_actions(user_input, conversation_history)
+    return reply, history
 
 
 BANNER = r"""
 ╔══════════════════════════════════════════════════════════════╗
 ║   💰  Solana DCA Agent                                       ║
-║   Recurring buys · Jupiter swaps · Ollama-powered             ║
+║   Recurring buys · Jupiter v2 swaps · Ollama-powered          ║
 ╚══════════════════════════════════════════════════════════════╝
 """
 
 
 def main():
     print(BANNER)
-    print(f"  Model   : {MODEL}")
-    print(f"  RPC     : {SOLANA_RPC}")
-    print(f"  Cluster : {SOLANA_CLUSTER} ({'Jupiter swaps' if _is_mainnet() else 'devnet mode'})")
+    print(f"  Model      : {MODEL}")
+    print(f"  RPC        : {SOLANA_RPC}")
+    print(f"  Cluster    : {SOLANA_CLUSTER} ({'Jupiter v2 swaps' if _is_mainnet() else 'devnet mode'})")
+    print(f"  Jupiter API: {JUPITER_BUILD_API}")
     wallet = get_wallet_pubkey()
-    print(f"  Wallet  : {wallet or 'not configured (set DCA_WALLET_PRIVATE_KEY)'}")
+    print(f"  Wallet     : {wallet or 'not configured (set DCA_WALLET_PRIVATE_KEY)'}")
     print()
 
     env_path = AGENT_DIR / ".env"

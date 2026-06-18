@@ -1,10 +1,10 @@
-import { Wallet, Search, Workflow, Cpu } from "lucide-react";
+import { Wallet, Search, Workflow, Bot } from "lucide-react";
 
 const cards = [
   { icon: Wallet, title: "Wallet Monitoring", body: "Track wallets, balances, token activity, and on-chain movement." },
   { icon: Search, title: "Research Agents", body: "Generate structured research summaries from market and project data." },
   { icon: Workflow, title: "On-Chain Automation", body: "Create workflows that can alert, prepare, and eventually execute actions." },
-  { icon: Cpu, title: "Decentralized Compute", body: "Allow compute providers to power agent tasks and earn from the network." },
+  { icon: Bot, title: "Agent Marketplace", body: "Discover, deploy, and run specialized agents from a unified on-chain marketplace." },
 ];
 
 export function Product() {
@@ -18,7 +18,7 @@ export function Product() {
               From prompts to autonomous workflows.
             </h2>
             <p className="mt-6 max-w-md text-muted-foreground">
-              BIT Agents turns everyday crypto workflows into agent-powered systems. Users can monitor wallets, research markets, automate repetitive tasks, and coordinate compute-backed execution from one marketplace.
+              BIT Agents turns everyday crypto workflows into agent-powered systems. Users can monitor wallets, research markets, automate repetitive tasks, and run everything from one agent marketplace.
             </p>
           </div>
           <div className="grid gap-px bg-[color:var(--border)] border border-grid sm:grid-cols-2">

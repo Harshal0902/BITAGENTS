@@ -1,8 +1,8 @@
 const phases: { phase: string; title: string; items: string[] }[] = [
   { phase: "Phase 1", title: "Launch", items: ["BIT Agents token launch", "Holder airdrop", "Brand and marketplace setup"] },
-  { phase: "Phase 2", title: "MVP", items: ["Wallet Watcher Agent", "Research Agent", "Compute Provider Worker", "Solana-based task payments"] },
-  { phase: "Phase 3", title: "Marketplace", items: ["Agent task marketplace", "Provider dashboard", "Task assignment", "Compute rewards"] },
-  { phase: "Phase 4", title: "Network", items: ["More agents", "Token utility integrations", "Provider staking", "Inference marketplace experiments"] },
+  { phase: "Phase 2", title: "MVP", items: ["Wallet Watcher Agent", "Research Agent", "Task orchestration", "Solana-based task payments"] },
+  { phase: "Phase 3", title: "Marketplace", items: ["Agent task marketplace", "Agent dashboard", "Task assignment", "Agent rewards"] },
+  { phase: "Phase 4", title: "Network", items: ["More agents", "Token utility integrations", "Agent staking", "Expanded agent catalog"] },
 ];
 
 export function Roadmap() {
@@ -39,7 +39,7 @@ export function Roadmap() {
             AI agents should be as accessible and composable as any other piece of crypto infrastructure. BIT Agents is the marketplace that makes it so.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
-            <a href="/marketplace" className="bg-signal px-5 py-3 text-sm font-mono font-semibold uppercase tracking-[0.14em] text-primary-foreground transition hover:opacity-90">
+            <a href="/agents" className="bg-signal px-5 py-3 text-sm font-mono font-semibold uppercase tracking-[0.14em] text-primary-foreground transition hover:opacity-90">
               Launch the App →
             </a>
             <a href="#product" className="border border-grid px-5 py-3 text-sm font-mono font-semibold uppercase tracking-[0.14em] transition hover:border-signal">
