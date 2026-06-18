@@ -125,8 +125,9 @@ export function DcaAgentDeposit({
       <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Deposit tokens to the AI Agent wallet. Deposits are verified on-chain and credited to your
-            balance before the agent can run DCA for you.
+            Deposit tokens to the AI Agent wallet on{" "}
+            <span className="text-foreground">{cluster ?? "Solana"}</span>. Deposits are verified on-chain
+            and credited to your balance before the agent can run DCA for you.
           </p>
 
           <div className="font-mono text-[11px] leading-relaxed text-muted-foreground">

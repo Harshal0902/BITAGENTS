@@ -73,6 +73,8 @@ SOLANA_CLUSTER = os.environ.get(
 # ── Jupiter v2 build API (replaces deprecated quote-api.jup.ag/v6) ────────────
 JUPITER_API_KEY    = os.environ.get("JUPITER_API_KEY", "")
 JUPITER_BUILD_API  = os.environ.get("JUPITER_BUILD_API", "https://api.jup.ag/swap/v2/build")
+JUPITER_TOKENS_API = os.environ.get("JUPITER_TOKENS_API", "https://api.jup.ag/tokens/v2")
+JUPITER_PRICE_API  = os.environ.get("JUPITER_PRICE_API", "https://api.jup.ag/price/v3")
 
 COINGECKO_API = "https://api.coingecko.com/api/v3"
 
@@ -112,6 +114,9 @@ TOKEN_MINTS = {
     "JTO":    {"mint": "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",    "decimals": 9,  "coingecko_id": "jito-governance-token"},
     "RENDER": {"mint": "rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof",    "decimals": 8,  "coingecko_id": "render-token"},
 }
+
+MINT_TO_SYMBOL = {info["mint"]: sym for sym, info in TOKEN_MINTS.items() if sym != "WSOL"}
+_RESOLVED_TOKEN_CACHE: dict[str, dict] = {}
 
 _scheduler_lock    = threading.Lock()
 _scheduler_running = False
@@ -259,12 +264,144 @@ def sol_rpc(method: str, params: list, timeout: int = 30) -> Any:
     return data.get("result")
 
 
-def resolve_token(symbol: str) -> dict:
-    sym = symbol.strip().upper()
-    if sym not in TOKEN_MINTS:
-        return {"error": f"Unknown token '{symbol}'. Supported: {', '.join(sorted(TOKEN_MINTS))}"}
-    info = TOKEN_MINTS[sym]
-    return {"symbol": sym, **info}
+def _short_mint(mint: str) -> str:
+    if len(mint) <= 12:
+        return mint
+    return f"{mint[:4]}...{mint[-4:]}"
+
+
+def _looks_like_mint(value: str) -> bool:
+    value = value.strip()
+    if len(value) < 32 or len(value) > 44:
+        return False
+    if not HAS_SOLDERS:
+        return bool(re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]+", value))
+    try:
+        return len(base58.b58decode(value)) == 32
+    except Exception:
+        return False
+
+
+def _cache_token_result(raw: str, result: dict) -> dict:
+    if "error" in result:
+        return result
+    _RESOLVED_TOKEN_CACHE[raw] = result
+    _RESOLVED_TOKEN_CACHE[result["mint"]] = result
+    _RESOLVED_TOKEN_CACHE[result["symbol"]] = result
+    return result
+
+
+def _fetch_mint_decimals_rpc(mint: str) -> Optional[int]:
+    try:
+        result = sol_rpc("getAccountInfo", [mint, {"encoding": "jsonParsed"}])
+        if not result or not result.get("value"):
+            return None
+        data = result["value"].get("data")
+        if not isinstance(data, dict):
+            return None
+        parsed = data.get("parsed") or {}
+        if parsed.get("type") != "mint":
+            return None
+        decimals = parsed.get("info", {}).get("decimals")
+        return int(decimals) if decimals is not None else None
+    except Exception:
+        return None
+
+
+def _fetch_token_from_jupiter(query: str) -> Optional[dict]:
+    try:
+        resp = _jupiter_get(f"{JUPITER_TOKENS_API}/search", {"query": query})
+        if resp.status_code != 200:
+            return None
+        items = resp.json()
+        if not isinstance(items, list) or not items:
+            return None
+        query_stripped = query.strip()
+        for item in items:
+            if item.get("id") == query_stripped:
+                return item
+        if _looks_like_mint(query_stripped):
+            return items[0]
+        query_upper = query_stripped.upper()
+        for item in items:
+            if str(item.get("symbol", "")).upper() == query_upper:
+                return item
+        return items[0]
+    except Exception:
+        return None
+
+
+def _resolve_by_mint(mint: str) -> dict:
+    mint = mint.strip()
+    cached = _RESOLVED_TOKEN_CACHE.get(mint)
+    if cached:
+        return cached
+
+    known_sym = MINT_TO_SYMBOL.get(mint)
+    if known_sym:
+        result = {"symbol": known_sym, **TOKEN_MINTS[known_sym]}
+        return _cache_token_result(mint, result)
+
+    jup = _fetch_token_from_jupiter(mint)
+    if jup and jup.get("id"):
+        result = {
+            "symbol": str(jup.get("symbol") or _short_mint(mint)).upper(),
+            "mint": jup["id"],
+            "decimals": int(jup.get("decimals", 0)),
+            "coingecko_id": None,
+            "name": jup.get("name"),
+            "usd_price": jup.get("usdPrice"),
+        }
+        return _cache_token_result(mint, result)
+
+    decimals = _fetch_mint_decimals_rpc(mint)
+    if decimals is None:
+        return {"error": f"Unknown token mint '{mint}'. Could not resolve decimals on-chain."}
+
+    result = {
+        "symbol": _short_mint(mint).upper(),
+        "mint": mint,
+        "decimals": decimals,
+        "coingecko_id": None,
+    }
+    return _cache_token_result(mint, result)
+
+
+def resolve_token(symbol_or_mint: str) -> dict:
+    raw = (symbol_or_mint or "").strip()
+    if not raw:
+        return {"error": "Token symbol or mint address is required."}
+
+    cached = _RESOLVED_TOKEN_CACHE.get(raw) or _RESOLVED_TOKEN_CACHE.get(raw.upper())
+    if cached:
+        return cached
+
+    sym = raw.upper()
+    if sym in TOKEN_MINTS:
+        return _cache_token_result(raw, {"symbol": sym, **TOKEN_MINTS[sym]})
+
+    if _looks_like_mint(raw):
+        return _resolve_by_mint(raw)
+
+    jup = _fetch_token_from_jupiter(raw)
+    if jup and jup.get("id"):
+        result = {
+            "symbol": str(jup.get("symbol") or sym).upper(),
+            "mint": jup["id"],
+            "decimals": int(jup.get("decimals", 0)),
+            "coingecko_id": None,
+            "name": jup.get("name"),
+            "usd_price": jup.get("usdPrice"),
+        }
+        return _cache_token_result(raw, result)
+
+    common = ", ".join(sorted(k for k in TOKEN_MINTS if k != "WSOL"))
+    return {
+        "error": (
+            f"Unknown token '{symbol_or_mint}'. "
+            f"Pass a token symbol, mint address, or a common token ({common})."
+        )
+    }
 
 
 def _lamports(amount: float, decimals: int) -> int:
@@ -360,26 +497,62 @@ def get_token_price(symbol: str) -> dict:
     tok = resolve_token(symbol)
     if "error" in tok:
         return tok
-    try:
-        r = requests.get(
-            f"{COINGECKO_API}/simple/price",
-            params={
-                "ids": tok["coingecko_id"],
-                "vs_currencies": "usd",
-                "include_24hr_change": "true",
-            },
-            headers=HEADERS,
-            timeout=15,
-        )
-        data = r.json().get(tok["coingecko_id"], {})
+    fetched_at = _fmt_ts(datetime.now(timezone.utc))
+    if tok.get("coingecko_id"):
+        try:
+            r = requests.get(
+                f"{COINGECKO_API}/simple/price",
+                params={
+                    "ids": tok["coingecko_id"],
+                    "vs_currencies": "usd",
+                    "include_24hr_change": "true",
+                },
+                headers=HEADERS,
+                timeout=15,
+            )
+            data = r.json().get(tok["coingecko_id"], {})
+            return {
+                "symbol": tok["symbol"],
+                "mint": tok["mint"],
+                "price_usd": data.get("usd"),
+                "change_24h_pct": data.get("usd_24h_change"),
+                "source": "coingecko",
+                "fetched_at": fetched_at,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    if tok.get("usd_price") is not None:
         return {
             "symbol": tok["symbol"],
-            "price_usd": data.get("usd"),
-            "change_24h_pct": data.get("usd_24h_change"),
-            "fetched_at": _fmt_ts(datetime.now(timezone.utc)),
+            "mint": tok["mint"],
+            "price_usd": tok["usd_price"],
+            "source": "jupiter",
+            "fetched_at": fetched_at,
         }
-    except Exception as e:
-        return {"error": str(e)}
+
+    try:
+        resp = _jupiter_get(JUPITER_PRICE_API, {"ids": tok["mint"]})
+        if resp.status_code == 200:
+            data = resp.json().get("data", {}).get(tok["mint"]) or resp.json().get(tok["mint"])
+            if isinstance(data, dict) and data.get("price") is not None:
+                return {
+                    "symbol": tok["symbol"],
+                    "mint": tok["mint"],
+                    "price_usd": float(data["price"]),
+                    "source": "jupiter",
+                    "fetched_at": fetched_at,
+                }
+    except Exception:
+        pass
+
+    return {
+        "symbol": tok["symbol"],
+        "mint": tok["mint"],
+        "price_usd": None,
+        "note": "Price unavailable for this token; swaps still work via Jupiter.",
+        "fetched_at": fetched_at,
+    }
 
 
 # ─── Jupiter v2 build API (replaces /v6/quote + /v6/swap) ─────────────────────
@@ -764,6 +937,7 @@ def execute_swap_buy(
     amount: float,
     slippage_bps: int = 100,
     dry_run: bool = False,
+    user_wallet: Optional[str] = None,
 ) -> dict:
     """Execute one DCA buy: Jupiter v2 swap on mainnet, SOL self-transfer on devnet."""
     amount       = float(amount)
@@ -771,14 +945,26 @@ def execute_swap_buy(
     dry_run      = _coerce_bool(dry_run)
 
     if dry_run:
+        if user_wallet:
+            from deposit_ledger import check_user_can_spend
+
+            spend_check = check_user_can_spend(user_wallet, input_token, amount)
+            if "error" in spend_check:
+                return spend_check
+
         quote = get_jupiter_quote(input_token, output_token, amount, slippage_bps)
-        # Strip raw build_data from preview to keep output clean
         preview = {k: v for k, v in quote.items() if k != "build_data"} if isinstance(quote, dict) else quote
         return {
             "status":       "dry_run",
             "would_buy":    f"{amount} {input_token.upper()} -> {output_token.upper()}",
             "quote_preview": preview,
         }
+
+    from deposit_ledger import check_user_can_spend
+
+    spend_check = check_user_can_spend(user_wallet or "", input_token, amount)
+    if "error" in spend_check:
+        return spend_check
 
     if _is_mainnet():
         inp = resolve_token(input_token)
@@ -810,6 +996,17 @@ def execute_swap_buy(
             result["input_token"]  = inp["symbol"]
             result["output_token"] = out["symbol"]
             result["input_amount"] = amount
+            if user_wallet:
+                from deposit_ledger import record_user_spend
+
+                record_user_spend(
+                    user_wallet,
+                    inp["symbol"],
+                    amount,
+                    reference_type="swap",
+                    reference_id=result.get("signature") or "swap",
+                    signature=result.get("signature"),
+                )
 
         return result
 
@@ -1036,6 +1233,16 @@ def analyze_dca_timing(output_token: str, lookback_days: int = 7) -> dict:
     tok = resolve_token(output_token)
     if "error" in tok:
         return tok
+    if not tok.get("coingecko_id"):
+        return {
+            "token": tok["symbol"],
+            "mint": tok["mint"],
+            "lookback_days": lookback_days,
+            "note": (
+                "Historical timing analysis is unavailable for custom tokens. "
+                "You can still create a DCA plan; Jupiter will route the swap."
+            ),
+        }
     try:
         r = requests.get(
             f"{COINGECKO_API}/coins/{tok['coingecko_id']}/market_chart",
@@ -1101,12 +1308,22 @@ def _run_plan_execution(plan_id: str, dry_run: bool = False, force: bool = False
         _update_plan(plan_id, {"status": "completed"})
         return {"error": "Max executions reached. Plan marked completed.", "plan_id": plan_id}
 
+    plan_user = (plan.get("user_wallet") or "").strip()
+    if not dry_run:
+        from deposit_ledger import check_user_can_spend
+
+        spend_check = check_user_can_spend(plan_user, plan["input_token"], amount)
+        if "error" in spend_check:
+            spend_check["plan_id"] = plan_id
+            return spend_check
+
     result = execute_swap_buy(
         plan["input_token"],
         plan["output_token"],
         amount,
         int(plan.get("slippage_bps", 100)),
         dry_run=dry_run,
+        user_wallet=plan_user or None,
     )
 
     now         = datetime.now(timezone.utc)
@@ -1275,11 +1492,11 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_token_price",
-            "description": "Get current USD price and 24h change for a supported token (SOL, USDC, JUP, BONK, etc.).",
+            "description": "Get current USD price for any SPL token by symbol or mint address.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "symbol": {"type": "string", "description": "Token symbol e.g. SOL, JUP, BONK"},
+                    "symbol": {"type": "string", "description": "Token symbol or mint address"},
                 },
                 "required": ["symbol"],
             },
@@ -1312,8 +1529,8 @@ TOOLS = [
                 "properties": {
                     "name":             {"type": "string", "description": "Optional label; auto-generated if omitted"},
                     "user_wallet":      {"type": "string", "description": "User's wallet — must have deposited sufficient input_token to the AI Agent wallet"},
-                    "input_token":      {"type": "string", "description": "Token to spend e.g. USDC or SOL"},
-                    "output_token":     {"type": "string", "description": "Token to accumulate e.g. JUP, BONK"},
+                    "input_token":      {"type": "string", "description": "Token to spend — symbol or mint address"},
+                    "output_token":     {"type": "string", "description": "Token to accumulate — symbol or mint address"},
                     "amount_per_buy":   {"type": "number"},
                     "interval":         {"type": "string", "description": "daily, hourly, every_15_minutes, weekly, every_30_seconds, or '30 minutes'"},
                     "total_budget":     {"type": "number",  "description": "Optional max total input to spend"},
@@ -1384,17 +1601,18 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "execute_swap_buy",
-            "description": "Execute a one-off swap buy (not tied to a plan).",
+            "description": "Execute a one-off swap buy (not tied to a plan). Requires user_wallet; spend is limited to that user's deposits.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "user_wallet":  {"type": "string", "description": "User's wallet — spend is capped by their verified deposits"},
                     "input_token":  {"type": "string"},
                     "output_token": {"type": "string"},
                     "amount":       {"type": "number"},
                     "slippage_bps": {"type": "integer"},
                     "dry_run":      {"type": "boolean"},
                 },
-                "required": ["input_token", "output_token", "amount"],
+                "required": ["user_wallet", "input_token", "output_token", "amount"],
             },
         },
     },
@@ -1454,6 +1672,8 @@ SYSTEM_PROMPT = """You are a Solana DCA (Dollar-Cost Averaging) agent. You help 
 - Before create_dca_plan, call get_user_deposit_balance(user_wallet) and ensure available balance covers total_budget (or amount_per_buy × max_executions).
 - create_dca_plan **requires user_wallet** — never create a plan without it.
 - Each user's DCA spend is limited to their verified deposit balance for that input token.
+- The agent wallet is shared on-chain, but the ledger tracks deposits **per user wallet**. User A cannot spend User B's deposits.
+- execute_swap_buy requires user_wallet; swaps and plan executions are rejected if deposited − already spent is less than the requested amount.
 
 ## Capabilities
 - Create DCA plans: spend input_token (USDC/SOL) to buy output_token (JUP/BONK/etc.) on a schedule
@@ -1486,7 +1706,8 @@ Use: hourly, daily, weekly, every_15_minutes, every_5_minutes, every_30_seconds,
 - NEVER change the user's requested interval to a different one (e.g. do not change "30 seconds" to "every_15_minutes")
 - End with: "Not financial advice. DYOR."
 
-Supported tokens: SOL, USDC, USDT, JUP, BONK, WIF, RAY, ORCA, PYTH, JTO, RENDER
+Tokens: accept any SPL token by symbol or mint address (e.g. JUP or a full mint).
+Common tokens: SOL, USDC, USDT, JUP, BONK, WIF, RAY, ORCA, PYTH, JTO, RENDER
 """
 
 
@@ -1506,6 +1727,8 @@ def execute_tool(tool_name: str, tool_args: dict, user_wallet: Optional[str] = N
         if user_wallet and tool_name == "create_dca_plan" and not args.get("user_wallet"):
             args["user_wallet"] = user_wallet.strip()
         if user_wallet and tool_name == "get_user_deposit_balance" and not args.get("user_wallet"):
+            args["user_wallet"] = user_wallet.strip()
+        if user_wallet and tool_name == "execute_swap_buy" and not args.get("user_wallet"):
             args["user_wallet"] = user_wallet.strip()
         return json.dumps(func(**args), indent=2)
     except TypeError as e:

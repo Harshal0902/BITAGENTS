@@ -29,7 +29,7 @@ DEPOSITS_FILE = Path(
 )
 _ledger_lock = threading.Lock()
 
-MINT_TO_SYMBOL = {info["mint"]: sym for sym, info in TOKEN_MINTS.items()}
+MINT_TO_SYMBOL = {info["mint"]: sym for sym, info in TOKEN_MINTS.items() if sym != "WSOL"}
 
 
 def _load_deposits() -> list[dict[str, Any]]:
@@ -52,7 +52,10 @@ def _deposit_exists(signature: str) -> bool:
 
 
 def _mint_to_symbol(mint: str) -> str:
-    return MINT_TO_SYMBOL.get(mint, mint[:8])
+    tok = resolve_token(mint)
+    if "error" not in tok:
+        return tok["symbol"]
+    return mint[:8]
 
 
 def _account_keys(tx: dict) -> list[str]:
@@ -127,12 +130,17 @@ def _parse_inbound_transfers(tx: dict, agent_wallet: str) -> list[dict[str, Any]
 
 
 def get_agent_wallet_info() -> dict[str, Any]:
+    from dca_agent import SOLANA_CLUSTER, SOLANA_RPC
+
     wallet = get_wallet_pubkey()
     return {
         "agent_wallet": wallet,
         "configured": bool(wallet),
-        "supported_tokens": sorted(TOKEN_MINTS.keys()),
+        "supported_tokens": sorted(k for k in TOKEN_MINTS if k != "WSOL"),
+        "any_spl_token": True,
         "deposits_file": str(DEPOSITS_FILE),
+        "cluster": SOLANA_CLUSTER,
+        "rpc_url": SOLANA_RPC,
     }
 
 
@@ -181,7 +189,7 @@ def verify_and_record_deposit(signature: str, user_wallet: str) -> dict[str, Any
         now = datetime.now(timezone.utc).isoformat()
         records = []
         for transfer in inbound:
-            tok = resolve_token(transfer["token"])
+            tok = resolve_token(transfer["mint"])
             if "error" in tok:
                 continue
             record = {
@@ -200,7 +208,7 @@ def verify_and_record_deposit(signature: str, user_wallet: str) -> dict[str, Any
             records.append(record)
 
         if not records:
-            return {"error": "Deposit token is not supported for DCA."}
+            return {"error": "Could not verify deposit token metadata on-chain."}
 
         deposits = _load_deposits()
         deposits.extend(records)
@@ -273,9 +281,10 @@ def get_user_balances(user_wallet: str) -> dict[str, Any]:
     breakdown = []
     for token in tokens:
         dep = deposited.get(token, 0.0)
+        totals = get_user_token_spend_totals(user_wallet, token)
         reserved = usage.get(token, {}).get("reserved", 0.0)
-        spent = usage.get(token, {}).get("spent", 0.0)
-        available = round(max(dep - reserved, 0.0), 9)
+        spent = totals["spent"]
+        available = totals["available_to_spend"]
         breakdown.append(
             {
                 "token": token,
@@ -290,6 +299,132 @@ def get_user_balances(user_wallet: str) -> dict[str, Any]:
         "user_wallet": user_wallet,
         "balances": breakdown,
         "agent_wallet": get_wallet_pubkey(),
+    }
+
+
+def get_user_token_spend_totals(user_wallet: str, token_symbol: str) -> dict[str, float]:
+    """Deposited and spent amounts for one user + token."""
+    user_wallet = user_wallet.strip()
+    token_symbol = token_symbol.strip().upper()
+    deposited = 0.0
+    spent_ledger = 0.0
+    for row in _load_deposits():
+        if row.get("user_wallet") != user_wallet or row.get("status") != "confirmed":
+            continue
+        if str(row.get("token", "")).upper() != token_symbol:
+            continue
+        amount = float(row.get("amount") or 0)
+        if row.get("direction", "deposit") == "spend":
+            spent_ledger += amount
+        else:
+            deposited += amount
+
+    spent_plans = 0.0
+    for plan in _load_plans():
+        if plan.get("user_wallet") != user_wallet:
+            continue
+        if plan.get("status") == "cancelled":
+            continue
+        if str(plan.get("input_token", "")).upper() != token_symbol:
+            continue
+        spent_plans += float(plan.get("spent_so_far") or 0)
+
+    deposited = round(deposited, 9)
+    spent = round(max(spent_ledger, spent_plans), 9)
+    return {
+        "deposited": deposited,
+        "spent": spent,
+        "available_to_spend": round(max(deposited - spent, 0.0), 9),
+    }
+
+
+def record_user_spend(
+    user_wallet: str,
+    input_token: str,
+    amount: float,
+    *,
+    reference_type: str,
+    reference_id: str,
+    signature: Optional[str] = None,
+) -> dict[str, Any]:
+    """Record an on-chain spend against a user's deposit balance."""
+    user_wallet = user_wallet.strip()
+    tok = resolve_token(input_token)
+    if "error" in tok:
+        return tok
+
+    amount = round(float(amount), 9)
+    if amount <= 0:
+        return {"error": "Spend amount must be greater than zero."}
+
+    now = datetime.now(timezone.utc).isoformat()
+    record = {
+        "id": str(uuid.uuid4())[:8],
+        "user_wallet": user_wallet,
+        "agent_wallet": get_wallet_pubkey(),
+        "signature": signature,
+        "token": tok["symbol"],
+        "mint": tok["mint"],
+        "amount": amount,
+        "direction": "spend",
+        "reference_type": reference_type,
+        "reference_id": reference_id,
+        "status": "confirmed",
+        "verified_at": now,
+    }
+
+    with _ledger_lock:
+        deposits = _load_deposits()
+        deposits.append(record)
+        _save_deposits(deposits)
+
+    totals = get_user_token_spend_totals(user_wallet, tok["symbol"])
+    return {"status": "recorded", "spend": record, "balances": totals}
+
+
+def check_user_can_spend(user_wallet: str, input_token: str, amount: float) -> dict[str, Any]:
+    """Ensure a user cannot spend more than they have deposited (minus prior plan spends)."""
+    if not user_wallet or not str(user_wallet).strip():
+        return {
+            "error": (
+                "user_wallet is required. Each user may only spend their own verified deposits."
+            ),
+        }
+
+    tok = resolve_token(input_token)
+    if "error" in tok:
+        return tok
+
+    amount = float(amount)
+    if amount <= 0:
+        return {"error": "Amount must be greater than zero."}
+
+    totals = get_user_token_spend_totals(user_wallet.strip(), tok["symbol"])
+    available = totals["available_to_spend"]
+    if available + 1e-12 < amount:
+        return {
+            "error": (
+                f"Insufficient {tok['symbol']} balance for this user. "
+                f"Deposited: {totals['deposited']}, already spent: {totals['spent']}, "
+                f"available: {available}, requested: {amount}. "
+                f"Deposit more {tok['symbol']} to the AI Agent wallet first."
+            ),
+            "deposited": totals["deposited"],
+            "spent": totals["spent"],
+            "available": available,
+            "requested": amount,
+            "user_wallet": user_wallet.strip(),
+            "token": tok["symbol"],
+        }
+
+    return {
+        "ok": True,
+        "deposited": totals["deposited"],
+        "spent": totals["spent"],
+        "available": available,
+        "requested": amount,
+        "token": tok["symbol"],
+        "user_wallet": user_wallet.strip(),
     }
 
 
@@ -312,9 +447,13 @@ def check_plan_budget(
 
     balances = get_user_balances(user_wallet)
     available = 0.0
+    deposited = 0.0
+    spent = 0.0
     for row in balances.get("balances", []):
         if row["token"] == tok["symbol"]:
             available = float(row["available"])
+            deposited = float(row["deposited"])
+            spent = float(row["spent_in_plans"])
             break
 
     if total_budget is None and max_executions is not None:
@@ -323,6 +462,23 @@ def check_plan_budget(
         required = float(total_budget)
     else:
         required = float(amount_per_buy)
+
+    # New plan commitments cannot exceed deposited minus what is already spent.
+    spendable = round(max(deposited - spent, 0.0), 9)
+    if spendable + 1e-12 < required:
+        return {
+            "error": (
+                f"Insufficient {tok['symbol']} balance. "
+                f"Deposited: {deposited}, already spent: {spent}, "
+                f"available for new plans: {spendable}, required: {required}. "
+                f"Deposit {tok['symbol']} to the AI Agent wallet first."
+            ),
+            "deposited": deposited,
+            "spent": spent,
+            "available": spendable,
+            "required": required,
+            "user_wallet": user_wallet,
+        }
 
     if available + 1e-12 < required:
         return {
