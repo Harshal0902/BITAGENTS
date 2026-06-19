@@ -42,7 +42,7 @@ export function DcaAgentDeposit({
   const [agentWallet, setAgentWallet] = useState<string | null>(null);
   const [anySplToken, setAnySplToken] = useState(true);
   const [balances, setBalances] = useState<TokenBalanceRow[]>([]);
-  const [token, setToken] = useState<PresetToken | "custom">("USDC");
+  const [token, setToken] = useState<PresetToken | "custom">("SOL");
   const [customMint, setCustomMint] = useState("");
   const [resolvedCustom, setResolvedCustom] = useState<ResolvedToken | null>(null);
   const [amount, setAmount] = useState("");

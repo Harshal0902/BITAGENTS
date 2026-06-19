@@ -166,7 +166,8 @@ export function DcaAgentConsole() {
           role: "assistant",
           content: h
             ? `Connected to local DCA agent (**${h.model}** · **${h.cluster}**). Ask me to check your wallet, create plans, or manage DCA schedules.`
-            : "DCA agent API is offline. Start it locally:\n\n`cd agent/new`\n`python dca_api.py`\n\nSet `OPEN_ROUTER_API` and `DATABASE_URL` in `agent/new/.env`.",
+            // : "DCA agent API is offline. Start it locally:\n\n`cd agent/new`\n`python dca_api.py`\n\nSet `OPEN_ROUTER_API` and `DATABASE_URL` in `agent/new/.env`.",
+            : "DCA agent API is offline.",
         },
       ]);
     });
