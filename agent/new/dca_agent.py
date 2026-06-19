@@ -3,7 +3,7 @@ Solana DCA (Dollar-Cost Averaging) Agent
 Independent agent — run directly: python dca_agent.py
 
 Schedules recurring token buys on Solana via Jupiter v2 build API (mainnet)
-or SOL transfers (devnet). Powered by Ollama for natural-language plan management.
+or SOL transfers (devnet). Powered by Groq for natural-language plan management.
 """
 
 import base64
@@ -58,8 +58,11 @@ _load_env()
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/chat")
-MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_API_URL = os.environ.get(
+    "GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions"
+)
+MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 SOLANA_RPC = os.environ.get(
     "SOLANA_RPC_URL",
@@ -79,7 +82,7 @@ JUPITER_PRICE_API  = os.environ.get("JUPITER_PRICE_API", "https://api.jup.ag/pri
 COINGECKO_API = "https://api.coingecko.com/api/v3"
 
 _plans_path = os.environ.get("DCA_PLANS_FILE", "").strip()
-PLANS_FILE = Path(_plans_path) if _plans_path else AGENT_DIR / "dca_plans.json"
+PLANS_FILE = Path(_plans_path) if _plans_path else AGENT_DIR / "dca_plans.json"  # legacy import only
 SCHEDULER_POLL_SECONDS = int(os.environ.get("DCA_SCHEDULER_POLL_SECONDS", "30"))
 HEADERS = {"User-Agent": "SolanaDCAAgent/1.0", "Content-Type": "application/json"}
 
@@ -432,36 +435,36 @@ def _ata_exists(wallet_pubkey: str, mint_address: str) -> bool:
         return False
 
 
-# ─── Plan persistence ─────────────────────────────────────────────────────────
+# ─── Plan persistence (Neon PostgreSQL) ───────────────────────────────────────
 
-def _load_plans() -> list:
-    if not PLANS_FILE.exists():
-        return []
-    try:
-        return json.loads(PLANS_FILE.read_text())
-    except Exception:
-        return []
+from db import find_plan as _find_plan_db
+from db import insert_plan as _insert_plan_db
+from db import load_all_plans
+from db import update_plan as _update_plan_db
 
 
-def _save_plans(plans: list) -> None:
-    PLANS_FILE.write_text(json.dumps(plans, indent=2))
+def _load_plans(user_wallet: Optional[str] = None) -> list:
+    return load_all_plans(user_wallet)
 
 
 def _find_plan(plan_id: str) -> Optional[dict]:
-    for p in _load_plans():
-        if p["id"] == plan_id:
-            return p
-    return None
+    return _find_plan_db(plan_id)
+
+
+def _assert_plan_owner(plan_id: str, user_wallet: str) -> dict:
+    plan = _find_plan(plan_id)
+    if not plan:
+        return {"error": f"Plan '{plan_id}' not found."}
+    owner = (plan.get("user_wallet") or "").strip()
+    if owner and owner != user_wallet.strip():
+        return {"error": "Forbidden: this plan belongs to another wallet."}
+    if not owner:
+        return {"error": "Forbidden: plan has no owner wallet."}
+    return plan
 
 
 def _update_plan(plan_id: str, updates: dict) -> Optional[dict]:
-    plans = _load_plans()
-    for i, p in enumerate(plans):
-        if p["id"] == plan_id:
-            plans[i] = {**p, **updates}
-            _save_plans(plans)
-            return plans[i]
-    return None
+    return _update_plan_db(plan_id, updates)
 
 
 # ─── Solana reads ─────────────────────────────────────────────────────────────
@@ -897,6 +900,11 @@ def _build_and_execute_swap(
 
             result = _execute_jupiter_swap_v2(build_data, wallet_pubkey, keypair)
 
+            if result.get("status") == "success":
+                out_raw = int(build_data.get("outAmount") or 0)
+                if out_raw > 0:
+                    result["output_amount_raw"] = out_raw
+
             if result.get("status") == "failed":
                 err_str = str(result.get("error", ""))
                 is_expiry = any(k in err_str.lower() for k in ("block height exceeded", "expired", "timed out"))
@@ -996,17 +1004,29 @@ def execute_swap_buy(
             result["input_token"]  = inp["symbol"]
             result["output_token"] = out["symbol"]
             result["input_amount"] = amount
+            out_raw = int(result.get("output_amount_raw") or 0)
+            if out_raw > 0:
+                result["output_amount"] = round(out_raw / (10 ** out["decimals"]), 9)
             if user_wallet:
-                from deposit_ledger import record_user_spend
+                from deposit_ledger import record_user_acquire, record_user_spend
 
                 record_user_spend(
                     user_wallet,
                     inp["symbol"],
                     amount,
                     reference_type="swap",
-                    reference_id=result.get("signature") or "swap",
+                    reference_id=(result.get("signature") or "swap")[:128],
                     signature=result.get("signature"),
                 )
+                if out_raw > 0:
+                    record_user_acquire(
+                        user_wallet,
+                        out["symbol"],
+                        result["output_amount"],
+                        reference_type="swap",
+                        reference_id=(result.get("signature") or "swap")[:128],
+                        signature=result.get("signature"),
+                    )
 
         return result
 
@@ -1050,29 +1070,212 @@ def _execute_devnet_sol_transfer(amount_sol: float) -> dict:
         return {"error": str(e)}
 
 
+ASSOCIATED_TOKEN_PROGRAM_ID = "ATokenGPvbdGoxRfTH6KzqYShx9fN2L6Q"
+TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+
+
+def _associated_token_address(owner: "Pubkey", mint: "Pubkey") -> "Pubkey":
+    token_program = Pubkey.from_string(TOKEN_PROGRAM_ID)
+    ata_program = Pubkey.from_string(ASSOCIATED_TOKEN_PROGRAM_ID)
+    addr, _ = Pubkey.find_program_address(
+        [bytes(owner), bytes(token_program), bytes(mint)],
+        ata_program,
+    )
+    return addr
+
+
+def _spl_transfer_instruction(source: "Pubkey", dest: "Pubkey", owner: "Pubkey", amount: int):
+    import struct
+
+    from solders.instruction import AccountMeta, Instruction
+
+    data = bytes([3]) + struct.pack("<Q", amount)
+    return Instruction(
+        Pubkey.from_string(TOKEN_PROGRAM_ID),
+        data,
+        [
+            AccountMeta(source, False, True),
+            AccountMeta(dest, False, True),
+            AccountMeta(owner, True, False),
+        ],
+    )
+
+
+def _create_ata_instruction(payer: "Pubkey", owner: "Pubkey", mint: "Pubkey"):
+    from solders.instruction import AccountMeta, Instruction
+
+    ata = _associated_token_address(owner, mint)
+    return Instruction(
+        Pubkey.from_string(ASSOCIATED_TOKEN_PROGRAM_ID),
+        bytes([]),
+        [
+            AccountMeta(payer, True, True),
+            AccountMeta(ata, False, True),
+            AccountMeta(owner, False, False),
+            AccountMeta(mint, False, False),
+            AccountMeta(Pubkey.from_string(SOL_ADDRESS_SHORT), False, False),
+            AccountMeta(Pubkey.from_string(TOKEN_PROGRAM_ID), False, False),
+        ],
+    )
+
+
+def _send_signed_transaction(keypair: "Keypair", instructions: list) -> dict:
+    """Compile, sign, send, and confirm a versioned transaction."""
+    try:
+        from solders.hash import Hash
+        from solders.message import MessageV0
+    except ImportError as e:
+        return {"error": f"solders import failed: {e}"}
+
+    pubkey = keypair.pubkey()
+    blockhash_resp = sol_rpc("getLatestBlockhash", [{"commitment": "finalized"}])
+    blockhash = Hash.from_string(blockhash_resp["value"]["blockhash"])
+    msg = MessageV0.try_compile(pubkey, instructions, [], blockhash)
+    tx = VersionedTransaction(msg, [keypair])
+    encoded = base64.b64encode(bytes(tx)).decode("utf-8")
+    sig = sol_rpc(
+        "sendTransaction",
+        [encoded, {"encoding": "base64", "skipPreflight": False, "maxRetries": 3}],
+    )
+    confirm = _confirm_transaction(sig)
+    if not confirm["confirmed"]:
+        return {"status": "failed", "signature": sig, "error": confirm.get("error", "unknown")}
+    explorer_cluster = "mainnet" if _is_mainnet() else "devnet"
+    return {
+        "status": "success",
+        "signature": sig,
+        "explorer_url": f"https://explorer.solana.com/tx/{sig}?cluster={explorer_cluster}",
+    }
+
+
+def send_tokens_to_user(
+    user_wallet: str,
+    mint_address: str,
+    amount: float,
+    decimals: int,
+) -> dict:
+    """Transfer SOL or SPL tokens from the agent wallet to a user wallet."""
+    user_wallet = user_wallet.strip()
+    if not user_wallet:
+        return {"error": "User wallet address is required."}
+
+    keypair = load_keypair()
+    if not keypair:
+        return {"error": "AI Agent wallet is not configured on the server."}
+    if not HAS_SOLDERS:
+        return {"error": "Install solders + base58: pip install solders base58"}
+
+    amount = float(amount)
+    if amount <= 0:
+        return {"error": "Transfer amount must be greater than zero."}
+
+    try:
+        recipient = Pubkey.from_string(user_wallet)
+    except Exception:
+        return {"error": "Invalid user wallet address."}
+
+    mint_address = mint_address.strip()
+    is_sol = mint_address in (SOL_ADDRESS_FULL, SOL_ADDRESS_SHORT)
+
+    if is_sol:
+        try:
+            from solders.system_program import TransferParams, transfer
+
+            lamports = _lamports(amount, 9)
+            ix = transfer(
+                TransferParams(
+                    from_pubkey=keypair.pubkey(),
+                    to_pubkey=recipient,
+                    lamports=lamports,
+                )
+            )
+            return _send_signed_transaction(keypair, [ix])
+        except Exception as e:
+            return {"error": str(e)}
+
+    try:
+        mint = Pubkey.from_string(mint_address)
+    except Exception:
+        return {"error": "Invalid token mint address."}
+
+    raw_amount = _lamports(amount, decimals)
+    if raw_amount <= 0:
+        return {"error": "Amount is too small for this token's decimals."}
+
+    agent_owner = keypair.pubkey()
+    source_ata = _associated_token_address(agent_owner, mint)
+    dest_ata = _associated_token_address(recipient, mint)
+
+    instructions = []
+    if not _ata_exists(user_wallet, mint_address):
+        instructions.append(_create_ata_instruction(agent_owner, recipient, mint))
+    instructions.append(
+        _spl_transfer_instruction(source_ata, dest_ata, agent_owner, raw_amount)
+    )
+
+    try:
+        return _send_signed_transaction(keypair, instructions)
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ─── DCA plan management ──────────────────────────────────────────────────────
 
+def _duration_to_minutes(amount: float, unit: str) -> float:
+    u = unit.lower().rstrip(".")
+    if u in ("s", "sec", "secs", "second", "seconds"):
+        return amount / 60.0
+    if u in ("m", "min", "mins", "minute", "minutes"):
+        return amount
+    if u in ("h", "hr", "hrs", "hour", "hours"):
+        return amount * 60.0
+    if u in ("d", "day", "days"):
+        return amount * 1440.0
+    if u in ("w", "week", "weeks"):
+        return amount * 10080.0
+    raise ValueError(f"Unknown time unit '{unit}'.")
+
+
 def _parse_interval(interval: str) -> float:
-    key = interval.lower().replace(" ", "_").replace("-", "_")
-    if key in INTERVAL_PRESETS:
-        return INTERVAL_PRESETS[key]
-    m = re.match(r"^(\d+)\s*(s|sec|secs|second|seconds)$", key)
+    """Parse a human interval string into minutes (supports fractional minutes)."""
+    key = re.sub(r"[\s_-]+", " ", interval.strip().lower()).strip()
+    if not key:
+        raise ValueError("Interval is required.")
+
+    preset_key = key.replace(" ", "_")
+    if preset_key in INTERVAL_PRESETS:
+        return INTERVAL_PRESETS[preset_key]
+
+    aliases = {
+        "daily": 1440.0,
+        "hourly": 60.0,
+        "weekly": 10080.0,
+        "biweekly": 20160.0,
+        "monthly": 43200.0,
+    }
+    if key in aliases:
+        return aliases[key]
+
+    duration_pattern = (
+        r"(\d+(?:\.\d+)?)\s*"
+        r"(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w)"
+    )
+
+    m = re.fullmatch(rf"every\s+{duration_pattern}", key)
     if m:
-        return int(m.group(1)) / 60.0
-    m = re.match(r"^(\d+)\s*(m|min|mins|minute|minutes|h|hr|hour|hours|d|day|days|w|week|weeks)?$", key)
+        return _duration_to_minutes(float(m.group(1)), m.group(2))
+
+    m = re.fullmatch(duration_pattern, key)
     if m:
-        n    = int(m.group(1))
-        unit = (m.group(2) or "m").lower()
-        if unit.startswith("h"):
-            return n * 60
-        if unit.startswith("d"):
-            return n * 1440
-        if unit.startswith("w"):
-            return n * 10080
-        return float(n)
+        return _duration_to_minutes(float(m.group(1)), m.group(2))
+
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)", key)
+    if m:
+        return float(m.group(1))
+
     raise ValueError(
-        f"Unknown interval '{interval}'. Try: daily, hourly, every_15_minutes, "
-        "'30 seconds', or '30 minutes'."
+        f"Unknown interval '{interval}'. Examples: '11 seconds', '12 minutes', "
+        "'every 4 hours', 'daily', or 'every_30_seconds'."
     )
 
 
@@ -1156,9 +1359,7 @@ def create_dca_plan(
         "executions":        [],
     }
 
-    plans = _load_plans()
-    plans.append(plan)
-    _save_plans(plans)
+    _insert_plan_db(plan)
 
     return {
         "status": "created",
@@ -1172,8 +1373,8 @@ def create_dca_plan(
     }
 
 
-def list_dca_plans(status: Optional[str] = None) -> dict:
-    plans = _load_plans()
+def list_dca_plans(status: Optional[str] = None, user_wallet: Optional[str] = None) -> dict:
+    plans = _load_plans(user_wallet.strip() if user_wallet else None)
     if status:
         plans = [p for p in plans if p.get("status") == status.lower()]
     summary = []
@@ -1189,17 +1390,26 @@ def list_dca_plans(status: Optional[str] = None) -> dict:
             "spent":            p["spent_so_far"],
             "next_execution_at": p.get("next_execution_at"),
         })
-    return {"plans": summary, "count": len(summary)}
+    return {"plans": summary, "count": len(summary), "user_wallet": user_wallet}
 
 
-def get_dca_plan(plan_id: str) -> dict:
+def get_dca_plan(plan_id: str, user_wallet: Optional[str] = None) -> dict:
+    if user_wallet:
+        owned = _assert_plan_owner(plan_id, user_wallet)
+        if "error" in owned:
+            return owned
+        return owned
     plan = _find_plan(plan_id)
     if not plan:
         return {"error": f"Plan '{plan_id}' not found."}
     return plan
 
 
-def update_dca_plan_status(plan_id: str, action: str) -> dict:
+def update_dca_plan_status(plan_id: str, action: str, user_wallet: Optional[str] = None) -> dict:
+    if user_wallet:
+        owned = _assert_plan_owner(plan_id, user_wallet)
+        if "error" in owned:
+            return owned
     action = action.lower()
     valid  = {"pause": "paused", "resume": "active", "cancel": "cancelled"}
     if action not in valid:
@@ -1210,15 +1420,25 @@ def update_dca_plan_status(plan_id: str, action: str) -> dict:
     return _update_plan(plan_id, {"status": valid[action]}) or {"error": "Update failed."}
 
 
-def execute_dca_now(plan_id: str, dry_run: bool = False) -> dict:
+def execute_dca_now(plan_id: str, dry_run: bool = False, user_wallet: Optional[str] = None) -> dict:
+    if user_wallet:
+        owned = _assert_plan_owner(plan_id, user_wallet)
+        if "error" in owned:
+            return owned
     dry_run = _coerce_bool(dry_run)
     return _run_plan_execution(plan_id, dry_run=dry_run, force=True)
 
 
-def get_dca_history(plan_id: str) -> dict:
-    plan = _find_plan(plan_id)
-    if not plan:
-        return {"error": f"Plan '{plan_id}' not found."}
+def get_dca_history(plan_id: str, user_wallet: Optional[str] = None) -> dict:
+    if user_wallet:
+        owned = _assert_plan_owner(plan_id, user_wallet)
+        if "error" in owned:
+            return owned
+        plan = owned
+    else:
+        plan = _find_plan(plan_id)
+        if not plan:
+            return {"error": f"Plan '{plan_id}' not found."}
     return {
         "plan_id":          plan_id,
         "name":             plan["name"],
@@ -1425,6 +1645,11 @@ def list_user_deposit_history(user_wallet: str, limit: int = 10) -> dict:
     return list_user_deposits(user_wallet, int(limit))
 
 
+def withdraw_user_tokens(user_wallet: str, token: str, amount: float) -> dict:
+    from deposit_ledger import withdraw_user_tokens as _withdraw
+    return _withdraw(user_wallet, token, amount)
+
+
 # ─── Ollama tools ─────────────────────────────────────────────────────────────
 
 TOOLS = [
@@ -1483,6 +1708,25 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "withdraw_user_tokens",
+            "description": (
+                "Withdraw unused deposited tokens or DCA-acquired output tokens back to the user's wallet. "
+                "Cannot withdraw amounts reserved for active DCA plans."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_wallet": {"type": "string", "description": "User's Solana wallet public key"},
+                    "token": {"type": "string", "description": "Token symbol or mint to withdraw"},
+                    "amount": {"type": "number", "description": "Amount to withdraw"},
+                },
+                "required": ["user_wallet", "token", "amount"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_wallet_status",
             "description": "Check if a Solana wallet is configured, SOL balance, cluster (devnet/mainnet), and swap capability.",
             "parameters": {"type": "object", "properties": {}},
@@ -1532,7 +1776,7 @@ TOOLS = [
                     "input_token":      {"type": "string", "description": "Token to spend — symbol or mint address"},
                     "output_token":     {"type": "string", "description": "Token to accumulate — symbol or mint address"},
                     "amount_per_buy":   {"type": "number"},
-                    "interval":         {"type": "string", "description": "daily, hourly, every_15_minutes, weekly, every_30_seconds, or '30 minutes'"},
+                    "interval":         {"type": "string", "description": "Any duration e.g. '11 seconds', '12 minutes', 'every 4 hours', daily"},
                     "total_budget":     {"type": "number",  "description": "Optional max total input to spend"},
                     "max_executions":   {"type": "integer", "description": "Optional max number of buys"},
                     "slippage_bps":     {"type": "integer"},
@@ -1546,7 +1790,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_dca_plans",
-            "description": "List all DCA plans.",
+            "description": "List DCA plans for the authenticated user only.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1650,6 +1894,7 @@ TOOL_MAP = {
     "get_user_deposit_balance": get_user_deposit_balance,
     "verify_user_deposit":      verify_user_deposit,
     "list_user_deposit_history": list_user_deposit_history,
+    "withdraw_user_tokens":     withdraw_user_tokens,
     "get_wallet_status":      get_wallet_status,
     "get_token_price":        get_token_price,
     "get_jupiter_quote":      get_jupiter_quote,
@@ -1674,6 +1919,9 @@ SYSTEM_PROMPT = """You are a Solana DCA (Dollar-Cost Averaging) agent. You help 
 - Each user's DCA spend is limited to their verified deposit balance for that input token.
 - The agent wallet is shared on-chain, but the ledger tracks deposits **per user wallet**. User A cannot spend User B's deposits.
 - execute_swap_buy requires user_wallet; swaps and plan executions are rejected if deposited − already spent is less than the requested amount.
+- withdraw_user_tokens sends unused deposits and DCA-acquired tokens back to the user's wallet (not amounts reserved for active plans).
+- Users must authenticate with a wallet signature before chat, deposits, or plan actions. Never access another user's plans or balances.
+- list_dca_plans only returns the authenticated user's plans.
 
 ## Capabilities
 - Create DCA plans: spend input_token (USDC/SOL) to buy output_token (JUP/BONK/etc.) on a schedule
@@ -1683,7 +1931,7 @@ SYSTEM_PROMPT = """You are a Solana DCA (Dollar-Cost Averaging) agent. You help 
 - Analyze price trends for DCA timing discussions
 
 ## Intervals
-Use: hourly, daily, weekly, every_15_minutes, every_5_minutes, every_30_seconds, or custom like "30 minutes" or "30 seconds".
+Use any interval the user requests: seconds, minutes, hours, days (e.g. "11 seconds", "12 min", "every 4 hours"). Presets like daily/hourly still work.
 
 ## Network
 - **Mainnet**: real Jupiter v2 token swaps (requires DCA_WALLET_PRIVATE_KEY + mainnet RPC)
@@ -1711,11 +1959,50 @@ Common tokens: SOL, USDC, USDT, JUP, BONK, WIF, RAY, ORCA, PYTH, JTO, RENDER
 """
 
 
-def call_ollama(messages: list) -> Any:
-    payload = {"model": MODEL, "messages": messages, "tools": TOOLS, "stream": False}
-    resp    = requests.post(OLLAMA_URL, json=payload, timeout=180)
-    resp.raise_for_status()
-    return resp.json()
+def _groq_headers() -> dict[str, str]:
+    if not GROQ_API_KEY:
+        raise RuntimeError(
+            "GROQ_API_KEY is not set. Add it to agent/new/.env (see .env.example)."
+        )
+    return {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+def _groq_error_message_from_response(resp: requests.Response) -> str:
+    try:
+        body = resp.json()
+        err = body.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return str(err["message"])
+    except Exception:
+        pass
+    return resp.text or resp.reason or "Unknown error"
+
+
+def call_groq(messages: list) -> dict[str, Any]:
+    """Call Groq chat completions (OpenAI-compatible) with tool support."""
+    payload = {
+        "model": MODEL,
+        "messages": messages,
+        "tools": TOOLS,
+        "tool_choice": "auto",
+        "temperature": 0.2,
+    }
+    resp = requests.post(
+        GROQ_API_URL, json=payload, headers=_groq_headers(), timeout=180
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(
+            f"Groq API error ({resp.status_code}): {_groq_error_message_from_response(resp)}"
+        )
+
+    data = resp.json()
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError("Groq returned no choices.")
+    return {"message": choices[0]["message"]}
 
 
 def execute_tool(tool_name: str, tool_args: dict, user_wallet: Optional[str] = None) -> str:
@@ -1724,12 +2011,45 @@ def execute_tool(tool_name: str, tool_args: dict, user_wallet: Optional[str] = N
         return json.dumps({"error": f"Unknown tool: {tool_name}"})
     try:
         args = _normalize_tool_args(func, tool_args or {})
-        if user_wallet and tool_name == "create_dca_plan" and not args.get("user_wallet"):
-            args["user_wallet"] = user_wallet.strip()
-        if user_wallet and tool_name == "get_user_deposit_balance" and not args.get("user_wallet"):
-            args["user_wallet"] = user_wallet.strip()
-        if user_wallet and tool_name == "execute_swap_buy" and not args.get("user_wallet"):
-            args["user_wallet"] = user_wallet.strip()
+        auth_wallet = user_wallet.strip() if user_wallet else None
+
+        wallet_scoped_tools = {
+            "create_dca_plan",
+            "execute_swap_buy",
+            "get_user_deposit_balance",
+            "list_user_deposit_history",
+            "verify_user_deposit",
+            "withdraw_user_tokens",
+            "list_dca_plans",
+            "get_dca_plan",
+            "update_dca_plan_status",
+            "execute_dca_now",
+            "get_dca_history",
+        }
+
+        if tool_name in wallet_scoped_tools:
+            if not auth_wallet:
+                return json.dumps({"error": "Wallet authentication required for this action."})
+            if tool_name in {"create_dca_plan", "execute_swap_buy"}:
+                claimed = (args.get("user_wallet") or "").strip()
+                if claimed and claimed != auth_wallet:
+                    return json.dumps({"error": "Forbidden: user_wallet does not match authenticated wallet."})
+                args["user_wallet"] = auth_wallet
+            elif tool_name in {
+                "get_user_deposit_balance",
+                "list_user_deposit_history",
+                "verify_user_deposit",
+                "withdraw_user_tokens",
+            }:
+                claimed = (args.get("user_wallet") or "").strip()
+                if claimed and claimed != auth_wallet:
+                    return json.dumps({"error": "Forbidden: user_wallet does not match authenticated wallet."})
+                args["user_wallet"] = auth_wallet
+            elif tool_name == "list_dca_plans":
+                args["user_wallet"] = auth_wallet
+            elif tool_name in {"get_dca_plan", "update_dca_plan_status", "execute_dca_now", "get_dca_history"}:
+                args["user_wallet"] = auth_wallet
+
         return json.dumps(func(**args), indent=2)
     except TypeError as e:
         return json.dumps({"error": str(e), "received_args": tool_args})
@@ -1751,9 +2071,9 @@ def run_agent_with_actions(
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history
 
     for i in range(12):
-        response   = call_ollama(messages)
+        response   = call_groq(messages)
         message    = response["message"]
-        tool_calls = message.get("tool_calls", [])
+        tool_calls = message.get("tool_calls") or []
 
         if not tool_calls:
             reply = message.get("content", "")
@@ -1779,7 +2099,10 @@ def run_agent_with_actions(
             result = execute_tool(name, args, user_wallet=user_wallet)
             print("  ✅ Done")
             actions.append({"tool": name, "args": args, "result": result})
-            messages.append({"role": "tool", "content": result})
+            tool_message: dict[str, Any] = {"role": "tool", "content": result}
+            if tc.get("id"):
+                tool_message["tool_call_id"] = tc["id"]
+            messages.append(tool_message)
 
     reply = "Agent reached max iterations."
     conversation_history.append({"role": "assistant", "content": reply})
@@ -1794,14 +2117,22 @@ def run_agent(user_input: str, conversation_history: list) -> tuple[str, list]:
 BANNER = r"""
 ╔══════════════════════════════════════════════════════════════╗
 ║   💰  Solana DCA Agent                                       ║
-║   Recurring buys · Jupiter v2 swaps · Ollama-powered          ║
+║   Recurring buys · Jupiter v2 swaps · Groq-powered            ║
 ╚══════════════════════════════════════════════════════════════╝
 """
 
 
 def main():
     print(BANNER)
-    print(f"  Model      : {MODEL}")
+    if not db_configured():
+        print("  ❌ DATABASE_URL is not set. Add your Neon connection string to .env")
+        return
+    from db import init_db
+
+    init_db()
+    print("  🗄️  Neon database ready")
+    print(f"  LLM        : Groq ({MODEL})")
+    print(f"  Groq key   : {'configured' if GROQ_API_KEY else 'missing — set GROQ_API_KEY in .env'}")
     print(f"  RPC        : {SOLANA_RPC}")
     print(f"  Cluster    : {SOLANA_CLUSTER} ({'Jupiter v2 swaps' if _is_mainnet() else 'devnet mode'})")
     print(f"  Jupiter API: {JUPITER_BUILD_API}")
@@ -1851,8 +2182,8 @@ def main():
             print(f"\n{'─' * 64}")
             print(reply)
             print(f"{'─' * 64}")
-        except requests.exceptions.ConnectionError:
-            print("  ❌ Cannot connect to Ollama. Run: ollama serve")
+        except RuntimeError as e:
+            print(f"  ❌ Groq error: {e}")
         except Exception as e:
             print(f"  ❌ Error: {e}")
 

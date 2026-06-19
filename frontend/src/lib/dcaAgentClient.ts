@@ -48,16 +48,18 @@ export async function fetchDcaAgentHealth(): Promise<DcaAgentHealth | null> {
 
 export async function sendDcaAgentMessage(
   message: string,
-  sessionId?: string,
-  userWallet?: string
+  authToken: string,
+  sessionId?: string
 ): Promise<DcaAgentChatResponse> {
   const res = await fetch("/api/agents/dca/chat", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${authToken}`,
+    },
     body: JSON.stringify({
       message,
       session_id: sessionId,
-      user_wallet: userWallet,
     }),
   });
 

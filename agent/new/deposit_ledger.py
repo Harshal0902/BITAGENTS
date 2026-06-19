@@ -7,48 +7,38 @@ so DCA plans cannot spend more than each user has deposited.
 
 from __future__ import annotations
 
-import json
 import threading
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Optional
 
+from db import (
+    deposit_exists,
+    find_deposit_by_signature,
+    insert_ledger_entry,
+    load_all_ledger_entries,
+    load_all_plans,
+    load_ledger_for_user,
+)
 from dca_agent import (
-    AGENT_DIR,
     SOL_ADDRESS_FULL,
     TOKEN_MINTS,
-    _load_plans,
     get_wallet_pubkey,
     resolve_token,
     sol_rpc,
 )
 
-DEPOSITS_FILE = Path(
-    __import__("os").environ.get("DCA_DEPOSITS_FILE", str(AGENT_DIR / "user_deposits.json"))
-)
 _ledger_lock = threading.Lock()
 
 MINT_TO_SYMBOL = {info["mint"]: sym for sym, info in TOKEN_MINTS.items() if sym != "WSOL"}
 
 
 def _load_deposits() -> list[dict[str, Any]]:
-    if not DEPOSITS_FILE.exists():
-        return []
-    try:
-        data = json.loads(DEPOSITS_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except Exception:
-        return []
+    return load_all_ledger_entries()
 
 
-def _save_deposits(deposits: list[dict[str, Any]]) -> None:
-    DEPOSITS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    DEPOSITS_FILE.write_text(json.dumps(deposits, indent=2), encoding="utf-8")
-
-
-def _deposit_exists(signature: str) -> bool:
-    return any(d.get("signature") == signature for d in _load_deposits())
+def _load_plans() -> list[dict[str, Any]]:
+    return load_all_plans()
 
 
 def _mint_to_symbol(mint: str) -> str:
@@ -136,9 +126,10 @@ def get_agent_wallet_info() -> dict[str, Any]:
     return {
         "agent_wallet": wallet,
         "configured": bool(wallet),
-        "supported_tokens": sorted(k for k in TOKEN_MINTS if k != "WSOL"),
         "any_spl_token": True,
-        "deposits_file": str(DEPOSITS_FILE),
+        "token_resolution": "symbol_or_mint",
+        "common_tokens": sorted(k for k in TOKEN_MINTS if k != "WSOL"),
+        "storage": "neon_postgres",
         "cluster": SOLANA_CLUSTER,
         "rpc_url": SOLANA_RPC,
     }
@@ -157,8 +148,8 @@ def verify_and_record_deposit(signature: str, user_wallet: str) -> dict[str, Any
         return {"error": "User wallet address is required."}
 
     with _ledger_lock:
-        if _deposit_exists(signature):
-            existing = next(d for d in _load_deposits() if d.get("signature") == signature)
+        if deposit_exists(signature):
+            existing = find_deposit_by_signature(signature)
             return {
                 "status": "already_recorded",
                 "deposit": existing,
@@ -205,14 +196,11 @@ def verify_and_record_deposit(signature: str, user_wallet: str) -> dict[str, Any
                 "verified_at": now,
                 "explorer_url": _explorer_url(signature),
             }
+            insert_ledger_entry(record)
             records.append(record)
 
         if not records:
             return {"error": "Could not verify deposit token metadata on-chain."}
-
-        deposits = _load_deposits()
-        deposits.extend(records)
-        _save_deposits(deposits)
 
         return {
             "status": "confirmed",
@@ -223,11 +211,11 @@ def verify_and_record_deposit(signature: str, user_wallet: str) -> dict[str, Any
 
 def list_user_deposits(user_wallet: str, limit: int = 20) -> dict[str, Any]:
     user_wallet = user_wallet.strip()
-    rows = [d for d in _load_deposits() if d.get("user_wallet") == user_wallet]
-    rows.sort(key=lambda r: r.get("verified_at", ""), reverse=True)
+    rows = load_ledger_for_user(user_wallet, limit=limit)
+    deposits = [r for r in rows if r.get("direction", "deposit") == "deposit"]
     return {
         "user_wallet": user_wallet,
-        "deposits": rows[:limit],
+        "deposits": deposits,
         "balances": get_user_balances(user_wallet),
     }
 
@@ -251,7 +239,6 @@ def _user_plan_usage(user_wallet: str) -> dict[str, dict[str, float]]:
             except (TypeError, ValueError):
                 bucket["reserved"] += spent
         else:
-            executions = int(plan.get("executions_count") or 0)
             max_exec = plan.get("max_executions")
             per_buy = float(plan.get("amount_per_buy") or 0)
             if max_exec not in (None, "null", ""):
@@ -265,33 +252,80 @@ def _user_plan_usage(user_wallet: str) -> dict[str, dict[str, float]]:
     return usage
 
 
-def get_user_balances(user_wallet: str) -> dict[str, Any]:
+def _ledger_totals_for_user_token(user_wallet: str, token_symbol: str) -> dict[str, float]:
+    """Sum ledger directions for one user and token symbol."""
     user_wallet = user_wallet.strip()
-    deposited: dict[str, float] = {}
+    token_symbol = token_symbol.strip().upper()
+    deposited = 0.0
+    spent_ledger = 0.0
+    acquired = 0.0
+    withdrawn = 0.0
     for row in _load_deposits():
         if row.get("user_wallet") != user_wallet or row.get("status") != "confirmed":
             continue
-        if row.get("direction", "deposit") != "deposit":
+        if str(row.get("token", "")).upper() != token_symbol:
             continue
-        token = row.get("token", "SOL")
-        deposited[token] = round(deposited.get(token, 0.0) + float(row.get("amount") or 0), 9)
+        amount = float(row.get("amount") or 0)
+        direction = row.get("direction", "deposit")
+        if direction == "deposit":
+            deposited += amount
+        elif direction == "spend":
+            spent_ledger += amount
+        elif direction == "acquire":
+            acquired += amount
+        elif direction == "withdraw":
+            withdrawn += amount
+
+    return {
+        "deposited": round(deposited, 9),
+        "spent_ledger": round(spent_ledger, 9),
+        "acquired": round(acquired, 9),
+        "withdrawn": round(withdrawn, 9),
+    }
+
+
+def get_user_token_withdrawable(user_wallet: str, token_symbol: str) -> float:
+    """Unused deposits plus DCA-acquired tokens, minus prior withdrawals and active plan reserves."""
+    totals = _ledger_totals_for_user_token(user_wallet, token_symbol)
+    usage = _user_plan_usage(user_wallet.strip())
+    reserved = float(usage.get(token_symbol, {}).get("reserved", 0.0))
+    return round(
+        max(
+            totals["deposited"] + totals["acquired"] - totals["withdrawn"] - reserved,
+            0.0,
+        ),
+        9,
+    )
+
+
+def get_user_balances(user_wallet: str) -> dict[str, Any]:
+    user_wallet = user_wallet.strip()
+    ledger_tokens: set[str] = set()
+    for row in _load_deposits():
+        if row.get("user_wallet") != user_wallet or row.get("status") != "confirmed":
+            continue
+        ledger_tokens.add(str(row.get("token", "SOL")))
 
     usage = _user_plan_usage(user_wallet)
-    tokens = sorted(set(deposited) | set(usage))
+    tokens = sorted(ledger_tokens | set(usage))
     breakdown = []
     for token in tokens:
-        dep = deposited.get(token, 0.0)
         totals = get_user_token_spend_totals(user_wallet, token)
+        ledger = _ledger_totals_for_user_token(user_wallet, token)
         reserved = usage.get(token, {}).get("reserved", 0.0)
         spent = totals["spent"]
         available = totals["available_to_spend"]
+        withdrawable = get_user_token_withdrawable(user_wallet, token)
         breakdown.append(
             {
                 "token": token,
-                "deposited": dep,
+                "deposited": ledger["deposited"],
+                "acquired_from_dca": ledger["acquired"],
+                "withdrawn": ledger["withdrawn"],
                 "reserved_for_plans": round(reserved, 9),
                 "spent_in_plans": round(spent, 9),
                 "available": available,
+                "withdrawable": withdrawable,
             }
         )
 
@@ -306,18 +340,9 @@ def get_user_token_spend_totals(user_wallet: str, token_symbol: str) -> dict[str
     """Deposited and spent amounts for one user + token."""
     user_wallet = user_wallet.strip()
     token_symbol = token_symbol.strip().upper()
-    deposited = 0.0
-    spent_ledger = 0.0
-    for row in _load_deposits():
-        if row.get("user_wallet") != user_wallet or row.get("status") != "confirmed":
-            continue
-        if str(row.get("token", "")).upper() != token_symbol:
-            continue
-        amount = float(row.get("amount") or 0)
-        if row.get("direction", "deposit") == "spend":
-            spent_ledger += amount
-        else:
-            deposited += amount
+    ledger = _ledger_totals_for_user_token(user_wallet, token_symbol)
+    deposited = ledger["deposited"]
+    spent_ledger = ledger["spent_ledger"]
 
     spent_plans = 0.0
     for plan in _load_plans():
@@ -374,12 +399,116 @@ def record_user_spend(
     }
 
     with _ledger_lock:
-        deposits = _load_deposits()
-        deposits.append(record)
-        _save_deposits(deposits)
+        insert_ledger_entry(record)
 
     totals = get_user_token_spend_totals(user_wallet, tok["symbol"])
     return {"status": "recorded", "spend": record, "balances": totals}
+
+
+def record_user_acquire(
+    user_wallet: str,
+    output_token: str,
+    amount: float,
+    *,
+    reference_type: str,
+    reference_id: str,
+    signature: Optional[str] = None,
+) -> dict[str, Any]:
+    """Credit DCA output tokens to a user's withdrawable balance."""
+    user_wallet = user_wallet.strip()
+    tok = resolve_token(output_token)
+    if "error" in tok:
+        return tok
+
+    amount = round(float(amount), 9)
+    if amount <= 0:
+        return {"error": "Acquire amount must be greater than zero."}
+
+    now = datetime.now(timezone.utc).isoformat()
+    record = {
+        "id": str(uuid.uuid4())[:8],
+        "user_wallet": user_wallet,
+        "agent_wallet": get_wallet_pubkey(),
+        "signature": signature,
+        "token": tok["symbol"],
+        "mint": tok["mint"],
+        "amount": amount,
+        "direction": "acquire",
+        "reference_type": reference_type,
+        "reference_id": reference_id,
+        "status": "confirmed",
+        "verified_at": now,
+    }
+
+    with _ledger_lock:
+        insert_ledger_entry(record)
+
+    return {
+        "status": "recorded",
+        "acquire": record,
+        "withdrawable": get_user_token_withdrawable(user_wallet, tok["symbol"]),
+    }
+
+
+def withdraw_user_tokens(user_wallet: str, token: str, amount: float) -> dict[str, Any]:
+    """Send tokens from the agent wallet back to the user and record the withdrawal."""
+    from dca_agent import send_tokens_to_user
+
+    user_wallet = user_wallet.strip()
+    tok = resolve_token(token)
+    if "error" in tok:
+        return tok
+
+    amount = round(float(amount), 9)
+    if amount <= 0:
+        return {"error": "Withdraw amount must be greater than zero."}
+
+    with _ledger_lock:
+        withdrawable = get_user_token_withdrawable(user_wallet, tok["symbol"])
+        if withdrawable + 1e-12 < amount:
+            return {
+                "error": (
+                    f"Insufficient withdrawable {tok['symbol']}. "
+                    f"Withdrawable: {withdrawable}, requested: {amount}. "
+                    f"Only unused deposits and DCA-acquired tokens can be withdrawn."
+                ),
+                "withdrawable": withdrawable,
+                "requested": amount,
+                "token": tok["symbol"],
+            }
+
+        transfer = send_tokens_to_user(user_wallet, tok["mint"], amount, tok["decimals"])
+        if transfer.get("error"):
+            return transfer
+        if transfer.get("status") != "success":
+            return transfer
+
+        now = datetime.now(timezone.utc).isoformat()
+        signature = transfer.get("signature")
+        record = {
+            "id": str(uuid.uuid4())[:8],
+            "user_wallet": user_wallet,
+            "agent_wallet": get_wallet_pubkey(),
+            "signature": signature,
+            "token": tok["symbol"],
+            "mint": tok["mint"],
+            "amount": amount,
+            "direction": "withdraw",
+            "reference_type": "withdraw",
+            "reference_id": (signature or "withdraw")[:128],
+            "status": "confirmed",
+            "verified_at": now,
+            "explorer_url": transfer.get("explorer_url"),
+        }
+        insert_ledger_entry(record)
+
+    return {
+        "status": "success",
+        "withdraw": record,
+        "signature": signature,
+        "explorer_url": transfer.get("explorer_url"),
+        "balances": get_user_balances(user_wallet),
+    }
 
 
 def check_user_can_spend(user_wallet: str, input_token: str, amount: float) -> dict[str, Any]:
@@ -463,7 +592,6 @@ def check_plan_budget(
     else:
         required = float(amount_per_buy)
 
-    # New plan commitments cannot exceed deposited minus what is already spent.
     spendable = round(max(deposited - spent, 0.0), 9)
     if spendable + 1e-12 < required:
         return {

@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
-import { proxyDcaChat } from "@/server/dcaAgentProxy";
+import { getAuthToken, proxyDcaChat } from "@/server/dcaAgentProxy";
 
 export async function POST(request: Request) {
-  let body: { message?: string; session_id?: string; user_wallet?: string };
+  const authToken = getAuthToken(request);
+  if (!authToken) {
+    return NextResponse.json({ error: "Wallet sign-in required" }, { status: 401 });
+  }
+
+  let body: { message?: string; session_id?: string };
   try {
     body = await request.json();
   } catch {
@@ -15,11 +20,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const res = await proxyDcaChat({
-      message,
-      session_id: body.session_id,
-      user_wallet: body.user_wallet,
-    });
+    const res = await proxyDcaChat({ message, session_id: body.session_id }, authToken);
     const data = await res.json();
     if (!res.ok) {
       return NextResponse.json(data, { status: res.status });

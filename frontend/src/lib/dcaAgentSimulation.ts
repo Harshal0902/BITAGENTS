@@ -231,7 +231,7 @@ export const DCA_AGENT = {
   id: "dca",
   name: "DCA Agent",
   slug: "dca",
-  tagline: "Recurring buys · Jupiter swaps · Ollama-powered",
+  tagline: "Recurring buys · Jupiter swaps · Groq-powered",
   description:
     "Set up dollar-cost averaging on Solana. Schedule recurring token buys, preview Jupiter quotes, and manage plans from natural language.",
   status: "Running" as const,

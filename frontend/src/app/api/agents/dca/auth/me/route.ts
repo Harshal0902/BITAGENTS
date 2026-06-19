@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
-import { getAuthToken, proxyDcaWalletBalance } from "@/server/dcaAgentProxy";
+import { getAuthToken, proxyDcaAuthMe } from "@/server/dcaAgentProxy";
 
 export async function GET(request: Request) {
-  const authToken = getAuthToken(request);
-  if (!authToken) {
-    return NextResponse.json({ error: "Wallet sign-in required" }, { status: 401 });
+  const token = getAuthToken(request);
+  if (!token) {
+    return NextResponse.json({ error: "Missing session token" }, { status: 401 });
   }
 
   try {
-    const res = await proxyDcaWalletBalance(authToken);
+    const res = await proxyDcaAuthMe(token);
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch {

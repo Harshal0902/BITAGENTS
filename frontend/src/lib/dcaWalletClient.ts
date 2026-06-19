@@ -1,9 +1,12 @@
 export type TokenBalanceRow = {
   token: string;
   deposited: number;
+  acquired_from_dca?: number;
+  withdrawn?: number;
   reserved_for_plans: number;
   spent_in_plans: number;
   available: number;
+  withdrawable?: number;
 };
 
 export type UserDepositBalances = {
@@ -15,7 +18,17 @@ export type UserDepositBalances = {
 export type AgentWalletInfo = {
   agent_wallet: string | null;
   configured: boolean;
-  supported_tokens: string[];
+  any_spl_token?: boolean;
+  common_tokens?: string[];
+  /** @deprecated use common_tokens */
+  supported_tokens?: string[];
+};
+
+export type ResolvedToken = {
+  symbol: string;
+  mint: string;
+  decimals: number;
+  name?: string;
 };
 
 export type DepositRecord = {
@@ -53,10 +66,22 @@ export async function fetchAgentWallet(): Promise<AgentWalletInfo | null> {
   }
 }
 
-export async function fetchUserBalances(userWallet: string): Promise<UserDepositBalances | null> {
+export async function resolveDepositToken(query: string): Promise<ResolvedToken> {
+  const params = new URLSearchParams({ query: query.trim() });
+  const res = await fetch(`/api/agents/dca/tokens/resolve?${params}`, { cache: "no-store" });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(typeof data.error === "string" ? data.error : "Unknown token");
+  }
+  return data as ResolvedToken;
+}
+
+export async function fetchUserBalances(authToken: string): Promise<UserDepositBalances | null> {
   try {
-    const params = new URLSearchParams({ user_wallet: userWallet });
-    const res = await fetch(`/api/agents/dca/wallet/balance?${params}`, { cache: "no-store" });
+    const res = await fetch("/api/agents/dca/wallet/balance", {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
     if (!res.ok) return null;
     return (await res.json()) as UserDepositBalances;
   } catch {
@@ -64,11 +89,14 @@ export async function fetchUserBalances(userWallet: string): Promise<UserDeposit
   }
 }
 
-export async function verifyDeposit(signature: string, userWallet: string) {
+export async function verifyDeposit(signature: string, authToken: string) {
   const res = await fetch("/api/agents/dca/wallet/deposit", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ signature, user_wallet: userWallet }),
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${authToken}`,
+    },
+    body: JSON.stringify({ signature }),
   });
   const data = await res.json();
   if (!res.ok) {
@@ -77,6 +105,27 @@ export async function verifyDeposit(signature: string, userWallet: string) {
   return data as {
     status: string;
     deposits?: DepositRecord[];
+    balances?: UserDepositBalances;
+  };
+}
+
+export async function withdrawTokens(token: string, amount: number, authToken: string) {
+  const res = await fetch("/api/agents/dca/wallet/withdraw", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${authToken}`,
+    },
+    body: JSON.stringify({ token, amount }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(typeof data.error === "string" ? data.error : "Withdrawal failed");
+  }
+  return data as {
+    status: string;
+    signature?: string;
+    explorer_url?: string;
     balances?: UserDepositBalances;
   };
 }

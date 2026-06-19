@@ -14,6 +14,7 @@ import {
   type DcaAgentHealth,
   type ParsedTransaction,
 } from "@/lib/dcaAgentClient";
+import { useDcaWalletAuth } from "@/hooks/useDcaWalletAuth";
 import { useWallet } from "@solana/wallet-adapter-react";
 import type { UserDepositBalances } from "@/lib/dcaWalletClient";
 
@@ -139,6 +140,7 @@ function ActionCard({
 
 export function DcaAgentConsole() {
   const { publicKey } = useWallet();
+  const { token, busy: authBusy, error: authError, isAuthenticated } = useDcaWalletAuth();
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [sessionId, setSessionId] = useState<string | undefined>();
@@ -164,7 +166,7 @@ export function DcaAgentConsole() {
           role: "assistant",
           content: h
             ? `Connected to local DCA agent (**${h.model}** · **${h.cluster}**). Ask me to check your wallet, create plans, or manage DCA schedules.`
-            : "DCA agent API is offline. Start it locally:\n\n`cd agent/new`\n`python dca_api.py`\n\nAlso ensure Ollama is running (`ollama serve`).",
+            : "DCA agent API is offline. Start it locally:\n\n`cd agent/new`\n`python dca_api.py`\n\nSet `GROQ_API_KEY` and `DATABASE_URL` in `agent/new/.env`.",
         },
       ]);
     });
@@ -181,6 +183,10 @@ export function DcaAgentConsole() {
   async function runCommand(command: string) {
     const trimmed = command.trim();
     if (!trimmed || busy) return;
+    if (!token) {
+      setError("Connect your wallet and approve the sign-in message first.");
+      return;
+    }
 
     setInput("");
     setBusy(true);
@@ -188,11 +194,7 @@ export function DcaAgentConsole() {
     setMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: "user", content: trimmed }]);
 
     try {
-      const data = await sendDcaAgentMessage(
-        trimmed,
-        sessionId,
-        publicKey?.toBase58()
-      );
+      const data = await sendDcaAgentMessage(trimmed, token, sessionId);
       const mapped = mapApiActions(data.actions);
       const turnErrors = mapped.filter((a) => a.error).map((a) => a.error as string);
       const turnTxs = mapped.flatMap((a) => a.transactions);
@@ -220,7 +222,7 @@ export function DcaAgentConsole() {
         {
           id: `e-${Date.now()}`,
           role: "assistant",
-          content: `**Error:** ${message}\n\nMake sure the DCA API is running (\`python dca_api.py\`) and Ollama is up (\`ollama serve\`).`,
+          content: `**Error:** ${message}\n\nMake sure the DCA API is running (\`python dca_api.py\`) with \`GROQ_API_KEY\` and \`DATABASE_URL\` set in \`agent/new/.env\`.`,
           errors: [message],
         },
       ]);
@@ -265,11 +267,29 @@ export function DcaAgentConsole() {
         <div className="border border-warn/40 bg-warn/10 px-4 py-3 font-mono text-xs text-warn">{error}</div>
       )}
 
-      <DcaAgentDeposit cluster={cluster} onBalancesChange={setUserBalances} />
+      {authError && (
+        <div className="border border-warn/40 bg-warn/10 px-4 py-3 font-mono text-xs text-warn">
+          Wallet sign-in: {authError}
+        </div>
+      )}
+
+      {publicKey && authBusy && (
+        <div className="border border-grid bg-surface/40 px-4 py-3 font-mono text-xs text-muted-foreground">
+          Sign the wallet message to authenticate…
+        </div>
+      )}
+
+      <DcaAgentDeposit cluster={cluster} authToken={token} onBalancesChange={setUserBalances} />
 
       {!publicKey && (
         <div className="border border-grid bg-surface/40 px-4 py-3 font-mono text-xs text-muted-foreground">
           Connect your wallet above to deposit and run DCA plans tied to your balance.
+        </div>
+      )}
+
+      {publicKey && !isAuthenticated && !authBusy && (
+        <div className="border border-grid bg-surface/40 px-4 py-3 font-mono text-xs text-muted-foreground">
+          Approve the wallet sign-in prompt to use the DCA agent.
         </div>
       )}
 
@@ -351,13 +371,13 @@ export function DcaAgentConsole() {
                 id="dca-command"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                disabled={busy}
-                placeholder="e.g. Check my wallet status"
+                disabled={busy || !token}
+                placeholder={token ? "e.g. Check my wallet status" : "Sign in with wallet to chat"}
                 className="flex-1 border border-grid bg-background px-4 py-3 font-mono text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-signal disabled:opacity-50"
               />
               <button
                 type="submit"
-                disabled={busy || !input.trim()}
+                disabled={busy || !input.trim() || !token}
                 className="bg-signal px-5 py-3 font-mono text-xs font-semibold uppercase tracking-[0.14em] text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Send
@@ -370,7 +390,7 @@ export function DcaAgentConsole() {
               <button
                 key={prompt}
                 type="button"
-                disabled={busy}
+                disabled={busy || !token}
                 onClick={() => void runCommand(prompt)}
                 className="border border-grid px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:border-signal hover:text-foreground disabled:opacity-40"
               >
