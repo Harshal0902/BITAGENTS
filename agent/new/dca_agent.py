@@ -3,7 +3,7 @@ Solana DCA (Dollar-Cost Averaging) Agent
 Independent agent — run directly: python dca_agent.py
 
 Schedules recurring token buys on Solana via Jupiter v2 build API (mainnet)
-or SOL transfers (devnet). Powered by Groq for natural-language plan management.
+or SOL transfers (devnet). Powered by OpenRouter for natural-language plan management.
 """
 
 import base64
@@ -58,11 +58,16 @@ _load_env()
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GROQ_API_URL = os.environ.get(
-    "GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions"
+OPEN_ROUTER_API = (
+    os.environ.get("OPEN_ROUTER_API", "")
+    or os.environ.get("OPENROUTER_API_KEY", "")
 )
-MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+OPEN_ROUTER_API_URL = os.environ.get(
+    "OPEN_ROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"
+)
+OPEN_ROUTER_SITE_URL = os.environ.get("OPEN_ROUTER_SITE_URL", "https://bitagents.app")
+OPEN_ROUTER_APP_NAME = os.environ.get("OPEN_ROUTER_APP_NAME", "BIT Agents DCA")
+MODEL = os.environ.get("OPEN_ROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
 
 SOLANA_RPC = os.environ.get(
     "SOLANA_RPC_URL",
@@ -1959,30 +1964,34 @@ Common tokens: SOL, USDC, USDT, JUP, BONK, WIF, RAY, ORCA, PYTH, JTO, RENDER
 """
 
 
-def _groq_headers() -> dict[str, str]:
-    if not GROQ_API_KEY:
+def _openrouter_headers() -> dict[str, str]:
+    if not OPEN_ROUTER_API:
         raise RuntimeError(
-            "GROQ_API_KEY is not set. Add it to agent/new/.env (see .env.example)."
+            "OPEN_ROUTER_API is not set. Add it to agent/new/.env (see .env.example)."
         )
     return {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {OPEN_ROUTER_API}",
         "Content-Type": "application/json",
+        "HTTP-Referer": OPEN_ROUTER_SITE_URL,
+        "X-Title": OPEN_ROUTER_APP_NAME,
     }
 
 
-def _groq_error_message_from_response(resp: requests.Response) -> str:
+def _openrouter_error_message_from_response(resp: requests.Response) -> str:
     try:
         body = resp.json()
         err = body.get("error")
         if isinstance(err, dict) and err.get("message"):
             return str(err["message"])
+        if isinstance(err, str):
+            return err
     except Exception:
         pass
     return resp.text or resp.reason or "Unknown error"
 
 
-def call_groq(messages: list) -> dict[str, Any]:
-    """Call Groq chat completions (OpenAI-compatible) with tool support."""
+def call_openrouter(messages: list) -> dict[str, Any]:
+    """Call OpenRouter chat completions (OpenAI-compatible) with tool support."""
     payload = {
         "model": MODEL,
         "messages": messages,
@@ -1991,17 +2000,18 @@ def call_groq(messages: list) -> dict[str, Any]:
         "temperature": 0.2,
     }
     resp = requests.post(
-        GROQ_API_URL, json=payload, headers=_groq_headers(), timeout=180
+        OPEN_ROUTER_API_URL, json=payload, headers=_openrouter_headers(), timeout=180
     )
     if resp.status_code >= 400:
         raise RuntimeError(
-            f"Groq API error ({resp.status_code}): {_groq_error_message_from_response(resp)}"
+            f"OpenRouter API error ({resp.status_code}): "
+            f"{_openrouter_error_message_from_response(resp)}"
         )
 
     data = resp.json()
     choices = data.get("choices") or []
     if not choices:
-        raise RuntimeError("Groq returned no choices.")
+        raise RuntimeError("OpenRouter returned no choices.")
     return {"message": choices[0]["message"]}
 
 
@@ -2071,7 +2081,7 @@ def run_agent_with_actions(
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history
 
     for i in range(12):
-        response   = call_groq(messages)
+        response   = call_openrouter(messages)
         message    = response["message"]
         tool_calls = message.get("tool_calls") or []
 
@@ -2117,7 +2127,7 @@ def run_agent(user_input: str, conversation_history: list) -> tuple[str, list]:
 BANNER = r"""
 ╔══════════════════════════════════════════════════════════════╗
 ║   💰  Solana DCA Agent                                       ║
-║   Recurring buys · Jupiter v2 swaps · Groq-powered            ║
+║   Recurring buys · Jupiter v2 swaps · OpenRouter-powered      ║
 ╚══════════════════════════════════════════════════════════════╝
 """
 
@@ -2131,8 +2141,11 @@ def main():
 
     init_db()
     print("  🗄️  Neon database ready")
-    print(f"  LLM        : Groq ({MODEL})")
-    print(f"  Groq key   : {'configured' if GROQ_API_KEY else 'missing — set GROQ_API_KEY in .env'}")
+    print(f"  LLM        : OpenRouter ({MODEL})")
+    print(
+        f"  OpenRouter : "
+        f"{'configured' if OPEN_ROUTER_API else 'missing — set OPEN_ROUTER_API in .env'}"
+    )
     print(f"  RPC        : {SOLANA_RPC}")
     print(f"  Cluster    : {SOLANA_CLUSTER} ({'Jupiter v2 swaps' if _is_mainnet() else 'devnet mode'})")
     print(f"  Jupiter API: {JUPITER_BUILD_API}")

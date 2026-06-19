@@ -43,9 +43,9 @@ from db import (
     load_chat_history,
 )
 from dca_agent import (
-    GROQ_API_KEY,
     JUPITER_BUILD_API,
     MODEL,
+    OPEN_ROUTER_API,
     SCHEDULER_POLL_SECONDS,
     SOLANA_CLUSTER,
     SOLANA_RPC,
@@ -172,9 +172,9 @@ def health() -> dict[str, Any]:
     agent_info = get_agent_wallet_info()
     return {
         "status": "ok",
-        "llm": "groq",
+        "llm": "openrouter",
         "model": MODEL,
-        "groq_configured": bool(GROQ_API_KEY),
+        "openrouter_configured": bool(OPEN_ROUTER_API),
         "database": "neon_postgres" if db_configured() else "unconfigured",
         "auth": "wallet_signature",
         "internal_api_key_required": internal_api_configured(),
@@ -314,10 +314,10 @@ def chat(
     except requests.exceptions.ConnectionError as exc:
         raise HTTPException(
             status_code=503,
-            detail="Cannot reach Groq API. Check your network connection.",
+            detail="Cannot reach OpenRouter API. Check your network connection.",
         ) from exc
     except requests.exceptions.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Groq error: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"OpenRouter error: {exc}") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
