@@ -8,6 +8,7 @@ so DCA plans cannot spend more than each user has deposited.
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -19,6 +20,7 @@ from db import (
     load_all_ledger_entries,
     load_all_plans,
     load_ledger_for_user,
+    load_user_balance_data,
 )
 from dca_agent import (
     SOL_ADDRESS_FULL,
@@ -37,8 +39,12 @@ def _load_deposits() -> list[dict[str, Any]]:
     return load_all_ledger_entries()
 
 
-def _load_plans() -> list[dict[str, Any]]:
-    return load_all_plans()
+def _load_user_ledger(user_wallet: str) -> list[dict[str, Any]]:
+    return load_ledger_for_user(user_wallet.strip())
+
+
+def _load_plans(user_wallet: Optional[str] = None) -> list[dict[str, Any]]:
+    return load_all_plans(user_wallet)
 
 
 def _mint_to_symbol(mint: str) -> str:
@@ -51,12 +57,13 @@ def _mint_to_symbol(mint: str) -> str:
 def _account_keys(tx: dict) -> list[str]:
     message = tx.get("transaction", {}).get("message", {})
     keys: list[str] = []
-    for entry in message.get("accountKeys", []):
+    raw_keys = message.get("accountKeys") or message.get("staticAccountKeys") or []
+    for entry in raw_keys:
         if isinstance(entry, dict):
             keys.append(entry.get("pubkey", ""))
         else:
             keys.append(str(entry))
-    return keys
+    return [k for k in keys if k]
 
 
 def _user_in_transaction(tx: dict, user_wallet: str) -> bool:
@@ -156,17 +163,23 @@ def verify_and_record_deposit(signature: str, user_wallet: str) -> dict[str, Any
                 "balances": get_user_balances(user_wallet),
             }
 
-        tx = sol_rpc(
-            "getTransaction",
-            [
-                signature,
-                {
-                    "encoding": "jsonParsed",
-                    "maxSupportedTransactionVersion": 0,
-                    "commitment": "confirmed",
-                },
-            ],
-        )
+        tx = None
+        for attempt in range(6):
+            tx = sol_rpc(
+                "getTransaction",
+                [
+                    signature,
+                    {
+                        "encoding": "jsonParsed",
+                        "maxSupportedTransactionVersion": 0,
+                        "commitment": "confirmed",
+                    },
+                ],
+            )
+            if tx:
+                break
+            if attempt < 5:
+                time.sleep(1.5)
         if not tx:
             return {"error": "Transaction not found. Wait for confirmation and try again."}
 
@@ -179,12 +192,14 @@ def verify_and_record_deposit(signature: str, user_wallet: str) -> dict[str, Any
 
         now = datetime.now(timezone.utc).isoformat()
         records = []
+        skipped: list[str] = []
         for transfer in inbound:
             tok = resolve_token(transfer["mint"])
             if "error" in tok:
+                skipped.append(transfer.get("token") or transfer.get("mint", "unknown"))
                 continue
             record = {
-                "id": str(uuid.uuid4())[:8],
+                "id": uuid.uuid4().hex[:16],
                 "user_wallet": user_wallet,
                 "agent_wallet": agent_wallet,
                 "signature": signature,
@@ -196,11 +211,18 @@ def verify_and_record_deposit(signature: str, user_wallet: str) -> dict[str, Any
                 "verified_at": now,
                 "explorer_url": _explorer_url(signature),
             }
-            insert_ledger_entry(record)
-            records.append(record)
+            if insert_ledger_entry(record):
+                records.append(record)
 
         if not records:
-            return {"error": "Could not verify deposit token metadata on-chain."}
+            if skipped:
+                return {
+                    "error": (
+                        "Deposit found on-chain but token metadata could not be resolved: "
+                        + ", ".join(skipped)
+                    ),
+                }
+            return {"error": "Could not save deposit to database. Please retry verification."}
 
         return {
             "status": "confirmed",
@@ -221,10 +243,15 @@ def list_user_deposits(user_wallet: str, limit: int = 20) -> dict[str, Any]:
 
 
 def _user_plan_usage(user_wallet: str) -> dict[str, dict[str, float]]:
+    return _user_plan_usage_from_plans(user_wallet, _load_plans(user_wallet))
+
+
+def _user_plan_usage_from_plans(
+    user_wallet: str,
+    plans: list[dict[str, Any]],
+) -> dict[str, dict[str, float]]:
     usage: dict[str, dict[str, float]] = {}
-    for plan in _load_plans():
-        if plan.get("user_wallet") != user_wallet:
-            continue
+    for plan in plans:
         if plan.get("status") in ("cancelled",):
             continue
         token = plan.get("input_token", "SOL")
@@ -252,7 +279,11 @@ def _user_plan_usage(user_wallet: str) -> dict[str, dict[str, float]]:
     return usage
 
 
-def _ledger_totals_for_user_token(user_wallet: str, token_symbol: str) -> dict[str, float]:
+def _ledger_totals_for_user_token(
+    user_wallet: str,
+    token_symbol: str,
+    rows: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, float]:
     """Sum ledger directions for one user and token symbol."""
     user_wallet = user_wallet.strip()
     token_symbol = token_symbol.strip().upper()
@@ -260,7 +291,8 @@ def _ledger_totals_for_user_token(user_wallet: str, token_symbol: str) -> dict[s
     spent_ledger = 0.0
     acquired = 0.0
     withdrawn = 0.0
-    for row in _load_deposits():
+    source = rows if rows is not None else _load_user_ledger(user_wallet)
+    for row in source:
         if row.get("user_wallet") != user_wallet or row.get("status") != "confirmed":
             continue
         if str(row.get("token", "")).upper() != token_symbol:
@@ -300,22 +332,26 @@ def get_user_token_withdrawable(user_wallet: str, token_symbol: str) -> float:
 
 def get_user_balances(user_wallet: str) -> dict[str, Any]:
     user_wallet = user_wallet.strip()
+    user_rows, user_plans = load_user_balance_data(user_wallet)
     ledger_tokens: set[str] = set()
-    for row in _load_deposits():
-        if row.get("user_wallet") != user_wallet or row.get("status") != "confirmed":
+    for row in user_rows:
+        if row.get("status") != "confirmed":
             continue
         ledger_tokens.add(str(row.get("token", "SOL")))
 
-    usage = _user_plan_usage(user_wallet)
+    usage = _user_plan_usage_from_plans(user_wallet, user_plans)
     tokens = sorted(ledger_tokens | set(usage))
     breakdown = []
     for token in tokens:
-        totals = get_user_token_spend_totals(user_wallet, token)
-        ledger = _ledger_totals_for_user_token(user_wallet, token)
+        ledger = _ledger_totals_for_user_token(user_wallet, token, rows=user_rows)
         reserved = usage.get(token, {}).get("reserved", 0.0)
-        spent = totals["spent"]
-        available = totals["available_to_spend"]
-        withdrawable = get_user_token_withdrawable(user_wallet, token)
+        spent_plans = usage.get(token, {}).get("spent", 0.0)
+        spent = round(max(ledger["spent_ledger"], spent_plans), 9)
+        available = round(max(ledger["deposited"] - spent, 0.0), 9)
+        withdrawable = round(
+            max(ledger["deposited"] + ledger["acquired"] - ledger["withdrawn"] - reserved, 0.0),
+            9,
+        )
         breakdown.append(
             {
                 "token": token,
@@ -323,7 +359,7 @@ def get_user_balances(user_wallet: str) -> dict[str, Any]:
                 "acquired_from_dca": ledger["acquired"],
                 "withdrawn": ledger["withdrawn"],
                 "reserved_for_plans": round(reserved, 9),
-                "spent_in_plans": round(spent, 9),
+                "spent_in_plans": spent,
                 "available": available,
                 "withdrawable": withdrawable,
             }
@@ -340,14 +376,13 @@ def get_user_token_spend_totals(user_wallet: str, token_symbol: str) -> dict[str
     """Deposited and spent amounts for one user + token."""
     user_wallet = user_wallet.strip()
     token_symbol = token_symbol.strip().upper()
-    ledger = _ledger_totals_for_user_token(user_wallet, token_symbol)
+    user_rows = _load_user_ledger(user_wallet)
+    ledger = _ledger_totals_for_user_token(user_wallet, token_symbol, rows=user_rows)
     deposited = ledger["deposited"]
     spent_ledger = ledger["spent_ledger"]
 
     spent_plans = 0.0
-    for plan in _load_plans():
-        if plan.get("user_wallet") != user_wallet:
-            continue
+    for plan in _load_plans(user_wallet):
         if plan.get("status") == "cancelled":
             continue
         if str(plan.get("input_token", "")).upper() != token_symbol:

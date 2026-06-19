@@ -1,9 +1,14 @@
 import "./globals.css";
 import "@solana/wallet-adapter-react-ui/styles.css";
 import type { Metadata } from "next";
+import dynamic from "next/dynamic";
 import { Nav } from "@/components/Nav";
-import { SolanaProviders } from "@/components/SolanaProviders";
 import { Toaster } from "@/components/ui/sonner";
+
+const SolanaProviders = dynamic(
+  () => import("@/components/SolanaProviders").then((mod) => mod.SolanaProviders),
+  { ssr: false }
+);
 
 export const metadata: Metadata = {
   title: "BIT Agents",

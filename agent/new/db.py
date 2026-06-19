@@ -429,6 +429,29 @@ def load_all_ledger_entries() -> list[dict[str, Any]]:
     return [_ledger_row_to_dict(row) for row in rows]
 
 
+def load_user_balance_data(user_wallet: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Load ledger rows and plans for one user in a single DB round trip."""
+    init_db()
+    user_wallet = user_wallet.strip()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM user_ledger
+                WHERE user_wallet = %s
+                ORDER BY verified_at ASC
+                """,
+                (user_wallet,),
+            )
+            ledger_rows = [_ledger_row_to_dict(row) for row in cur.fetchall()]
+            cur.execute(
+                "SELECT * FROM dca_plans WHERE user_wallet = %s ORDER BY created_at ASC",
+                (user_wallet,),
+            )
+            plan_rows = [_plan_row_to_dict(row) for row in cur.fetchall()]
+    return ledger_rows, plan_rows
+
+
 def load_ledger_for_user(user_wallet: str, limit: Optional[int] = None) -> list[dict[str, Any]]:
     init_db()
     query = """
@@ -480,7 +503,7 @@ def find_deposit_by_signature(signature: str) -> Optional[dict[str, Any]]:
     return _ledger_row_to_dict(row) if row else None
 
 
-def insert_ledger_entry(record: dict[str, Any]) -> dict[str, Any]:
+def insert_ledger_entry(record: dict[str, Any]) -> bool:
     init_db()
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -498,7 +521,7 @@ def insert_ledger_entry(record: dict[str, Any]) -> dict[str, Any]:
                 ON CONFLICT DO NOTHING
                 """,
                 {
-                    "id": record.get("id") or str(uuid.uuid4())[:8],
+                    "id": record.get("id") or uuid.uuid4().hex[:16],
                     "user_wallet": record["user_wallet"],
                     "agent_wallet": record.get("agent_wallet"),
                     "signature": record.get("signature"),
@@ -513,7 +536,7 @@ def insert_ledger_entry(record: dict[str, Any]) -> dict[str, Any]:
                     "explorer_url": record.get("explorer_url"),
                 },
             )
-    return record
+            return cur.rowcount > 0
 
 
 # ─── Chat sessions ────────────────────────────────────────────────────────────

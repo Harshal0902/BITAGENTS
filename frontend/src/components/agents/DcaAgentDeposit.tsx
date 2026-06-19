@@ -164,8 +164,13 @@ export function DcaAgentDeposit({
       await connection.confirmTransaction({ signature, ...latest }, "confirmed");
 
       setLastTx(signature);
-      await verifyDeposit(signature, authToken);
-      await refreshBalances();
+      const verified = await verifyDeposit(signature, authToken);
+      if (verified.balances?.balances) {
+        setBalances(verified.balances.balances);
+        onBalancesChange?.(verified.balances);
+      } else {
+        await refreshBalances();
+      }
       setAmount("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deposit failed");

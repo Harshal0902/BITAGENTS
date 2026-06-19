@@ -1999,20 +1999,42 @@ def call_openrouter(messages: list) -> dict[str, Any]:
         "tool_choice": "auto",
         "temperature": 0.2,
     }
-    resp = requests.post(
-        OPEN_ROUTER_API_URL, json=payload, headers=_openrouter_headers(), timeout=180
-    )
-    if resp.status_code >= 400:
-        raise RuntimeError(
-            f"OpenRouter API error ({resp.status_code}): "
-            f"{_openrouter_error_message_from_response(resp)}"
-        )
+    last_error = "Unknown OpenRouter error"
+    for attempt in range(1, 4):
+        try:
+            resp = requests.post(
+                OPEN_ROUTER_API_URL,
+                json=payload,
+                headers=_openrouter_headers(),
+                timeout=180,
+            )
+        except requests.exceptions.RequestException as exc:
+            last_error = str(exc)
+            if attempt < 3:
+                time.sleep(1.5 * attempt)
+                continue
+            raise RuntimeError(f"Cannot reach OpenRouter API: {last_error}") from exc
 
-    data = resp.json()
-    choices = data.get("choices") or []
-    if not choices:
-        raise RuntimeError("OpenRouter returned no choices.")
-    return {"message": choices[0]["message"]}
+        if resp.status_code >= 400:
+            last_error = _openrouter_error_message_from_response(resp)
+            if resp.status_code in (408, 429, 500, 502, 503, 504) and attempt < 3:
+                time.sleep(1.5 * attempt)
+                continue
+            raise RuntimeError(
+                f"OpenRouter API error ({resp.status_code}): {last_error}"
+            )
+
+        data = resp.json()
+        choices = data.get("choices") or []
+        if not choices:
+            last_error = "OpenRouter returned no choices."
+            if attempt < 3:
+                time.sleep(1.5 * attempt)
+                continue
+            raise RuntimeError(last_error)
+        return {"message": choices[0]["message"]}
+
+    raise RuntimeError(f"OpenRouter API error: {last_error}")
 
 
 def execute_tool(tool_name: str, tool_args: dict, user_wallet: Optional[str] = None) -> str:

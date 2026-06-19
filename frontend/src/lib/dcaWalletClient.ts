@@ -82,9 +82,14 @@ export async function fetchUserBalances(authToken: string): Promise<UserDepositB
       cache: "no-store",
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    if (!res.ok) return null;
-    return (await res.json()) as UserDepositBalances;
-  } catch {
+    const data = await res.json();
+    if (!res.ok) {
+      const detail = typeof data.error === "string" ? data.error : "Failed to load balances";
+      throw new Error(detail);
+    }
+    return data as UserDepositBalances;
+  } catch (err) {
+    console.error("fetchUserBalances failed:", err);
     return null;
   }
 }
