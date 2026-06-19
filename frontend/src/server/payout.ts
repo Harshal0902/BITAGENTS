@@ -1,7 +1,7 @@
 import { solToLamports } from "@bitagents/shared";
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import bs58 from "bs58";
-import { getSolanaRpcUrl } from "@/lib/solana/config";
+import { getServerSolanaRpcUrl } from "@/lib/solana/config";
 
 function parseTreasuryKeypair(): Keypair | null {
   const secret = process.env.TREASURY_SECRET_KEY?.trim();
@@ -26,7 +26,7 @@ export async function sendServerPayout(toWallet: string, amountSol: number) {
     throw new Error("TREASURY_SECRET_KEY is not configured. Use the browser payout flow or add a treasury keypair.");
   }
 
-  const connection = new Connection(getSolanaRpcUrl(), "confirmed");
+  const connection = new Connection(getServerSolanaRpcUrl(), "confirmed");
   const transaction = new Transaction().add(
     SystemProgram.transfer({
       fromPubkey: keypair.publicKey,

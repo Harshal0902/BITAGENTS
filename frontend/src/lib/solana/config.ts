@@ -9,15 +9,7 @@ function readCluster(): string {
   ).trim();
 }
 
-function readRpcUrl(cluster: string): string {
-  const fromEnv =
-    process.env.NEXT_PUBLIC_SOLANA_RPC_URL ??
-    process.env.SOLANA_RPC_URL;
-
-  if (fromEnv?.trim()) {
-    return fromEnv.trim();
-  }
-
+function publicFallbackRpcUrl(cluster: string): string {
   const normalized = cluster.toLowerCase();
   if (normalized === "mainnet" || normalized === "mainnet-beta") {
     return clusterApiUrl(WalletAdapterNetwork.Mainnet);
@@ -28,12 +20,34 @@ function readRpcUrl(cluster: string): string {
   return clusterApiUrl(WalletAdapterNetwork.Devnet);
 }
 
+/** Server-only RPC URL (Helius, etc.). Never bundle this into client code. */
+export function getServerSolanaRpcUrl(): string {
+  const fromEnv = process.env.SOLANA_RPC_URL?.trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+  return publicFallbackRpcUrl(readCluster());
+}
+
+/** Browser Connection endpoint — same-origin proxy hides the private RPC key. */
+export function getClientSolanaRpcEndpoint(origin?: string): string {
+  const path = "/api/solana/rpc";
+  if (origin) {
+    return `${origin.replace(/\/$/, "")}${path}`;
+  }
+  return path;
+}
+
 export function getSolanaCluster(): string {
   return readCluster();
 }
 
+/** @deprecated Prefer getServerSolanaRpcUrl (server) or getClientSolanaRpcEndpoint (client). */
 export function getSolanaRpcUrl(): string {
-  return readRpcUrl(readCluster());
+  if (typeof window === "undefined") {
+    return getServerSolanaRpcUrl();
+  }
+  return getClientSolanaRpcEndpoint(window.location.origin);
 }
 
 export function getWalletAdapterNetwork(): WalletAdapterNetwork {
