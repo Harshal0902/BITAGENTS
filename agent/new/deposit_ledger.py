@@ -277,7 +277,8 @@ def verify_and_record_deposit(signature: str, user_wallet: str) -> dict[str, Any
             }
 
         tx = None
-        for attempt in range(6):
+        for attempt in range(10):
+            commitment = "finalized" if attempt >= 4 else "confirmed"
             tx = sol_rpc(
                 "getTransaction",
                 [
@@ -285,14 +286,14 @@ def verify_and_record_deposit(signature: str, user_wallet: str) -> dict[str, Any
                     {
                         "encoding": "jsonParsed",
                         "maxSupportedTransactionVersion": 0,
-                        "commitment": "confirmed",
+                        "commitment": commitment,
                     },
                 ],
             )
             if tx:
                 break
-            if attempt < 5:
-                time.sleep(1.5)
+            if attempt < 9:
+                time.sleep(2.0)
         if not tx:
             return {"error": "Transaction not found. Wait for confirmation and try again."}
 

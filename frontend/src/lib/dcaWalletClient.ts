@@ -119,14 +119,21 @@ export async function verifyDeposit(signature: string, authToken: string) {
 
 function isRetryableVerifyError(message: string): boolean {
   const lower = message.toLowerCase();
-  return lower.includes("not found") || lower.includes("wait for confirmation");
+  return (
+    lower.includes("not found") ||
+    lower.includes("wait for confirmation") ||
+    lower.includes("offline") ||
+    lower.includes("503") ||
+    lower.includes("could not save") ||
+    lower.includes("network")
+  );
 }
 
 /** Verify a deposit signature with retries while the RPC indexes the transaction. */
 export async function verifyDepositWithRetry(
   signature: string,
   authToken: string,
-  maxAttempts = 6
+  maxAttempts = 12
 ): Promise<DepositVerifyResponse> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -137,7 +144,7 @@ export async function verifyDepositWithRetry(
       if (!isRetryableVerifyError(lastError.message) || attempt >= maxAttempts - 1) {
         throw lastError;
       }
-      await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      await new Promise((resolve) => window.setTimeout(resolve, 2500));
     }
   }
   throw lastError ?? new Error("Deposit verification failed");

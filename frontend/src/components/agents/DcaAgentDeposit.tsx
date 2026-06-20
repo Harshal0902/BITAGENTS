@@ -27,6 +27,31 @@ import {
 } from "@/lib/dcaWalletClient";
 
 const PRESET_TOKENS = ["SOL", "USDC", "JUP"] as const;
+const PENDING_DEPOSIT_KEY = "dca_pending_deposit_signature";
+
+function savePendingDepositSignature(signature: string) {
+  try {
+    sessionStorage.setItem(PENDING_DEPOSIT_KEY, signature);
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+function clearPendingDepositSignature() {
+  try {
+    sessionStorage.removeItem(PENDING_DEPOSIT_KEY);
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+function readPendingDepositSignature(): string | null {
+  try {
+    return sessionStorage.getItem(PENDING_DEPOSIT_KEY);
+  } catch {
+    return null;
+  }
+}
 type PresetToken = (typeof PRESET_TOKENS)[number];
 
 export function DcaAgentDeposit({
@@ -57,6 +82,7 @@ export function DcaAgentDeposit({
   const [manualSignature, setManualSignature] = useState("");
   const [verifyBusy, setVerifyBusy] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
+  const [depositPhase, setDepositPhase] = useState<string | null>(null);
 
   const refreshBalances = useCallback(async () => {
     if (!publicKey || !authToken) {
@@ -81,6 +107,32 @@ export function DcaAgentDeposit({
   useEffect(() => {
     void refreshBalances();
   }, [refreshBalances]);
+
+  useEffect(() => {
+    if (!authToken) return;
+    const pending = readPendingDepositSignature();
+    if (!pending) return;
+    setManualSignature(pending);
+    void runDepositVerification(pending, { useVerifyBusy: false }).then((ok) => {
+      if (ok) clearPendingDepositSignature();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once when auth becomes available
+  }, [authToken]);
+
+  useEffect(() => {
+    if (!authToken) return;
+    const pending = readPendingDepositSignature();
+    if (!pending) return;
+
+    const interval = window.setInterval(() => {
+      void runDepositVerification(pending, { useVerifyBusy: false }).then((ok) => {
+        if (ok) clearPendingDepositSignature();
+      });
+    }, 8000);
+
+    return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- poll until pending deposit is credited
+  }, [authToken, success]);
 
   useEffect(() => {
     if (withdrawToken) return;
@@ -116,16 +168,16 @@ export function DcaAgentDeposit({
   async function runDepositVerification(
     signature: string,
     options?: { clearManualInput?: boolean; useVerifyBusy?: boolean }
-  ) {
+  ): Promise<boolean> {
     if (!authToken) {
       setError("Connect wallet and sign in before verifying a deposit.");
-      return;
+      return false;
     }
 
     const trimmed = signature.trim();
     if (trimmed.length < 80) {
       setError("Enter a valid Solana transaction signature.");
-      return;
+      return false;
     }
 
     if (options?.useVerifyBusy !== false) {
@@ -141,6 +193,7 @@ export function DcaAgentDeposit({
         await refreshBalances();
       }
       setLastTx(trimmed);
+      clearPendingDepositSignature();
       setSuccess(
         verified.message ??
           (verified.status === "already_recorded"
@@ -150,8 +203,15 @@ export function DcaAgentDeposit({
       if (options?.clearManualInput) {
         setManualSignature("");
       }
+      return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Deposit verification failed");
+      savePendingDepositSignature(trimmed);
+      setManualSignature(trimmed);
+      const message = err instanceof Error ? err.message : "Deposit verification failed";
+      setError(
+        `${message} Your transfer may still be confirming — we will keep retrying automatically.`
+      );
+      return false;
     } finally {
       if (options?.useVerifyBusy !== false) {
         setVerifyBusy(false);
@@ -171,10 +231,14 @@ export function DcaAgentDeposit({
     setError(null);
     setSuccess(null);
     setLastTx(null);
+    setDepositPhase("Preparing transaction…");
+
+    let signature: string | null = null;
 
     try {
       const agentPk = new PublicKey(agentWallet);
       const tx = new Transaction();
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
 
       if (token === "SOL") {
         tx.add(
@@ -217,17 +281,41 @@ export function DcaAgentDeposit({
         tx.add(createTransferInstruction(userAta, agentAta, publicKey, rawAmount));
       }
 
-      const signature = await sendTransaction(tx, connection);
-      const latest = await connection.getLatestBlockhash("confirmed");
-      await connection.confirmTransaction({ signature, ...latest }, "confirmed");
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = publicKey;
 
+      setDepositPhase("Approve in wallet…");
+      signature = await sendTransaction(tx, connection);
       setLastTx(signature);
-      await runDepositVerification(signature, { useVerifyBusy: false });
-      setAmount("");
+      setManualSignature(signature);
+      savePendingDepositSignature(signature);
+
+      setDepositPhase("Confirming on-chain…");
+      try {
+        await connection.confirmTransaction(
+          { signature, blockhash, lastValidBlockHeight },
+          "confirmed"
+        );
+      } catch {
+        // Tx may still land — verification below will retry until indexed.
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deposit failed");
+      return;
     } finally {
+      setDepositPhase(null);
       setBusy(false);
+    }
+
+    if (signature) {
+      setDepositPhase("Crediting your balance…");
+      setBusy(true);
+      const credited = await runDepositVerification(signature, { useVerifyBusy: false });
+      setDepositPhase(null);
+      setBusy(false);
+      if (credited) {
+        setAmount("");
+      }
     }
   }
 
@@ -325,7 +413,9 @@ export function DcaAgentDeposit({
                 disabled={busy || !connected || !agentWallet || !amount}
                 className="bg-signal px-4 py-2.5 font-mono text-xs font-semibold uppercase tracking-[0.14em] text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {busy ? "Sending…" : "Deposit"}
+                {busy || verifyBusy
+                  ? depositPhase ?? "Processing…"
+                  : "Deposit"}
               </button>
             </div>
 
