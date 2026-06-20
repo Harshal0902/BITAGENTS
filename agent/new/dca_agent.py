@@ -290,12 +290,13 @@ def _looks_like_mint(value: str) -> bool:
         return False
 
 
-def _cache_token_result(raw: str, result: dict) -> dict:
+def _cache_token_result(raw: str, result: dict, *, cache_symbol: bool = True) -> dict:
     if "error" in result:
         return result
     _RESOLVED_TOKEN_CACHE[raw] = result
     _RESOLVED_TOKEN_CACHE[result["mint"]] = result
-    _RESOLVED_TOKEN_CACHE[result["symbol"]] = result
+    if cache_symbol:
+        _RESOLVED_TOKEN_CACHE[result["symbol"]] = result
     return result
 
 
@@ -325,11 +326,17 @@ def _fetch_token_from_jupiter(query: str) -> Optional[dict]:
         if not isinstance(items, list) or not items:
             return None
         query_stripped = query.strip()
+
+        # Mint lookups must match exactly — never guess with items[0].
+        if _looks_like_mint(query_stripped):
+            for item in items:
+                if item.get("id") == query_stripped:
+                    return item
+            return None
+
         for item in items:
             if item.get("id") == query_stripped:
                 return item
-        if _looks_like_mint(query_stripped):
-            return items[0]
         query_upper = query_stripped.upper()
         for item in items:
             if str(item.get("symbol", "")).upper() == query_upper:
@@ -342,25 +349,25 @@ def _fetch_token_from_jupiter(query: str) -> Optional[dict]:
 def _resolve_by_mint(mint: str) -> dict:
     mint = mint.strip()
     cached = _RESOLVED_TOKEN_CACHE.get(mint)
-    if cached:
+    if cached and cached.get("mint") == mint:
         return cached
 
     known_sym = MINT_TO_SYMBOL.get(mint)
     if known_sym:
-        result = {"symbol": known_sym, **TOKEN_MINTS[known_sym]}
-        return _cache_token_result(mint, result)
+        result = {"symbol": known_sym, **TOKEN_MINTS[known_sym], "mint": mint}
+        return _cache_token_result(mint, result, cache_symbol=True)
 
     jup = _fetch_token_from_jupiter(mint)
-    if jup and jup.get("id"):
+    if jup and jup.get("id") == mint:
         result = {
             "symbol": str(jup.get("symbol") or _short_mint(mint)).upper(),
-            "mint": jup["id"],
+            "mint": mint,
             "decimals": int(jup.get("decimals", 0)),
             "coingecko_id": None,
             "name": jup.get("name"),
             "usd_price": jup.get("usdPrice"),
         }
-        return _cache_token_result(mint, result)
+        return _cache_token_result(mint, result, cache_symbol=False)
 
     decimals = _fetch_mint_decimals_rpc(mint)
     if decimals is None:
@@ -372,7 +379,7 @@ def _resolve_by_mint(mint: str) -> dict:
         "decimals": decimals,
         "coingecko_id": None,
     }
-    return _cache_token_result(mint, result)
+    return _cache_token_result(mint, result, cache_symbol=False)
 
 
 def resolve_token(symbol_or_mint: str) -> dict:
@@ -1319,8 +1326,16 @@ def create_dca_plan(
     if "error" in out:
         return out
 
+    if not user_wallet or not str(user_wallet).strip():
+        return {"error": "user_wallet is required. User must connect wallet and authenticate first."}
+
     if not name or not str(name).strip():
-        name = f"{inp['symbol']} → {out['symbol']} DCA"
+        mint_tail = out["mint"][-4:]
+        sym = out["symbol"]
+        if _looks_like_mint(str(output_token).strip()):
+            name = f"{inp['symbol']} -> {sym} ({mint_tail}) DCA"
+        else:
+            name = f"{inp['symbol']} -> {sym} DCA"
 
     from deposit_ledger import check_plan_budget
 
@@ -1369,18 +1384,27 @@ def create_dca_plan(
     return {
         "status": "created",
         "plan": {k: plan[k] for k in (
-            "id", "name", "input_token", "output_token", "amount_per_buy",
-            "interval", "interval_minutes", "total_budget", "max_executions",
-            "status", "next_execution_at",
+            "id", "name", "input_token", "output_token", "input_mint", "output_mint",
+            "amount_per_buy", "interval", "interval_minutes", "total_budget", "max_executions",
+            "status", "next_execution_at", "user_wallet",
         )},
         "wallet":  get_wallet_pubkey(),
         "cluster": SOLANA_CLUSTER,
     }
 
 
-def list_dca_plans(status: Optional[str] = None, user_wallet: Optional[str] = None) -> dict:
-    plans = _load_plans(user_wallet.strip() if user_wallet else None)
-    if status:
+def list_dca_plans(
+    status: Optional[str] = None,
+    user_wallet: Optional[str] = None,
+    active_only: bool = False,
+) -> dict:
+    if not user_wallet or not str(user_wallet).strip():
+        return {"error": "user_wallet is required.", "plans": [], "count": 0}
+
+    plans = _load_plans(user_wallet.strip())
+    if active_only and not status:
+        plans = [p for p in plans if p.get("status") == "active"]
+    elif status:
         plans = [p for p in plans if p.get("status") == status.lower()]
     summary = []
     for p in plans:
@@ -1388,14 +1412,22 @@ def list_dca_plans(status: Optional[str] = None, user_wallet: Optional[str] = No
             "id":               p["id"],
             "name":             p["name"],
             "pair":             f"{p['input_token']} -> {p['output_token']}",
+            "input_mint":       p.get("input_mint"),
+            "output_mint":      p.get("output_mint"),
             "amount_per_buy":   p["amount_per_buy"],
             "interval":         p["interval"],
             "status":           p["status"],
             "executions":       p["executions_count"],
+            "max_executions":   p.get("max_executions"),
             "spent":            p["spent_so_far"],
             "next_execution_at": p.get("next_execution_at"),
         })
-    return {"plans": summary, "count": len(summary), "user_wallet": user_wallet}
+    return {
+        "plans": summary,
+        "count": len(summary),
+        "user_wallet": user_wallet.strip(),
+        "active_only": active_only,
+    }
 
 
 def get_dca_plan(plan_id: str, user_wallet: Optional[str] = None) -> dict:
@@ -1795,11 +1827,21 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_dca_plans",
-            "description": "List DCA plans for the authenticated user only.",
+            "description": (
+                "List DCA plans for the authenticated user. ALWAYS call this tool when the user "
+                "asks to list/show their plans — never guess from memory."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "status": {"type": "string", "description": "Filter: active, paused, cancelled, completed"},
+                    "status": {
+                        "type": "string",
+                        "description": "Filter: active, paused, cancelled, completed",
+                    },
+                    "active_only": {
+                        "type": "boolean",
+                        "description": "If true, return only active plans (use when user asks for active plans)",
+                    },
                 },
             },
         },
@@ -1927,6 +1969,10 @@ SYSTEM_PROMPT = """You are a Solana DCA (Dollar-Cost Averaging) agent. You help 
 - withdraw_user_tokens sends unused deposits and DCA-acquired tokens back to the user's wallet (not amounts reserved for active plans).
 - Users must authenticate with a wallet signature before chat, deposits, or plan actions. Never access another user's plans or balances.
 - list_dca_plans only returns the authenticated user's plans.
+- When the user asks to list/show DCA plans, **always call list_dca_plans** and report exactly what it returns. Never invent plan counts or IDs.
+- Unless the user explicitly asks for **active** plans only, call list_dca_plans **without** active_only (show active, paused, completed, cancelled). Short test plans (e.g. 3 buys) finish quickly and become **completed** — do not report "no plans" when completed plans exist.
+- When the user gives a token **mint address**, pass that exact mint as output_token to create_dca_plan. Do not substitute a different token or symbol.
+- Multiple plans can share a symbol (e.g. two meme coins both named CPX) — always distinguish plans by **plan id** and **output_mint** from list_dca_plans.
 
 ## Capabilities
 - Create DCA plans: spend input_token (USDC/SOL) to buy output_token (JUP/BONK/etc.) on a schedule
@@ -2097,6 +2143,14 @@ def run_agent_with_actions(
     """Run one user turn; returns reply, updated history, and tool action trace."""
     actions: list[dict[str, Any]] = []
     prompt = user_input.strip()
+    lower = prompt.lower()
+    if re.search(r"\b(list|show|view|see)\b", lower) and re.search(r"\bplan", lower):
+        active_only = bool(re.search(r"\bactive\b", lower))
+        prompt += (
+            "\n[Instruction: call list_dca_plans for this user before answering. "
+            f"Use active_only={str(active_only).lower()}. "
+            "Do not guess plan counts or IDs.]"
+        )
     if user_wallet:
         prompt = f"[Connected user wallet: {user_wallet}]\n{prompt}"
     conversation_history.append({"role": "user", "content": prompt})
