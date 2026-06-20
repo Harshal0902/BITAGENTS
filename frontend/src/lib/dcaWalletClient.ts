@@ -94,6 +94,13 @@ export async function fetchUserBalances(authToken: string): Promise<UserDepositB
   }
 }
 
+export type DepositVerifyResponse = {
+  status: string;
+  message?: string;
+  deposits?: DepositRecord[];
+  balances?: UserDepositBalances;
+};
+
 export async function verifyDeposit(signature: string, authToken: string) {
   const res = await fetch("/api/agents/dca/wallet/deposit", {
     method: "POST",
@@ -101,17 +108,39 @@ export async function verifyDeposit(signature: string, authToken: string) {
       "Content-Type": "application/json",
       Authorization: `Bearer ${authToken}`,
     },
-    body: JSON.stringify({ signature }),
+    body: JSON.stringify({ signature: signature.trim() }),
   });
   const data = await res.json();
   if (!res.ok) {
     throw new Error(typeof data.error === "string" ? data.error : "Deposit verification failed");
   }
-  return data as {
-    status: string;
-    deposits?: DepositRecord[];
-    balances?: UserDepositBalances;
-  };
+  return data as DepositVerifyResponse;
+}
+
+function isRetryableVerifyError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes("not found") || lower.includes("wait for confirmation");
+}
+
+/** Verify a deposit signature with retries while the RPC indexes the transaction. */
+export async function verifyDepositWithRetry(
+  signature: string,
+  authToken: string,
+  maxAttempts = 6
+): Promise<DepositVerifyResponse> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      return await verifyDeposit(signature, authToken);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error("Deposit verification failed");
+      if (!isRetryableVerifyError(lastError.message) || attempt >= maxAttempts - 1) {
+        throw lastError;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 2000));
+    }
+  }
+  throw lastError ?? new Error("Deposit verification failed");
 }
 
 export async function withdrawTokens(token: string, amount: number, authToken: string) {

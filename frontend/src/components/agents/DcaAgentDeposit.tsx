@@ -18,11 +18,12 @@ import {
   fetchAgentWallet,
   fetchUserBalances,
   resolveDepositToken,
-  verifyDeposit,
+  verifyDepositWithRetry,
   withdrawTokens,
   type ResolvedToken,
   type TokenBalanceRow,
   type UserDepositBalances,
+  type DepositVerifyResponse,
 } from "@/lib/dcaWalletClient";
 
 const PRESET_TOKENS = ["SOL", "USDC", "JUP"] as const;
@@ -53,6 +54,9 @@ export function DcaAgentDeposit({
   const [withdrawToken, setWithdrawToken] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
   const [lastWithdrawTx, setLastWithdrawTx] = useState<string | null>(null);
+  const [manualSignature, setManualSignature] = useState("");
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [success, setSuccess] = useState<string | null>(null);
 
   const refreshBalances = useCallback(async () => {
     if (!publicKey || !authToken) {
@@ -102,6 +106,59 @@ export function DcaAgentDeposit({
     return () => window.clearTimeout(handle);
   }, [token, customMint]);
 
+  function applyVerifiedBalances(result: DepositVerifyResponse) {
+    if (result.balances?.balances) {
+      setBalances(result.balances.balances);
+      onBalancesChange?.(result.balances);
+    }
+  }
+
+  async function runDepositVerification(
+    signature: string,
+    options?: { clearManualInput?: boolean; useVerifyBusy?: boolean }
+  ) {
+    if (!authToken) {
+      setError("Connect wallet and sign in before verifying a deposit.");
+      return;
+    }
+
+    const trimmed = signature.trim();
+    if (trimmed.length < 80) {
+      setError("Enter a valid Solana transaction signature.");
+      return;
+    }
+
+    if (options?.useVerifyBusy !== false) {
+      setVerifyBusy(true);
+    }
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const verified = await verifyDepositWithRetry(trimmed, authToken);
+      applyVerifiedBalances(verified);
+      if (!verified.balances?.balances) {
+        await refreshBalances();
+      }
+      setLastTx(trimmed);
+      setSuccess(
+        verified.message ??
+          (verified.status === "already_recorded"
+            ? "Deposit already credited to your balance."
+            : "Deposit verified and credited to your balance.")
+      );
+      if (options?.clearManualInput) {
+        setManualSignature("");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Deposit verification failed");
+    } finally {
+      if (options?.useVerifyBusy !== false) {
+        setVerifyBusy(false);
+      }
+    }
+  }
+
   async function handleDeposit() {
     if (!publicKey || !agentWallet || !amount || !authToken) return;
     const parsed = Number(amount);
@@ -112,6 +169,7 @@ export function DcaAgentDeposit({
 
     setBusy(true);
     setError(null);
+    setSuccess(null);
     setLastTx(null);
 
     try {
@@ -164,13 +222,7 @@ export function DcaAgentDeposit({
       await connection.confirmTransaction({ signature, ...latest }, "confirmed");
 
       setLastTx(signature);
-      const verified = await verifyDeposit(signature, authToken);
-      if (verified.balances?.balances) {
-        setBalances(verified.balances.balances);
-        onBalancesChange?.(verified.balances);
-      } else {
-        await refreshBalances();
-      }
+      await runDepositVerification(signature, { useVerifyBusy: false });
       setAmount("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deposit failed");
@@ -216,8 +268,9 @@ export function DcaAgentDeposit({
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
             Deposit any SPL token to the AI Agent wallet on{" "}
-            <span className="text-foreground">{cluster ?? "Solana"}</span>. Deposits are verified
-            on-chain and credited to your balance before the agent can run DCA for you.
+            <span className="text-foreground">{cluster ?? "Solana"}</span>. After you send
+            funds, your deposit is verified automatically and credited to your balance. You can
+            also paste a transaction signature below if verification was missed.
           </p>
 
           <div className="font-mono text-[11px] leading-relaxed text-muted-foreground">
@@ -246,7 +299,7 @@ export function DcaAgentDeposit({
               <select
                 value={token}
                 onChange={(e) => setToken(e.target.value as PresetToken | "custom")}
-                disabled={busy || !connected}
+                disabled={busy || verifyBusy || !connected}
                 className="border border-grid bg-background px-3 py-2.5 font-mono text-sm outline-none focus:border-signal disabled:opacity-50"
               >
                 {PRESET_TOKENS.map((t) => (
@@ -262,7 +315,7 @@ export function DcaAgentDeposit({
                 step="any"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
-                disabled={busy || !connected}
+                disabled={busy || verifyBusy || !connected}
                 placeholder="Amount"
                 className="border border-grid bg-background px-3 py-2.5 font-mono text-sm outline-none focus:border-signal disabled:opacity-50"
               />
@@ -282,7 +335,7 @@ export function DcaAgentDeposit({
                   type="text"
                   value={customMint}
                   onChange={(e) => setCustomMint(e.target.value)}
-                  disabled={busy || !connected}
+                  disabled={busy || verifyBusy || !connected}
                   placeholder="Token mint address (any SPL token)"
                   className="w-full border border-grid bg-background px-3 py-2.5 font-mono text-sm outline-none focus:border-signal disabled:opacity-50"
                 />
@@ -294,6 +347,12 @@ export function DcaAgentDeposit({
               </div>
             )}
           </div>
+
+          {success && (
+            <div className="border border-signal/40 bg-signal/10 px-3 py-2 font-mono text-xs text-signal">
+              {success}
+            </div>
+          )}
 
           {error && (
             <div className="border border-warn/40 bg-warn/10 px-3 py-2 font-mono text-xs text-warn">
@@ -311,6 +370,35 @@ export function DcaAgentDeposit({
               Last deposit tx · {lastTx.slice(0, 8)}…{lastTx.slice(-8)} ↗
             </a>
           )}
+
+          <div className="border-t border-grid pt-4">
+            <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-signal">
+              Verify deposit by signature
+            </div>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Already sent a deposit? Paste your transaction hash to credit your balance. Each
+              signature can only be used once and must be a transfer you signed to the agent
+              wallet.
+            </p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto]">
+              <input
+                type="text"
+                value={manualSignature}
+                onChange={(e) => setManualSignature(e.target.value)}
+                disabled={verifyBusy || !connected || !authToken}
+                placeholder="Transaction signature (base58)"
+                className="border border-grid bg-background px-3 py-2.5 font-mono text-sm outline-none focus:border-signal disabled:opacity-50"
+              />
+              <button
+                type="button"
+                onClick={() => void runDepositVerification(manualSignature, { clearManualInput: true })}
+                disabled={verifyBusy || !connected || !authToken || !manualSignature.trim()}
+                className="border border-signal px-4 py-2.5 font-mono text-xs font-semibold uppercase tracking-[0.14em] text-signal transition hover:bg-signal/10 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {verifyBusy ? "Verifying…" : "Verify tx"}
+              </button>
+            </div>
+          </div>
 
           <div className="border-t border-grid pt-4">
             <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-signal">

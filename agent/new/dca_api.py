@@ -276,8 +276,12 @@ def wallet_deposit_verify(
     auth_wallet: str = Depends(require_wallet_session),
 ) -> dict[str, Any]:
     result = verify_and_record_deposit(body.signature.strip(), auth_wallet)
-    if "error" in result and result.get("status") != "already_recorded":
-        raise HTTPException(status_code=400, detail=result["error"])
+    if "error" in result:
+        if result.get("status") == "already_recorded":
+            return result
+        detail = result["error"]
+        status = 403 if result.get("status") == "rejected" else 400
+        raise HTTPException(status_code=status, detail=detail)
     return result
 
 

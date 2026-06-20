@@ -7,6 +7,7 @@ so DCA plans cannot spend more than each user has deposited.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 import uuid
@@ -66,6 +67,23 @@ def _account_keys(tx: dict) -> list[str]:
     return [k for k in keys if k]
 
 
+def _valid_signature(signature: str) -> bool:
+    signature = signature.strip()
+    if len(signature) < 80 or len(signature) > 128:
+        return False
+    return bool(re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]+", signature))
+
+
+def _transaction_signers(tx: dict) -> set[str]:
+    signers: set[str] = set()
+    message = tx.get("transaction", {}).get("message", {})
+    raw_keys = message.get("accountKeys") or message.get("staticAccountKeys") or []
+    for entry in raw_keys:
+        if isinstance(entry, dict) and entry.get("signer") and entry.get("pubkey"):
+            signers.add(str(entry["pubkey"]))
+    return signers
+
+
 def _user_in_transaction(tx: dict, user_wallet: str) -> bool:
     keys = _account_keys(tx)
     if user_wallet in keys:
@@ -76,6 +94,90 @@ def _user_in_transaction(tx: dict, user_wallet: str) -> bool:
             if bal.get("owner") == user_wallet:
                 return True
     return False
+
+
+def _parse_verified_user_deposits(
+    tx: dict,
+    user_wallet: str,
+    agent_wallet: str,
+) -> list[dict[str, Any]]:
+    """
+    Deposits to the agent wallet that were sent by user_wallet in this transaction.
+    Requires the user to be a signer and show an outbound balance decrease matching
+    the agent inbound increase (prevents claiming someone else's transfer).
+    """
+    meta = tx.get("meta") or {}
+    if meta.get("err"):
+        return []
+
+    if user_wallet not in _transaction_signers(tx):
+        return []
+
+    keys = _account_keys(tx)
+    found: list[dict[str, Any]] = []
+
+    if user_wallet in keys and agent_wallet in keys:
+        user_idx = keys.index(user_wallet)
+        agent_idx = keys.index(agent_wallet)
+        pre_balances = meta.get("preBalances") or []
+        post_balances = meta.get("postBalances") or []
+        if (
+            user_idx < len(pre_balances)
+            and user_idx < len(post_balances)
+            and agent_idx < len(pre_balances)
+            and agent_idx < len(post_balances)
+        ):
+            user_delta = post_balances[user_idx] - pre_balances[user_idx]
+            agent_delta = post_balances[agent_idx] - pre_balances[agent_idx]
+            if user_delta < 0 and agent_delta > 0:
+                found.append(
+                    {
+                        "token": "SOL",
+                        "mint": SOL_ADDRESS_FULL,
+                        "amount": round(agent_delta / 1e9, 9),
+                    }
+                )
+
+    user_pre: dict[str, float] = {}
+    user_post: dict[str, float] = {}
+    agent_pre: dict[str, float] = {}
+    agent_post: dict[str, float] = {}
+
+    for bal in meta.get("preTokenBalances") or []:
+        owner = bal.get("owner")
+        mint = bal.get("mint")
+        if not owner or not mint:
+            continue
+        amt = float((bal.get("uiTokenAmount") or {}).get("uiAmount") or 0)
+        if owner == user_wallet:
+            user_pre[mint] = amt
+        elif owner == agent_wallet:
+            agent_pre[mint] = amt
+
+    for bal in meta.get("postTokenBalances") or []:
+        owner = bal.get("owner")
+        mint = bal.get("mint")
+        if not owner or not mint:
+            continue
+        amt = float((bal.get("uiTokenAmount") or {}).get("uiAmount") or 0)
+        if owner == user_wallet:
+            user_post[mint] = amt
+        elif owner == agent_wallet:
+            agent_post[mint] = amt
+
+    for mint in set(agent_pre) | set(agent_post) | set(user_pre) | set(user_post):
+        agent_delta = agent_post.get(mint, 0.0) - agent_pre.get(mint, 0.0)
+        user_delta = user_post.get(mint, 0.0) - user_pre.get(mint, 0.0)
+        if agent_delta > 0 and user_delta < 0:
+            found.append(
+                {
+                    "token": _mint_to_symbol(mint),
+                    "mint": mint,
+                    "amount": round(min(agent_delta, -user_delta), 9),
+                }
+            )
+
+    return found
 
 
 def _parse_inbound_transfers(tx: dict, agent_wallet: str) -> list[dict[str, Any]]:
@@ -151,16 +253,27 @@ def verify_and_record_deposit(signature: str, user_wallet: str) -> dict[str, Any
         return {"error": "AI Agent wallet is not configured on the server."}
     if not signature:
         return {"error": "Transaction signature is required."}
+    if not _valid_signature(signature):
+        return {"error": "Invalid transaction signature format."}
     if not user_wallet:
         return {"error": "User wallet address is required."}
 
     with _ledger_lock:
         if deposit_exists(signature):
             existing = find_deposit_by_signature(signature)
+            if existing and existing.get("user_wallet") != user_wallet:
+                return {
+                    "error": (
+                        "This deposit transaction was already credited to another wallet. "
+                        "You cannot claim someone else's deposit."
+                    ),
+                    "status": "rejected",
+                }
             return {
                 "status": "already_recorded",
                 "deposit": existing,
                 "balances": get_user_balances(user_wallet),
+                "message": "This deposit was already verified for your wallet.",
             }
 
         tx = None
@@ -184,11 +297,21 @@ def verify_and_record_deposit(signature: str, user_wallet: str) -> dict[str, Any
             return {"error": "Transaction not found. Wait for confirmation and try again."}
 
         if not _user_in_transaction(tx, user_wallet):
-            return {"error": "Your wallet is not involved in this transaction."}
+            return {
+                "error": (
+                    "Your connected wallet is not involved in this transaction. "
+                    "You can only verify deposits you signed and sent."
+                ),
+            }
 
-        inbound = _parse_inbound_transfers(tx, agent_wallet)
+        inbound = _parse_verified_user_deposits(tx, user_wallet, agent_wallet)
         if not inbound:
-            return {"error": "No deposit to the AI Agent wallet found in this transaction."}
+            return {
+                "error": (
+                    "No verifiable deposit from your wallet to the AI Agent wallet was found. "
+                    "Ensure you signed the transfer and it sent tokens to the agent wallet."
+                ),
+            }
 
         now = datetime.now(timezone.utc).isoformat()
         records = []
@@ -228,6 +351,7 @@ def verify_and_record_deposit(signature: str, user_wallet: str) -> dict[str, Any
             "status": "confirmed",
             "deposits": records,
             "balances": get_user_balances(user_wallet),
+            "message": "Deposit verified and credited to your balance.",
         }
 
 
