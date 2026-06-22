@@ -1,5 +1,5 @@
 """
-HTTP API for the Solana DCA agent — used by the BIT Agents frontend.
+HTTP API for the Solana DCA agent - used by the BIT Agents frontend.
 
 Run locally:
   cd agent/new
@@ -290,7 +290,10 @@ def wallet_withdraw(
     body: WithdrawRequest,
     auth_wallet: str = Depends(require_wallet_session),
 ) -> dict[str, Any]:
-    result = withdraw_user_tokens(auth_wallet, body.token.strip(), float(body.amount))
+    try:
+        result = withdraw_user_tokens(auth_wallet, body.token.strip(), float(body.amount))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Withdrawal failed: {exc}") from exc
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
@@ -314,6 +317,7 @@ def chat(
             user_message,
             history,
             user_wallet=auth_wallet,
+            session_id=session_id,
         )
     except requests.exceptions.ConnectionError as exc:
         raise HTTPException(

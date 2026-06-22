@@ -715,7 +715,7 @@ INVESTIGATION PROCESS:
 4. Run detect_wallet_archetype to synthesize
 5. Use specialized tools (token timing, connected wallets, ROI explanation) based on the question
 
-REPORT FORMAT — always structure like this:
+REPORT FORMAT - always structure like this:
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🔍 WALLET INVESTIGATION: [address short]

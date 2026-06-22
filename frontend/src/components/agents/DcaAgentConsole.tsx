@@ -241,7 +241,7 @@ export function DcaAgentConsole() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
         <Link href="/agents" className="transition hover:text-signal">
-          ← Agents
+          ← Marketplace
         </Link>
         <span>·</span>
         <span className={`inline-flex items-center gap-2 ${agentOnline ? "text-signal" : "text-warn"}`}>
@@ -276,7 +276,8 @@ export function DcaAgentConsole() {
 
       {publicKey && authBusy && (
         <div className="border border-grid bg-surface/40 px-4 py-3 font-mono text-xs text-muted-foreground">
-          Sign the wallet message to authenticate…
+          Approve the wallet sign-in message to authenticate. The message includes acceptance of our Terms,
+          Privacy Policy, and Risk Disclaimer.
         </div>
       )}
 
@@ -405,14 +406,14 @@ export function DcaAgentConsole() {
           title="// Agent actions · live"
           action={
             <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-              {agentOnline ? "local api" : "waiting"}
+              {agentOnline ? "Live api" : "waiting"}
             </span>
           }
         >
           <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1 font-mono text-xs">
             {actions.length === 0 && (
               <p className="text-muted-foreground">
-                Tool calls from the Python agent appear here — wallet checks, quotes, plan updates, swaps, and tx
+                Tool calls from the Python agent appear here - wallet checks, quotes, plan updates, swaps, and tx
                 signatures.
               </p>
             )}

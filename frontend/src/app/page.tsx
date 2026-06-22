@@ -1,10 +1,10 @@
 import React from 'react';
 import { Hero } from '@/components/home/Hero';
-import { Ticker } from '@/components/home/Ticker';
+// import { Ticker } from '@/components/home/Ticker';
 import { Product } from '@/components/home/Product';
 import { HowItWorks } from '@/components/home/HowItWorks';
 import { TokenUtility } from '@/components/home/TokenUtility';
-import { Roadmap } from '@/components/home/Roadmap';
+// import { Roadmap } from '@/components/home/Roadmap';
 import { Platform } from '@/components/home/Platform';
 import { Footer } from '@/components/home/Footer';
 
@@ -13,11 +13,11 @@ export default function page() {
     <div>
       <main>
         <Hero />
-        <Ticker />
+        {/* <Ticker /> */}
         <Product />
         <HowItWorks />
         <TokenUtility />
-        <Roadmap />
+        {/* <Roadmap /> */}
         <Platform />
       </main>
       <Footer />

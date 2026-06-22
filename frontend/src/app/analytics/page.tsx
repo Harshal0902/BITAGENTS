@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { AppShell, Panel, Stat } from "@/components/AppShell";
 
 export const metadata: Metadata = {
-    title: "Marketplace Analytics — BIT Agents",
+    title: "Marketplace Analytics - BIT Agents",
     description:
         "Live agent activity, task volume, deployments, and marketplace settlement across the BIT Agents protocol.",
 };
@@ -18,8 +18,8 @@ export default function AnalyticsPage() {
             subtitle="Real-time view of the AI agent marketplace. Tasks, deployments, and settlement."
         >
             <div className="grid gap-4 md:grid-cols-4">
-                <Stat label="Live Agents" value="48" accent="signal" />
-                <Stat label="Tasks · 24h" value="12,640" accent="warn" />
+                <Stat label="Live Agents" value="1" accent="signal" />
+                <Stat label="Tasks · 24h" value="102" accent="warn" />
                 <Stat label="Marketplace Volume" value="$42,800" />
                 <Stat label="Task Success Rate" value="98.4%" accent="signal" />
             </div>

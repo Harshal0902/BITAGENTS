@@ -1,4 +1,4 @@
--- BIT Agents DCA — Neon PostgreSQL schema
+-- BIT Agents DCA - Neon PostgreSQL schema
 -- Applied automatically on startup via db.init_db()
 
 CREATE TABLE IF NOT EXISTS dca_plans (

@@ -559,7 +559,7 @@ def check_wallet_eligibility(wallet_address: str) -> dict:
                     "amount":        airdrop.get("amount", "unknown"),
                     "checker_url":   airdrop.get("checker_url"),
                     "notes":         airdrop.get("notes", ""),
-                    "status":        "ended — claim period over"
+                    "status":        "ended - claim period over"
                 })
         elif status in ("potential", "confirmed", "ongoing"):
             if match_ratio >= 0.5:
@@ -619,7 +619,7 @@ def check_wallet_eligibility(wallet_address: str) -> dict:
             "🏆 Expert Airdrop Farmer" if score >= 80 else
             "🟢 Active Farmer"        if score >= 60 else
             "🟡 Moderate Activity"    if score >= 40 else
-            "🔴 Low Activity — Likely Missing Airdrops"
+            "🔴 Low Activity - Likely Missing Airdrops"
         ),
         "summary": (
             f"Found {len(likely_eligible)} likely + {len(possibly_eligible)} possible airdrops. "
@@ -632,7 +632,7 @@ def get_potential_airdrops() -> dict:
     """
     Return all potential / unconfirmed airdrops from the database
     with full criteria. These are protocols without a token that
-    reward on-chain activity — what to farm RIGHT NOW.
+    reward on-chain activity - what to farm RIGHT NOW.
     """
     potentials = {}
     for key, info in AIRDROP_DATABASE.items():
@@ -649,7 +649,7 @@ def get_potential_airdrops() -> dict:
 def get_missed_airdrops(wallet_address: str) -> dict:
     """
     Quick scan for historical (ended) airdrops the wallet may have
-    been eligible for but didn't claim. Educational — helps understand
+    been eligible for but didn't claim. Educational - helps understand
     what activity patterns to replicate for future drops.
     """
     result = check_wallet_eligibility(wallet_address)
@@ -691,7 +691,7 @@ def get_missed_airdrops(wallet_address: str) -> dict:
 
 def get_farming_guide() -> dict:
     """
-    Return a prioritised list of active farming opportunities —
+    Return a prioritised list of active farming opportunities -
     protocols worth interacting with NOW to maximise future airdrop chances.
     Includes effort level, reasoning, and direct links.
     """
@@ -699,14 +699,14 @@ def get_farming_guide() -> dict:
         "farming_opportunities": FARMING_OPPORTUNITIES,
         "count":                 len(FARMING_OPPORTUNITIES),
         "general_tips": [
-            "💡 Interact with protocols across MULTIPLE months — one-time interactions are often excluded",
-            "💡 Use genuine DeFi activity: swap, provide liquidity, borrow/lend — don't just bridge and hold",
-            "💡 Don't create multiple wallets and bridge between them — Sybil detection is sophisticated",
-            "💡 Keep your wallet funded and active — dormant wallets after farming often disqualify",
+            "💡 Interact with protocols across MULTIPLE months - one-time interactions are often excluded",
+            "💡 Use genuine DeFi activity: swap, provide liquidity, borrow/lend - don't just bridge and hold",
+            "💡 Don't create multiple wallets and bridge between them - Sybil detection is sophisticated",
+            "💡 Keep your wallet funded and active - dormant wallets after farming often disqualify",
             "💡 Use protocols on both mainnet AND their L2 deployments for maximum coverage",
-            "💡 Participate in governance (vote on proposals) — many airdrops reward governance activity",
-            "💡 Join protocol Discord/Telegram — insider info on snapshot dates appears there first",
-            "💡 Testnet activity often counts — participate in testnets before mainnet launches",
+            "💡 Participate in governance (vote on proposals) - many airdrops reward governance activity",
+            "💡 Join protocol Discord/Telegram - insider info on snapshot dates appears there first",
+            "💡 Testnet activity often counts - participate in testnets before mainnet launches",
         ],
         "priority_order": "Effort: Low → do immediately. Medium → schedule weekly. High → research first."
     }
@@ -841,7 +841,7 @@ def check_specific_airdrop(airdrop_key: str, wallet_address: str = None) -> dict
 def get_active_claim_windows() -> dict:
     """
     Return all airdrops that are currently in an active claim window
-    (confirmed and not yet past claim deadline). URGENT — claim before deadline!
+    (confirmed and not yet past claim deadline). URGENT - claim before deadline!
     """
     now = datetime.now(timezone.utc).date()
     claimable = []
@@ -870,7 +870,7 @@ def get_active_claim_windows() -> dict:
             "checker_url":    info.get("checker_url"),
             "amount":         info.get("amount", "varies"),
             "urgency": (
-                "🔴 URGENT — expires soon!" if 0 < days_left <= 14 else
+                "🔴 URGENT - expires soon!" if 0 < days_left <= 14 else
                 "🟡 Claim soon"             if 0 < days_left <= 60 else
                 "🟢 Plenty of time"
             ) if days_left > 0 else "❌ EXPIRED"
@@ -912,7 +912,7 @@ def get_wallet_farming_score(wallet_address: str) -> dict:
         recommendations.append({
             "action":  "Age your wallet",
             "detail":  "Wallet is less than 6 months old. Use it consistently for 6-12 months.",
-            "impact":  "HIGH — most airdrops exclude brand-new wallets"
+            "impact":  "HIGH - most airdrops exclude brand-new wallets"
         })
     if txs < 50:
         recommendations.append({
@@ -948,7 +948,7 @@ def get_wallet_farming_score(wallet_address: str) -> dict:
         recommendations.append({
             "action":  "Use zkSync Era",
             "detail":  "Bridge to zkSync Era, swap on SyncSwap, use protocol 3-4x/month.",
-            "impact":  "HIGH — major potential airdrop"
+            "impact":  "HIGH - major potential airdrop"
         })
     if "eigenlayer" not in interacted:
         recommendations.append({
@@ -960,7 +960,7 @@ def get_wallet_farming_score(wallet_address: str) -> dict:
         recommendations.append({
             "action":  "Register an ENS name",
             "detail":  "Register yourname.eth. ENS ownership was a core qualifier for the ENS airdrop.",
-            "impact":  "MEDIUM — signals serious ETH user"
+            "impact":  "MEDIUM - signals serious ETH user"
         })
 
     return {
@@ -1015,7 +1015,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_potential_airdrops",
-            "description": "Return all potential/unconfirmed airdrops from protocols that haven't launched a token yet — what to farm RIGHT NOW for future eligibility.",
+            "description": "Return all potential/unconfirmed airdrops from protocols that haven't launched a token yet - what to farm RIGHT NOW for future eligibility.",
             "parameters": {"type": "object", "properties": {}}
         }
     },
@@ -1037,7 +1037,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_farming_guide",
-            "description": "Return a prioritised guide of active farming opportunities — protocols to interact with NOW for future airdrops. Includes effort level and reasoning.",
+            "description": "Return a prioritised guide of active farming opportunities - protocols to interact with NOW for future airdrops. Includes effort level and reasoning.",
             "parameters": {"type": "object", "properties": {}}
         }
     },
@@ -1068,7 +1068,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_active_claim_windows",
-            "description": "Return all airdrops currently in an active claim window (can still be claimed). Sorted by deadline urgency — check FIRST if someone asks about claiming.",
+            "description": "Return all airdrops currently in an active claim window (can still be claimed). Sorted by deadline urgency - check FIRST if someone asks about claiming.",
             "parameters": {"type": "object", "properties": {}}
         }
     },

@@ -241,13 +241,13 @@ def analyze_allocation(positions: list) -> dict:
         risk_flags = []
         top = allocations[0] if allocations else {}
         if top.get("allocation_pct", 0) > 50:
-            risk_flags.append(f"🔴 {top['token']} is {top['allocation_pct']}% of portfolio — extreme concentration")
+            risk_flags.append(f"🔴 {top['token']} is {top['allocation_pct']}% of portfolio - extreme concentration")
         elif top.get("allocation_pct", 0) > 30:
-            risk_flags.append(f"🟡 {top['token']} is {top['allocation_pct']}% of portfolio — high concentration")
+            risk_flags.append(f"🟡 {top['token']} is {top['allocation_pct']}% of portfolio - high concentration")
 
         top3_pct = sum(a["allocation_pct"] for a in allocations[:3])
         if top3_pct > 80:
-            risk_flags.append(f"🟡 Top 3 tokens = {round(top3_pct, 1)}% of portfolio — low diversification")
+            risk_flags.append(f"🟡 Top 3 tokens = {round(top3_pct, 1)}% of portfolio - low diversification")
 
         return {
             "total_portfolio_value_usd": round(total, 2),
@@ -302,9 +302,9 @@ def analyze_sector_exposure(positions: list) -> dict:
             if s["sector"] == "Stablecoin":
                 continue
             if s["exposure_pct"] > 50:
-                risk_flags.append(f"🔴 {s['sector']} exposure = {s['exposure_pct']}% — very concentrated in one narrative")
+                risk_flags.append(f"🔴 {s['sector']} exposure = {s['exposure_pct']}% - very concentrated in one narrative")
             elif s["exposure_pct"] > 30:
-                risk_flags.append(f"🟡 {s['sector']} exposure = {s['exposure_pct']}% — high single-narrative concentration")
+                risk_flags.append(f"🟡 {s['sector']} exposure = {s['exposure_pct']}% - high single-narrative concentration")
 
         return {
             "total_portfolio_value_usd": round(total, 2),
@@ -362,9 +362,9 @@ def calculate_portfolio_risk_metrics(positions: list) -> dict:
 
         risk_flags = []
         if stablecoin_pct < 5:
-            risk_flags.append("🟡 Less than 5% in stablecoins — no cash buffer for dips")
+            risk_flags.append("🟡 Less than 5% in stablecoins - no cash buffer for dips")
         elif stablecoin_pct > 50:
-            risk_flags.append("🟡 Over 50% in stablecoins — significant idle capital")
+            risk_flags.append("🟡 Over 50% in stablecoins - significant idle capital")
 
         if weighted_volatility > 40:
             risk_flags.append(f"🔴 Portfolio weighted 30d volatility is high (~{round(weighted_volatility, 1)}%)")
@@ -466,16 +466,16 @@ def generate_portfolio_report(analysis_results: dict) -> dict:
                 yellow_flags.append(f)
 
         if red_flags:
-            score = "🔴 RED — HIGH RISK PORTFOLIO"
+            score = "🔴 RED - HIGH RISK PORTFOLIO"
             verdict = "Significant concentration or volatility risks. Consider rebalancing."
         elif len(yellow_flags) >= 3:
-            score = "🟡 YELLOW — MODERATE RISK"
+            score = "🟡 YELLOW - MODERATE RISK"
             verdict = "Several caution signals. Portfolio may benefit from diversification."
         elif yellow_flags:
-            score = "🟡 YELLOW — MINOR CONCERNS"
+            score = "🟡 YELLOW - MINOR CONCERNS"
             verdict = "A few areas to watch. Generally manageable risk profile."
         else:
-            score = "🟢 GREEN — HEALTHY PORTFOLIO"
+            score = "🟢 GREEN - HEALTHY PORTFOLIO"
             verdict = "Well-diversified with no major concentration or volatility red flags."
 
         pnl = analysis_results.get("pnl_summary", {})
@@ -724,14 +724,14 @@ e.g. "I hold 2 ETH ($3000 each, bought at $2000), 500 UNI ($6 each)"
 → Parse directly into positions, call get_prices_and_market_data to confirm current prices, then analyze
 
 ## Full portfolio analysis flow (run IN ORDER):
-1. get_prices_and_market_data — get current prices
-2. calculate_portfolio_pnl — compute gains/losses
-3. analyze_allocation — % per token, concentration flags
-4. analyze_sector_exposure — sector/narrative breakdown
-5. calculate_portfolio_risk_metrics — volatility, stablecoin buffer
-6. generate_portfolio_report — final 🟢/🟡/🔴 score
+1. get_prices_and_market_data - get current prices
+2. calculate_portfolio_pnl - compute gains/losses
+3. analyze_allocation - % per token, concentration flags
+4. analyze_sector_exposure - sector/narrative breakdown
+5. calculate_portfolio_risk_metrics - volatility, stablecoin buffer
+6. generate_portfolio_report - final 🟢/🟡/🔴 score
 
-## Focused queries — only use relevant tools:
+## Focused queries - only use relevant tools:
 - "Am I overexposed to AI tokens?" → get_prices first, then analyze_sector_exposure
 - "What's my PnL?" → get_prices, then calculate_portfolio_pnl
 - "How risky is my portfolio?" → get_prices, calculate_portfolio_risk_metrics

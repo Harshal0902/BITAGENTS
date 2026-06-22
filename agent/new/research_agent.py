@@ -466,7 +466,7 @@ BANNER = """
 
 EXAMPLES = """
 Example prompts:
-  • Research Ethereum — give me a full report
+  • Research Ethereum - give me a full report
   • Compare Solana and Avalanche
   • What are the top DeFi protocols by TVL?
   • Research Uniswap as a DeFi project
@@ -476,9 +476,9 @@ Example prompts:
   • Generate a report on layer-2 scaling solutions
 
 Commands:
-  save     — Save the last report to a .md file
-  clear    — Reset conversation
-  quit     — Exit
+  save     - Save the last report to a .md file
+  clear    - Reset conversation
+  quit     - Exit
 """
 
 def main():

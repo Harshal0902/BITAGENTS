@@ -220,7 +220,7 @@ def get_whale_token_activity(address: str, days: int = 7) -> dict:
 def get_conviction_trades(address: str, days: int = 30) -> dict:
     """
     Identify conviction trades: tokens the whale has bought multiple times
-    without selling — a signal of strong conviction.
+    without selling - a signal of strong conviction.
     """
     label = ALL_WHALES.get(address, address[:10] + "...")
     cutoff = _days_ago(days)
@@ -259,7 +259,7 @@ def get_conviction_trades(address: str, days: int = 30) -> dict:
         "period_days": days,
         "conviction_positions": conviction[:10],
         "total_found": len(conviction),
-        "note": "Tokens with 2+ buys and fewer sells than buys — whale is accumulating."
+        "note": "Tokens with 2+ buys and fewer sells than buys - whale is accumulating."
     }
 
 
@@ -462,7 +462,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_conviction_trades",
-            "description": "Find tokens a whale has bought multiple times without selling — signals of high conviction / accumulation",
+            "description": "Find tokens a whale has bought multiple times without selling - signals of high conviction / accumulation",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -477,7 +477,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "scan_category_activity",
-            "description": "Scan ALL wallets in a category and find consensus buys/sells — which tokens are smart money collectively buying or selling",
+            "description": "Scan ALL wallets in a category and find consensus buys/sells - which tokens are smart money collectively buying or selling",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -29,7 +29,7 @@ export function getServerSolanaRpcUrl(): string {
   return publicFallbackRpcUrl(readCluster());
 }
 
-/** Browser Connection endpoint — same-origin proxy hides the private RPC key. */
+/** Browser Connection endpoint - same-origin proxy hides the private RPC key. */
 export function getClientSolanaRpcEndpoint(origin?: string): string {
   const path = "/api/solana/rpc";
   if (origin) {

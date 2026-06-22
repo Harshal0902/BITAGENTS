@@ -11,6 +11,7 @@ import {
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import { useCallback, useEffect, useState } from "react";
 import { Panel } from "@/components/AppShell";
+import { LegalSignInNotice } from "@/components/legal/LegalSignInNotice";
 import { explorerUrlForSignature } from "@/lib/dcaActionResults";
 import {
   DEPOSIT_TOKEN_DECIMALS,
@@ -209,7 +210,7 @@ export function DcaAgentDeposit({
       setManualSignature(trimmed);
       const message = err instanceof Error ? err.message : "Deposit verification failed";
       setError(
-        `${message} Your transfer may still be confirming — we will keep retrying automatically.`
+        `${message} Your transfer may still be confirming - we will keep retrying automatically.`
       );
       return false;
     } finally {
@@ -297,7 +298,7 @@ export function DcaAgentDeposit({
           "confirmed"
         );
       } catch {
-        // Tx may still land — verification below will retry until indexed.
+        // Tx may still land - verification below will retry until indexed.
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deposit failed");
@@ -333,6 +334,11 @@ export function DcaAgentDeposit({
       setError(`Maximum withdrawable ${withdrawToken}: ${withdrawableAmount}`);
       return;
     }
+
+    const confirmed = window.confirm(
+      `Please confirm before proceeding:\n\nWithdraw ${parsed} ${withdrawToken} to your connected wallet?`
+    );
+    if (!confirmed) return;
 
     setWithdrawBusy(true);
     setError(null);
@@ -373,14 +379,16 @@ export function DcaAgentDeposit({
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <WalletMultiButton className="wallet-adapter-button-trigger" />
-            {connected && publicKey && (
-              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                {publicKey.toBase58().slice(0, 4)}…{publicKey.toBase58().slice(-4)}
-              </span>
-            )}
-          </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <WalletMultiButton className="wallet-adapter-button-trigger" />
+          {connected && publicKey && (
+            <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+              {publicKey.toBase58().slice(0, 4)}…{publicKey.toBase58().slice(-4)}
+            </span>
+          )}
+        </div>
+
+        <LegalSignInNotice />
 
           <div className="grid gap-3">
             <div className="grid gap-3 sm:grid-cols-[140px_1fr_auto]">
@@ -546,7 +554,7 @@ export function DcaAgentDeposit({
                 type="button"
                 onClick={() => setWithdrawAmount(String(withdrawableAmount))}
                 disabled={withdrawBusy || !connected}
-                className="mt-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-signal"
+                className="mt-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:text-signal mr-2"
               >
                 Use max · {withdrawableAmount} {withdrawToken}
               </button>

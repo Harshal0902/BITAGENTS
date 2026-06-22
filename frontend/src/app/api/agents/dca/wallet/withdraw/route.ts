@@ -25,14 +25,30 @@ export async function POST(request: Request) {
 
   try {
     const res = await proxyDcaWithdraw({ token, amount }, authToken);
-    const data = await res.json();
+    let data: { detail?: string; error?: string };
+    try {
+      data = await res.json();
+    } catch {
+      return NextResponse.json(
+        { error: `Withdrawal failed (HTTP ${res.status})` },
+        { status: res.status >= 400 ? res.status : 502 }
+      );
+    }
     if (!res.ok) {
       const detail =
         typeof data.detail === "string" ? data.detail : data.error ?? "Withdrawal failed";
       return NextResponse.json({ error: detail }, { status: res.status });
     }
     return NextResponse.json(data);
-  } catch {
-    return NextResponse.json({ error: "DCA agent API offline" }, { status: 503 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Withdrawal request failed";
+    const offline =
+      message.includes("fetch failed") ||
+      message.includes("ECONNREFUSED") ||
+      message.includes("network");
+    return NextResponse.json(
+      { error: offline ? "DCA agent API offline" : message },
+      { status: 503 }
+    );
   }
 }

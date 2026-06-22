@@ -40,9 +40,9 @@ export function AppShell({ title, subtitle, children }: { title: string; subtitl
             <h1 className="font-display text-3xl font-bold leading-tight md:text-4xl">{title}</h1>
             {subtitle && <p className="mt-2 text-sm text-muted-foreground">{subtitle}</p>}
           </div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+          {/* <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
             block 284,193,402 · slot 18.4k
-          </div>
+          </div> */}
         </div>
         {children}
       </div>

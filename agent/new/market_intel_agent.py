@@ -251,7 +251,7 @@ def get_volume_spikes(min_volume_usd: float = 50_000_000, top_n: int = 20) -> di
 
     return {
         "volume_spikes": spikes[:top_n],
-        "note": "vol_mcap_ratio > 0.5 means daily volume exceeds 50% of market cap — extreme speculative activity.",
+        "note": "vol_mcap_ratio > 0.5 means daily volume exceeds 50% of market cap - extreme speculative activity.",
         "as_of": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
 
@@ -517,7 +517,7 @@ def get_github_ecosystem_activity(ecosystem: str) -> dict:
 
 def get_new_listings_momentum() -> dict:
     """
-    Find recently listed coins with high momentum — new narratives emerging.
+    Find recently listed coins with high momentum - new narratives emerging.
     Coins less than 30 days old with significant volume = new narrative signal.
     """
     params = {
@@ -608,7 +608,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_volume_spikes",
-            "description": "Detect coins with unusual volume spikes relative to their market cap — signals speculative interest or narrative activation",
+            "description": "Detect coins with unusual volume spikes relative to their market cap - signals speculative interest or narrative activation",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -655,7 +655,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_defi_tvl_momentum",
-            "description": "Track DeFi protocol TVL changes: which protocols are gaining or losing total value locked — capital flow signal",
+            "description": "Track DeFi protocol TVL changes: which protocols are gaining or losing total value locked - capital flow signal",
             "parameters": {"type": "object", "properties": {}}
         }
     },
@@ -705,12 +705,12 @@ TOOL_MAP = {
     "get_new_listings_momentum":   get_new_listings_momentum,
 }
 
-SYSTEM_PROMPT = """You are a crypto market intelligence analyst. Your job is to track narratives, sector rotation, trending ecosystems, and volume anomalies — and surface actionable signals.
+SYSTEM_PROMPT = """You are a crypto market intelligence analyst. Your job is to track narratives, sector rotation, trending ecosystems, and volume anomalies - and surface actionable signals.
 
 When asked about market intelligence:
 1. Call MULTIPLE tools to get a comprehensive picture
 2. Cross-reference signals: e.g. a narrative trending + volume spike + TVL inflow = high-conviction signal
-3. Identify the STORY behind the data — what narrative is the market pricing in?
+3. Identify the STORY behind the data - what narrative is the market pricing in?
 
 Output format:
 - Lead with the strongest signal
@@ -786,7 +786,7 @@ BANNER = r"""
 EXAMPLES = """
 Example prompts:
   • What narratives are gaining momentum today?
-  • Show me sector rotation — what's capital flowing into vs out of?
+  • Show me sector rotation - what's capital flowing into vs out of?
   • Where are the volume spikes right now?
   • Compare AI Tokens vs DePIN vs RWA vs Layer 2
   • Give me a full market intelligence briefing

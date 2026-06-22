@@ -1,12 +1,13 @@
 """
 Solana DCA (Dollar-Cost Averaging) Agent
-Independent agent — run directly: python dca_agent.py
+Independent agent - run directly: python dca_agent.py
 
 Schedules recurring token buys on Solana via Jupiter v2 build API (mainnet)
 or SOL transfers (devnet). Powered by OpenRouter for natural-language plan management.
 """
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -327,7 +328,7 @@ def _fetch_token_from_jupiter(query: str) -> Optional[dict]:
             return None
         query_stripped = query.strip()
 
-        # Mint lookups must match exactly — never guess with items[0].
+        # Mint lookups must match exactly - never guess with items[0].
         if _looks_like_mint(query_stripped):
             for item in items:
                 if item.get("id") == query_stripped:
@@ -645,7 +646,7 @@ def get_jupiter_quote(
 
 def _confirm_transaction(sig: str, timeout_s: int = 60, poll_s: float = 2.0) -> dict:
     """
-    Poll the RPC for signature confirmation — mirrors the polling loop
+    Poll the RPC for signature confirmation - mirrors the polling loop
     in executeSwap() in the Node.js collateral-swap script.
     """
     deadline = time.time() + timeout_s
@@ -664,7 +665,7 @@ def _confirm_transaction(sig: str, timeout_s: int = 60, poll_s: float = 2.0) -> 
                 if status in ("confirmed", "finalized"):
                     return {"confirmed": True}
         except Exception:
-            pass  # RPC hiccup — keep polling
+            pass  # RPC hiccup - keep polling
 
     return {"confirmed": False, "error": f"Confirmation timed out after {timeout_s}s"}
 
@@ -861,7 +862,7 @@ def _build_and_execute_swap(
     """
     Build + sign + send a swap via Jupiter v2.
 
-    Mirrors executeSwap() in the Node.js script — one call to /build,
+    Mirrors executeSwap() in the Node.js script - one call to /build,
     then sign and submit via the Solana RPC.
 
     Retry logic:
@@ -1005,7 +1006,7 @@ def execute_swap_buy(
 
         # Warn about missing ATAs (mirrors checkBalance in Node.js)
         if not _ata_exists(wallet_pubkey, out["mint"]):
-            print(f"  ⚠️  ATA missing for {out['symbol']} — ~0.002 SOL needed for account creation")
+            print(f"  ⚠️  ATA missing for {out['symbol']} - ~0.002 SOL needed for account creation")
 
         result = _build_and_execute_swap(
             inp["mint"], out["mint"], raw_amount,
@@ -1084,10 +1085,28 @@ def _execute_devnet_sol_transfer(amount_sol: float) -> dict:
 
 ASSOCIATED_TOKEN_PROGRAM_ID = "ATokenGPvbdGoxRfTH6KzqYShx9fN2L6Q"
 TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+SYSTEM_PROGRAM_ID = SOL_ADDRESS_SHORT
 
 
-def _associated_token_address(owner: "Pubkey", mint: "Pubkey") -> "Pubkey":
-    token_program = Pubkey.from_string(TOKEN_PROGRAM_ID)
+def _resolve_token_program_for_mint(mint_address: str) -> str:
+    """Return SPL Token or Token-2022 program id for a mint."""
+    try:
+        result = sol_rpc("getAccountInfo", [mint_address, {"encoding": "jsonParsed"}])
+        owner = (result or {}).get("value", {}).get("owner")
+        if owner == TOKEN_2022_PROGRAM_ID:
+            return TOKEN_2022_PROGRAM_ID
+    except Exception:
+        pass
+    return TOKEN_PROGRAM_ID
+
+
+def _associated_token_address(
+    owner: "Pubkey",
+    mint: "Pubkey",
+    token_program_id: str = TOKEN_PROGRAM_ID,
+) -> "Pubkey":
+    token_program = Pubkey.from_string(token_program_id)
     ata_program = Pubkey.from_string(ASSOCIATED_TOKEN_PROGRAM_ID)
     addr, _ = Pubkey.find_program_address(
         [bytes(owner), bytes(token_program), bytes(mint)],
@@ -1096,14 +1115,20 @@ def _associated_token_address(owner: "Pubkey", mint: "Pubkey") -> "Pubkey":
     return addr
 
 
-def _spl_transfer_instruction(source: "Pubkey", dest: "Pubkey", owner: "Pubkey", amount: int):
+def _spl_transfer_instruction(
+    source: "Pubkey",
+    dest: "Pubkey",
+    owner: "Pubkey",
+    amount: int,
+    token_program_id: str = TOKEN_PROGRAM_ID,
+):
     import struct
 
     from solders.instruction import AccountMeta, Instruction
 
     data = bytes([3]) + struct.pack("<Q", amount)
     return Instruction(
-        Pubkey.from_string(TOKEN_PROGRAM_ID),
+        Pubkey.from_string(token_program_id),
         data,
         [
             AccountMeta(source, False, True),
@@ -1113,10 +1138,15 @@ def _spl_transfer_instruction(source: "Pubkey", dest: "Pubkey", owner: "Pubkey",
     )
 
 
-def _create_ata_instruction(payer: "Pubkey", owner: "Pubkey", mint: "Pubkey"):
+def _create_ata_instruction(
+    payer: "Pubkey",
+    owner: "Pubkey",
+    mint: "Pubkey",
+    token_program_id: str = TOKEN_PROGRAM_ID,
+):
     from solders.instruction import AccountMeta, Instruction
 
-    ata = _associated_token_address(owner, mint)
+    ata = _associated_token_address(owner, mint, token_program_id)
     return Instruction(
         Pubkey.from_string(ASSOCIATED_TOKEN_PROGRAM_ID),
         bytes([]),
@@ -1125,10 +1155,40 @@ def _create_ata_instruction(payer: "Pubkey", owner: "Pubkey", mint: "Pubkey"):
             AccountMeta(ata, False, True),
             AccountMeta(owner, False, False),
             AccountMeta(mint, False, False),
-            AccountMeta(Pubkey.from_string(SOL_ADDRESS_SHORT), False, False),
-            AccountMeta(Pubkey.from_string(TOKEN_PROGRAM_ID), False, False),
+            AccountMeta(Pubkey.from_string(SYSTEM_PROGRAM_ID), False, False),
+            AccountMeta(Pubkey.from_string(token_program_id), False, False),
         ],
     )
+
+
+def _wallet_token_account_for_mint(
+    wallet_pubkey: str,
+    mint_address: str,
+    token_program_id: Optional[str] = None,
+) -> Optional[str]:
+    """Find an existing token account for wallet+mint (legacy or Token-2022)."""
+    program_id = token_program_id or _resolve_token_program_for_mint(mint_address)
+    try:
+        owner = Pubkey.from_string(wallet_pubkey)
+        mint = Pubkey.from_string(mint_address)
+        derived = str(_associated_token_address(owner, mint, program_id))
+        balance = sol_rpc("getTokenAccountBalance", [derived])
+        if balance and balance.get("value"):
+            return derived
+    except Exception:
+        pass
+
+    try:
+        result = sol_rpc(
+            "getTokenAccountsByOwner",
+            [wallet_pubkey, {"mint": mint_address}, {"encoding": "jsonParsed"}],
+        )
+        accounts = (result or {}).get("value") or []
+        if accounts:
+            return accounts[0].get("pubkey")
+    except Exception:
+        pass
+    return None
 
 
 def _send_signed_transaction(keypair: "Keypair", instructions: list) -> dict:
@@ -1210,19 +1270,41 @@ def send_tokens_to_user(
     except Exception:
         return {"error": "Invalid token mint address."}
 
+    token_program_id = _resolve_token_program_for_mint(mint_address)
     raw_amount = _lamports(amount, decimals)
     if raw_amount <= 0:
         return {"error": "Amount is too small for this token's decimals."}
 
     agent_owner = keypair.pubkey()
-    source_ata = _associated_token_address(agent_owner, mint)
-    dest_ata = _associated_token_address(recipient, mint)
+    source_account = _wallet_token_account_for_mint(
+        str(agent_owner),
+        mint_address,
+        token_program_id,
+    )
+    if not source_account:
+        return {
+            "error": (
+                f"Agent wallet has no token account for mint {mint_address}. "
+                "Nothing to withdraw for this token."
+            )
+        }
+
+    source_ata = Pubkey.from_string(source_account)
+    dest_ata = _associated_token_address(recipient, mint, token_program_id)
 
     instructions = []
     if not _ata_exists(user_wallet, mint_address):
-        instructions.append(_create_ata_instruction(agent_owner, recipient, mint))
+        instructions.append(
+            _create_ata_instruction(agent_owner, recipient, mint, token_program_id)
+        )
     instructions.append(
-        _spl_transfer_instruction(source_ata, dest_ata, agent_owner, raw_amount)
+        _spl_transfer_instruction(
+            source_ata,
+            dest_ata,
+            agent_owner,
+            raw_amount,
+            token_program_id,
+        )
     )
 
     try:
@@ -1537,7 +1619,7 @@ def analyze_dca_timing(output_token: str, lookback_days: int = 7) -> dict:
             "drawdown_from_high_pct": round(drawdown, 2),
             "above_period_low_pct":  round(dist_from_low, 2),
             "trend":                 trend,
-            "dca_note":              "Regular DCA smooths volatility — frequency depends on your horizon, not short-term trend.",
+            "dca_note":              "Regular DCA smooths volatility - frequency depends on your horizon, not short-term trend.",
         }
     except Exception as e:
         return {"error": str(e)}
@@ -1748,6 +1830,7 @@ TOOLS = [
             "name": "withdraw_user_tokens",
             "description": (
                 "Withdraw unused deposited tokens or DCA-acquired output tokens back to the user's wallet. "
+                "REQUIRES explicit user confirmation before calling. "
                 "Cannot withdraw amounts reserved for active DCA plans."
             ),
             "parameters": {
@@ -1804,14 +1887,17 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_dca_plan",
-            "description": "Create a recurring DCA plan. Buys output_token with input_token on a schedule.",
+            "description": (
+                "Create a recurring DCA plan. REQUIRES explicit user confirmation in their latest "
+                "message before calling - summarize the plan and wait for yes/confirm first."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name":             {"type": "string", "description": "Optional label; auto-generated if omitted"},
-                    "user_wallet":      {"type": "string", "description": "User's wallet — must have deposited sufficient input_token to the AI Agent wallet"},
-                    "input_token":      {"type": "string", "description": "Token to spend — symbol or mint address"},
-                    "output_token":     {"type": "string", "description": "Token to accumulate — symbol or mint address"},
+                    "user_wallet":      {"type": "string", "description": "User's wallet - must have deposited sufficient input_token to the AI Agent wallet"},
+                    "input_token":      {"type": "string", "description": "Token to spend - symbol or mint address"},
+                    "output_token":     {"type": "string", "description": "Token to accumulate - symbol or mint address"},
                     "amount_per_buy":   {"type": "number"},
                     "interval":         {"type": "string", "description": "Any duration e.g. '11 seconds', '12 minutes', 'every 4 hours', daily"},
                     "total_budget":     {"type": "number",  "description": "Optional max total input to spend"},
@@ -1829,7 +1915,7 @@ TOOLS = [
             "name": "list_dca_plans",
             "description": (
                 "List DCA plans for the authenticated user. ALWAYS call this tool when the user "
-                "asks to list/show their plans — never guess from memory."
+                "asks to list/show their plans - never guess from memory."
             ),
             "parameters": {
                 "type": "object",
@@ -1862,7 +1948,10 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "update_dca_plan_status",
-            "description": "Pause, resume, or cancel a DCA plan.",
+            "description": (
+                "Pause, resume, or cancel a DCA plan. REQUIRES explicit user confirmation "
+                "before calling."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1877,7 +1966,10 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "execute_dca_now",
-            "description": "Force-run the next buy for a plan immediately.",
+            "description": (
+                "Force-run the next buy for a plan immediately. Live runs REQUIRE user "
+                "confirmation; dry_run previews do not."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1892,11 +1984,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "execute_swap_buy",
-            "description": "Execute a one-off swap buy (not tied to a plan). Requires user_wallet; spend is limited to that user's deposits.",
+            "description": (
+                "Execute a one-off swap buy (not tied to a plan). Live swaps REQUIRE user "
+                "confirmation; dry_run previews do not."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_wallet":  {"type": "string", "description": "User's wallet — spend is capped by their verified deposits"},
+                    "user_wallet":  {"type": "string", "description": "User's wallet - spend is capped by their verified deposits"},
                     "input_token":  {"type": "string"},
                     "output_token": {"type": "string"},
                     "amount":       {"type": "number"},
@@ -1960,9 +2055,9 @@ SYSTEM_PROMPT = """You are a Solana DCA (Dollar-Cost Averaging) agent. You help 
 ## AI Agent wallet (custodial deposits)
 - Users deposit tokens to the **AI Agent wallet** before running DCA.
 - Always call get_agent_wallet to show the deposit address when asked.
-- After a user deposits, they (or the frontend) provide a tx signature — call verify_user_deposit(signature, user_wallet) to record on-chain proof.
+- After a user deposits, they (or the frontend) provide a tx signature - call verify_user_deposit(signature, user_wallet) to record on-chain proof.
 - Before create_dca_plan, call get_user_deposit_balance(user_wallet) and ensure available balance covers total_budget (or amount_per_buy × max_executions).
-- create_dca_plan **requires user_wallet** — never create a plan without it.
+- create_dca_plan **requires user_wallet** - never create a plan without it.
 - Each user's DCA spend is limited to their verified deposit balance for that input token.
 - The agent wallet is shared on-chain, but the ledger tracks deposits **per user wallet**. User A cannot spend User B's deposits.
 - execute_swap_buy requires user_wallet; swaps and plan executions are rejected if deposited − already spent is less than the requested amount.
@@ -1970,9 +2065,9 @@ SYSTEM_PROMPT = """You are a Solana DCA (Dollar-Cost Averaging) agent. You help 
 - Users must authenticate with a wallet signature before chat, deposits, or plan actions. Never access another user's plans or balances.
 - list_dca_plans only returns the authenticated user's plans.
 - When the user asks to list/show DCA plans, **always call list_dca_plans** and report exactly what it returns. Never invent plan counts or IDs.
-- Unless the user explicitly asks for **active** plans only, call list_dca_plans **without** active_only (show active, paused, completed, cancelled). Short test plans (e.g. 3 buys) finish quickly and become **completed** — do not report "no plans" when completed plans exist.
+- Unless the user explicitly asks for **active** plans only, call list_dca_plans **without** active_only (show active, paused, completed, cancelled). Short test plans (e.g. 3 buys) finish quickly and become **completed** - do not report "no plans" when completed plans exist.
 - When the user gives a token **mint address**, pass that exact mint as output_token to create_dca_plan. Do not substitute a different token or symbol.
-- Multiple plans can share a symbol (e.g. two meme coins both named CPX) — always distinguish plans by **plan id** and **output_mint** from list_dca_plans.
+- Multiple plans can share a symbol (e.g. two meme coins both named CPX) - always distinguish plans by **plan id** and **output_mint** from list_dca_plans.
 
 ## Capabilities
 - Create DCA plans: spend input_token (USDC/SOL) to buy output_token (JUP/BONK/etc.) on a schedule
@@ -1988,15 +2083,36 @@ Use any interval the user requests: seconds, minutes, hours, days (e.g. "11 seco
 - **Mainnet**: real Jupiter v2 token swaps (requires DCA_WALLET_PRIVATE_KEY + mainnet RPC)
 - **Devnet** (default): scheduled SOL self-transfers as tx proof; Jupiter unavailable
 
+## Confirmation required (mandatory - enforced by the server)
+Mutating actions **cannot run** until the user explicitly confirms in their **latest message** (e.g. "yes", "confirm", "proceed", "go ahead").
+
+**Always ask first** with a clear summary:
+"Please confirm before I proceed: [exact action details]. Reply **yes** to proceed or **no** to cancel."
+
+Applies to:
+- **create_dca_plan** - new DCA schedules
+- **update_dca_plan_status** - pause, resume, or cancel a plan
+- **execute_dca_now** - live buys (dry_run previews do not need confirmation)
+- **execute_swap_buy** - one-off live swaps (dry_run previews do not need confirmation)
+- **withdraw_user_tokens** - sending tokens back to the user's wallet
+
+Workflow:
+1. User requests an action → summarize every parameter (tokens/mints, amounts, interval, plan id, max executions, budget).
+2. Ask: "Please confirm before I proceed."
+3. Wait for the user's next message. Only call the mutating tool after they confirm.
+4. If the tool returns `confirmation_required`, show that message to the user and wait - do not retry the tool in the same turn.
+5. If they say no/cancel, acknowledge and do not execute.
+
+Read-only tools (list plans, quotes, balances, history, dry runs) never need confirmation.
+
 ## Workflow for new DCA
-1. get_wallet_status — confirm wallet and cluster
-2. get_token_price / analyze_dca_timing — optional context
-3. get_jupiter_quote — preview if mainnet
-4. BEFORE calling create_dca_plan, confirm the exact details with the user:
-   "I'll set up: buy {amount} {output_token} with {input_token} every {interval}. Shall I proceed?"
-   Use EXACTLY the tokens the user specified — do not substitute or infer different tokens.
-5. create_dca_plan — only after confirmation or when the user's intent is completely unambiguous
+1. get_wallet_status - confirm wallet and cluster
+2. get_token_price / analyze_dca_timing - optional context
+3. get_jupiter_quote - preview if mainnet
+4. Summarize the plan and ask: "Please confirm before I proceed: …"
+5. create_dca_plan - **only after** the user confirms in a follow-up message
    (name is optional; omit it unless the user gives a plan title)
+   Use EXACTLY the tokens the user specified - do not substitute or infer different tokens.
 
 ## Safety
 - Always warn: DCA does not guarantee profit; crypto is volatile
@@ -2083,7 +2199,201 @@ def call_openrouter(messages: list) -> dict[str, Any]:
     raise RuntimeError(f"OpenRouter API error: {last_error}")
 
 
-def execute_tool(tool_name: str, tool_args: dict, user_wallet: Optional[str] = None) -> str:
+CONFIRMATION_REQUIRED_TOOLS = frozenset({
+    "create_dca_plan",
+    "update_dca_plan_status",
+    "execute_dca_now",
+    "execute_swap_buy",
+    "withdraw_user_tokens",
+})
+
+_CONFIRMATION_LOCK = threading.Lock()
+_pending_confirmations: dict[str, dict[str, Any]] = {}
+
+_CONFIRM_PHRASES = (
+    r"\byes\b",
+    r"\byep\b",
+    r"\byeah\b",
+    r"\bconfirm\b",
+    r"\bproceed\b",
+    r"\bgo ahead\b",
+    r"\bdo it\b",
+    r"\bapproved?\b",
+    r"\bsure\b",
+    r"\bok(?:ay)?\b",
+    r"\bi confirm\b",
+    r"\bplease proceed\b",
+    r"\bthat(?:'s| is) correct\b",
+    r"\blooks good\b",
+)
+
+_DECLINE_PHRASES = (
+    r"\bno\b",
+    r"\bcancel\b",
+    r"\bstop\b",
+    r"\babort\b",
+    r"\bdon't\b",
+    r"\bdont\b",
+    r"\bnevermind\b",
+    r"\bnever mind\b",
+)
+
+
+def _confirmation_key(user_wallet: Optional[str], session_id: Optional[str]) -> str:
+    wallet = (user_wallet or "").strip() or "anonymous"
+    session = (session_id or "").strip() or "default"
+    return f"{wallet}:{session}"
+
+
+def _normalize_confirmation_args(tool_name: str, args: dict) -> dict:
+    normalized = dict(args or {})
+    if tool_name in {"execute_dca_now", "execute_swap_buy"}:
+        normalized.pop("dry_run", None)
+    normalized.pop("user_wallet", None)
+    return normalized
+
+
+def _action_fingerprint(tool_name: str, args: dict) -> str:
+    payload = json.dumps(
+        {"tool": tool_name, "args": _normalize_confirmation_args(tool_name, args)},
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _user_confirmed(user_input: Optional[str]) -> bool:
+    text = (user_input or "").strip().lower()
+    if not text:
+        return False
+    return any(re.search(pattern, text) for pattern in _CONF_PHRASES)
+
+
+def _user_declined(user_input: Optional[str]) -> bool:
+    text = (user_input or "").strip().lower()
+    if not text:
+        return False
+    return any(re.search(pattern, text) for pattern in _DECLINE_PHRASES)
+
+
+def _tool_requires_confirmation(tool_name: str, args: dict) -> bool:
+    if tool_name not in CONFIRMATION_REQUIRED_TOOLS:
+        return False
+    if tool_name in {"execute_dca_now", "execute_swap_buy"} and _coerce_bool(args.get("dry_run")):
+        return False
+    return True
+
+
+def _summarize_pending_action(tool_name: str, args: dict) -> str:
+    if tool_name == "create_dca_plan":
+        parts = [
+            f"buy **{args.get('amount_per_buy')} {args.get('input_token')}**",
+            f"→ **{args.get('output_token')}**",
+            f"every **{args.get('interval')}**",
+        ]
+        if args.get("max_executions") is not None:
+            parts.append(f"max **{args.get('max_executions')}** buys")
+        if args.get("total_budget") is not None:
+            parts.append(f"budget **{args.get('total_budget')} {args.get('input_token')}**")
+        if args.get("start_immediately"):
+            parts.append("start immediately")
+        return "Create DCA plan: " + ", ".join(parts)
+
+    if tool_name == "update_dca_plan_status":
+        action = str(args.get("action", "update")).lower()
+        return f"**{action.title()}** DCA plan `{args.get('plan_id')}`"
+
+    if tool_name == "execute_dca_now":
+        return f"Execute next **live buy** for plan `{args.get('plan_id')}`"
+
+    if tool_name == "execute_swap_buy":
+        return (
+            f"Execute **live swap**: **{args.get('amount')} {args.get('input_token')}** "
+            f"→ **{args.get('output_token')}**"
+        )
+
+    if tool_name == "withdraw_user_tokens":
+        return f"Withdraw **{args.get('amount')} {args.get('token')}** to your wallet"
+
+    return f"{tool_name}({args})"
+
+
+def _check_action_confirmation(
+    tool_name: str,
+    args: dict,
+    user_input: Optional[str],
+    user_wallet: Optional[str],
+    session_id: Optional[str],
+) -> Optional[str]:
+    if not _tool_requires_confirmation(tool_name, args):
+        return None
+
+    key = _confirmation_key(user_wallet, session_id)
+    fingerprint = _action_fingerprint(tool_name, args)
+    summary = _summarize_pending_action(tool_name, args)
+
+    if _user_declined(user_input):
+        with _CONFIRMATION_LOCK:
+            pending = _pending_confirmations.pop(key, None)
+        if pending:
+            return json.dumps(
+                {
+                    "status": "cancelled",
+                    "message": "Action cancelled. No changes were made.",
+                    "cancelled_action": pending.get("summary") or summary,
+                },
+                indent=2,
+            )
+        # No pending action - treat "no" as not confirmed and require confirmation.
+
+    if _user_confirmed(user_input):
+        with _CONFIRMATION_LOCK:
+            pending = _pending_confirmations.get(key)
+            if pending and pending.get("fingerprint") != fingerprint:
+                return json.dumps(
+                    {
+                        "status": "confirmation_required",
+                        "message": (
+                            "Your confirmation does not match the pending action. "
+                            f"Please confirm before I proceed: {summary}. Reply **yes** to proceed."
+                        ),
+                        "pending_action": summary,
+                        "tool": tool_name,
+                    },
+                    indent=2,
+                )
+            _pending_confirmations.pop(key, None)
+        return None
+
+    with _CONFIRMATION_LOCK:
+        _pending_confirmations[key] = {
+            "tool": tool_name,
+            "args": args,
+            "fingerprint": fingerprint,
+            "summary": summary,
+        }
+
+    return json.dumps(
+        {
+            "status": "confirmation_required",
+            "message": (
+                f"Please confirm before I proceed: {summary}. "
+                "Reply **yes** or **confirm** to proceed, or **no** to cancel."
+            ),
+            "pending_action": summary,
+            "tool": tool_name,
+        },
+        indent=2,
+    )
+
+
+def execute_tool(
+    tool_name: str,
+    tool_args: dict,
+    user_wallet: Optional[str] = None,
+    user_input: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> str:
     func = TOOL_MAP.get(tool_name)
     if not func:
         return json.dumps({"error": f"Unknown tool: {tool_name}"})
@@ -2128,6 +2438,16 @@ def execute_tool(tool_name: str, tool_args: dict, user_wallet: Optional[str] = N
             elif tool_name in {"get_dca_plan", "update_dca_plan_status", "execute_dca_now", "get_dca_history"}:
                 args["user_wallet"] = auth_wallet
 
+        blocked = _check_action_confirmation(
+            tool_name,
+            args,
+            user_input=user_input,
+            user_wallet=auth_wallet,
+            session_id=session_id,
+        )
+        if blocked:
+            return blocked
+
         return json.dumps(func(**args), indent=2)
     except TypeError as e:
         return json.dumps({"error": str(e), "received_args": tool_args})
@@ -2139,6 +2459,7 @@ def run_agent_with_actions(
     user_input: str,
     conversation_history: list,
     user_wallet: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> tuple[str, list, list[dict[str, Any]]]:
     """Run one user turn; returns reply, updated history, and tool action trace."""
     actions: list[dict[str, Any]] = []
@@ -2182,7 +2503,13 @@ def run_agent_with_actions(
                 except Exception:
                     args = {}
             print(f"  📡 {name}({args})")
-            result = execute_tool(name, args, user_wallet=user_wallet)
+            result = execute_tool(
+                name,
+                args,
+                user_wallet=user_wallet,
+                user_input=user_input,
+                session_id=session_id,
+            )
             print("  ✅ Done")
             actions.append({"tool": name, "args": args, "result": result})
             tool_message: dict[str, Any] = {"role": "tool", "content": result}
@@ -2220,7 +2547,7 @@ def main():
     print(f"  LLM        : OpenRouter ({MODEL})")
     print(
         f"  OpenRouter : "
-        f"{'configured' if OPEN_ROUTER_API else 'missing — set OPEN_ROUTER_API in .env'}"
+        f"{'configured' if OPEN_ROUTER_API else 'missing - set OPEN_ROUTER_API in .env'}"
     )
     print(f"  RPC        : {SOLANA_RPC}")
     print(f"  Cluster    : {SOLANA_CLUSTER} ({'Jupiter v2 swaps' if _is_mainnet() else 'devnet mode'})")
@@ -2230,12 +2557,11 @@ def main():
     print()
 
     env_path = AGENT_DIR / ".env"
-    print(f"  Env     : {env_path if env_path.exists() else '(no .env — copy .env.example)'}")
+    print(f"  Env     : {env_path if env_path.exists() else '(no .env - copy .env.example)'}")
     if start_scheduler():
         print(f"  ⏱️  Background scheduler started (every {SCHEDULER_POLL_SECONDS}s)")
     print()
     print("  Example prompts:")
-    print("  • Check my wallet status")
     print("  • DCA $10 USDC into JUP every day, budget $300")
     print("  • Buy 0.05 SOL worth of BONK every 4 hours")
     print("  • Buy 0.0001 SOL worth of USDC every 30 seconds")

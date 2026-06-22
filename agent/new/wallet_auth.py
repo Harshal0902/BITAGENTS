@@ -24,6 +24,7 @@ except ImportError:
 
 from db import get_conn, init_db
 
+PUBLIC_APP_URL = os.environ.get("BITAGENTS_PUBLIC_URL", "https://bitagents.io").rstrip("/")
 SESSION_TTL_HOURS = int(os.environ.get("DCA_SESSION_TTL_HOURS", "24"))
 CHALLENGE_TTL_MINUTES = int(os.environ.get("DCA_CHALLENGE_TTL_MINUTES", "10"))
 INTERNAL_API_KEY = os.environ.get("DCA_INTERNAL_API_KEY", "").strip()
@@ -84,7 +85,12 @@ def create_auth_challenge(user_wallet: str) -> dict[str, Any]:
     nonce = secrets.token_urlsafe(16)
     expires = _utcnow() + timedelta(minutes=CHALLENGE_TTL_MINUTES)
     message = (
-        "Sign in to BIT Agents DCA\n"
+        "Sign in to BIT Agents DCA\n\n"
+        "By signing this message, you agree to the BIT Agents:\n"
+        f"- Terms of Service: {PUBLIC_APP_URL}/terms\n"
+        f"- Privacy Policy: {PUBLIC_APP_URL}/privacy\n"
+        f"- Risk Disclaimer: {PUBLIC_APP_URL}/risk-disclaimer\n\n"
+        "This signature does not authorize any transaction or token transfer.\n\n"
         f"Wallet: {user_wallet}\n"
         f"Nonce: {nonce}\n"
         f"Expires: {expires.isoformat()}"

@@ -15,7 +15,7 @@ from typing import Any
 OLLAMA_URL    = "http://localhost:11434/api/chat"
 MODEL         = "llama3.1"
 
-# Free public APIs — no keys required unless noted
+# Free public APIs - no keys required unless noted
 COINGECKO_API   = "https://api.coingecko.com/api/v3"
 CRYPTOPANIC_API = "https://cryptopanic.com/api/v1/posts/"
 CRYPTOPANIC_KEY = "free"          # works for public feed; get a real key at cryptopanic.com/developers/api/
@@ -360,7 +360,7 @@ def get_major_token_unlocks() -> dict:
     """
     Fetch upcoming major token unlocks from DeFiLlama's unlock tracker.
     Returns projects with large unlock events in the next 30 days.
-    These are bearish catalysts — large supply releases create sell pressure.
+    These are bearish catalysts - large supply releases create sell pressure.
     """
     try:
         r = requests.get(f"{DEFILLAMA_API}/unlocks", timeout=15)
@@ -748,7 +748,7 @@ def generate_actionable_brief(scan_results: dict) -> dict:
         days = item.get("days_until", 99)
         entry = {
             "action": "📉 TOKEN UNLOCK",
-            "detail": f"{item.get('project')} — {item.get('tokens_unlocked')} {item.get('token')} unlocking (~${item.get('usd_value_est', 0):,.0f})",
+            "detail": f"{item.get('project')} - {item.get('tokens_unlocked')} {item.get('token')} unlocking (~${item.get('usd_value_est', 0):,.0f})",
             "tokens": [item.get("token", "")],
             "date":   item.get("unlock_date", "")
         }
@@ -760,7 +760,7 @@ def generate_actionable_brief(scan_results: dict) -> dict:
     # Bearish catalyst news → watch
     for sym in scan_results.get("bearish_alert", []):
         watch.append({
-            "action": f"🔴 BEARISH NEWS — {sym}",
+            "action": f"🔴 BEARISH NEWS - {sym}",
             "detail": f"Negative catalyst detected for {sym}. Review latest news.",
             "tokens": [sym]
         })
@@ -787,7 +787,7 @@ def generate_actionable_brief(scan_results: dict) -> dict:
     # Bullish catalyst news → opportunity
     for sym in scan_results.get("bullish_alert", []):
         opportun.append({
-            "action": f"📈 BULLISH CATALYST — {sym}",
+            "action": f"📈 BULLISH CATALYST - {sym}",
             "detail": f"Positive catalyst detected for {sym}. Review for entry/add opportunity.",
             "tokens": [sym]
         })
@@ -942,7 +942,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_hack_and_exploit_alerts",
-            "description": "Detect recent hack, exploit, and security breach news from the last 48 hours. ALWAYS call this for portfolio briefings — critical for risk management.",
+            "description": "Detect recent hack, exploit, and security breach news from the last 48 hours. ALWAYS call this for portfolio briefings - critical for risk management.",
             "parameters": {"type": "object", "properties": {}}
         }
     },
@@ -993,7 +993,7 @@ TOOL_MAP = {
     "generate_actionable_brief":    generate_actionable_brief,
 }
 
-SYSTEM_PROMPT = """You are a crypto news and catalyst intelligence agent. You monitor exchange listings, partnerships, fundraises, token unlocks, governance events, hacks, and regulatory news — and turn them into concise, actionable briefings.
+SYSTEM_PROMPT = """You are a crypto news and catalyst intelligence agent. You monitor exchange listings, partnerships, fundraises, token unlocks, governance events, hacks, and regulatory news - and turn them into concise, actionable briefings.
 
 ## Query flows:
 
@@ -1022,12 +1022,12 @@ SYSTEM_PROMPT = """You are a crypto news and catalyst intelligence agent. You mo
 
 ## Output style:
 Structure output in three sections:
-🚨 URGENT   — hacks, immediate threats, closing unlocks
-👀 WATCH    — bearish signals, upcoming unlocks, negative regulatory
-🚀 OPPORTUNITY — new listings, fundraises, partnerships, bullish catalysts
+🚨 URGENT   - hacks, immediate threats, closing unlocks
+👀 WATCH    - bearish signals, upcoming unlocks, negative regulatory
+🚀 OPPORTUNITY - new listings, fundraises, partnerships, bullish catalysts
 
 Lead every briefing with a one-line market pulse.
-Keep headlines tight — one sentence per item plus the URL.
+Keep headlines tight - one sentence per item plus the URL.
 Always include: what it means, which token is affected, and what to do.
 Never give financial advice; frame as "signals to monitor".
 """

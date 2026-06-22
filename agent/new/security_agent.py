@@ -62,7 +62,7 @@ KNOWN_MALICIOUS = {
         "label": "Ronin Bridge Exploiter",
         "type":  "EXPLOIT",
         "risk":  "HIGH",
-        "desc":  "Axie Infinity Ronin bridge exploit — $625M stolen.",
+        "desc":  "Axie Infinity Ronin bridge exploit - $625M stolen.",
     },
     "0x3607f1b4e17a83ccca7e3e68f69e3e1b2ff049fc": {
         "label": "Fake Token Issuer",
@@ -165,7 +165,7 @@ def check_address_against_blacklist(address: str) -> dict:
             "risk":      _risk_badge(threat["risk"]),
             "risk_raw":  threat["risk"],
             "description": threat["desc"],
-            "action":    "⛔ DO NOT INTERACT — revoke any existing approvals immediately",
+            "action":    "⛔ DO NOT INTERACT - revoke any existing approvals immediately",
         }
     return {
         "address":      address,
@@ -221,9 +221,9 @@ def scan_wallet_for_malicious_interactions(address: str, days: int = 30) -> dict
         "threat_details": threats_found,
         "safe_txs":       safe_count,
         "verdict":        (
-            "🚨 COMPROMISED — interacted with drainer/exploit" if any(t["risk_raw"] in ("CRITICAL", "HIGH") for t in threats_found)
-            else "⚠️ CAUTION — interacted with flagged contract" if threats_found
-            else "✅ CLEAN — no malicious interactions detected"
+            "🚨 COMPROMISED - interacted with drainer/exploit" if any(t["risk_raw"] in ("CRITICAL", "HIGH") for t in threats_found)
+            else "⚠️ CAUTION - interacted with flagged contract" if threats_found
+            else "✅ CLEAN - no malicious interactions detected"
         ),
     }
 
@@ -292,9 +292,9 @@ def scan_token_approvals(address: str) -> dict:
                 normal_approvals.append(entry)
 
     if risky_approvals:
-        verdict = "🚨 DANGEROUS APPROVALS FOUND — revoke immediately"
+        verdict = "🚨 DANGEROUS APPROVALS FOUND - revoke immediately"
     elif any(a["is_unlimited"] for a in normal_approvals):
-        verdict = "🟡 Unlimited approvals to unknown spenders — review recommended"
+        verdict = "🟡 Unlimited approvals to unknown spenders - review recommended"
     else:
         verdict = "✅ Approvals look clean"
 
@@ -304,7 +304,7 @@ def scan_token_approvals(address: str) -> dict:
         "normal_approvals": len(normal_approvals),
         "total_approvals":  len(risky_approvals) + len(normal_approvals),
         "verdict":          verdict,
-        "revoke_tool":      "https://revoke.cash — connect wallet to revoke approvals",
+        "revoke_tool":      "https://revoke.cash - connect wallet to revoke approvals",
         "note": "Approvals decoded from on-chain Approval events. Always verify on revoke.cash for complete picture.",
     }
 
@@ -416,7 +416,7 @@ def contract_risk_scan(contract_address: str) -> dict:
         risk_flags.append("🟡 Very low transaction activity")
         score += 10
     if has_proxy:
-        risk_flags.append("🟡 Proxy contract — logic can be upgraded by owner")
+        risk_flags.append("🟡 Proxy contract - logic can be upgraded by owner")
         score += 10
     if deployer and deployer.lower() in KNOWN_MALICIOUS:
         risk_flags.append(f"🚨 Deployer is a KNOWN malicious address!")
@@ -445,9 +445,9 @@ def contract_risk_scan(contract_address: str) -> dict:
         "risk_score":       score,
         "overall_risk":     overall_risk,
         "recommendation": (
-            "⛔ Avoid — multiple critical risk factors" if score >= 60 else
-            "⚠️ Proceed with caution — verify team and audit status" if score >= 30 else
-            "✅ Looks reasonable — standard DYOR applies"
+            "⛔ Avoid - multiple critical risk factors" if score >= 60 else
+            "⚠️ Proceed with caution - verify team and audit status" if score >= 30 else
+            "✅ Looks reasonable - standard DYOR applies"
         ),
     }
 
@@ -508,14 +508,14 @@ def detect_rugpull_signals(coin_id_or_contract: str) -> dict:
         circ = mkt.get("circulating_supply") or 0
         total = mkt.get("total_supply") or 1
         if circ and total and (circ / total) < 0.2:
-            signals.append(f"🔴 Only {circ/total*100:.0f}% of supply in circulation — team holds most")
+            signals.append(f"🔴 Only {circ/total*100:.0f}% of supply in circulation - team holds most")
             score += 30
 
         # Volume vs market cap ratio
         vol  = mkt.get("total_volume", {}).get("usd") or 0
         mcap = mkt.get("market_cap", {}).get("usd") or 1
         if mcap > 0 and vol / mcap > 2:
-            signals.append(f"🟡 Volume ({vol/1e6:.1f}M) far exceeds market cap ({mcap/1e6:.1f}M) — wash trading?")
+            signals.append(f"🟡 Volume ({vol/1e6:.1f}M) far exceeds market cap ({mcap/1e6:.1f}M) - wash trading?")
             score += 15
 
         links = cg_data.get("links", {})
@@ -527,7 +527,7 @@ def detect_rugpull_signals(coin_id_or_contract: str) -> dict:
             score += 10
 
     else:
-        signals.append("🟡 Not found on CoinGecko — unverified or very new token")
+        signals.append("🟡 Not found on CoinGecko - unverified or very new token")
         score += 20
 
     # Overall verdict
@@ -536,9 +536,9 @@ def detect_rugpull_signals(coin_id_or_contract: str) -> dict:
     elif score >= 40:
         verdict = "🔴 HIGH RUGPULL RISK"
     elif score >= 20:
-        verdict = "🟡 MEDIUM RISK — proceed with extreme caution"
+        verdict = "🟡 MEDIUM RISK - proceed with extreme caution"
     else:
-        verdict = "🟢 LOW RUGPULL RISK — standard DYOR applies"
+        verdict = "🟢 LOW RUGPULL RISK - standard DYOR applies"
 
     return {
         "input":           coin_id_or_contract,
@@ -610,7 +610,7 @@ def monitor_wallets_for_threats(addresses: list, days: int = 7) -> dict:
         "alert": (
             f"🚨 ALERT: {len(all_threats)} threat interactions detected across {len(set(t['wallet'] for t in all_threats))} wallets"
             if all_threats else
-            "✅ All wallets clean — no malicious interactions in the past " + str(days) + " days"
+            "✅ All wallets clean - no malicious interactions in the past " + str(days) + " days"
         ),
     }
 
@@ -691,9 +691,9 @@ def check_phishing_simulation(address: str) -> dict:
         "address":             address,
         "suspicious_contracts": suspicious,
         "phishing_risk":       (
-            "🚨 HIGH — interacted with likely phishing contracts" if any(s["phish_score"] >= 70 for s in suspicious) else
-            "🟡 MEDIUM — some suspicious contract interactions" if suspicious else
-            "✅ LOW — no phishing indicators found"
+            "🚨 HIGH - interacted with likely phishing contracts" if any(s["phish_score"] >= 70 for s in suspicious) else
+            "🟡 MEDIUM - some suspicious contract interactions" if suspicious else
+            "✅ LOW - no phishing indicators found"
         ),
     }
 
@@ -734,7 +734,7 @@ def get_security_summary(address: str) -> dict:
         "known_threats_in_history": list(set(flagged)),
         "threat_count":  len(set(flagged)),
         "quick_verdict": (
-            f"🚨 DANGER — {len(set(flagged))} known threat(s) in tx history" if flagged else
+            f"🚨 DANGER - {len(set(flagged))} known threat(s) in tx history" if flagged else
             "✅ Quick scan clean"
         ),
         "next_steps": [
@@ -907,8 +907,8 @@ ALWAYS:
 - Lead with the threat level immediately
 - Give specific actionable steps (revoke which approvals, avoid which contract)
 - Link to revoke.cash for approval revocations
-- Be direct and urgent when threats are found — lives and funds are at stake
-- Never give a false all-clear — always recommend DYOR and revoke.cash review"""
+- Be direct and urgent when threats are found - lives and funds are at stake
+- Never give a false all-clear - always recommend DYOR and revoke.cash review"""
 
 
 # ─── Agent Loop ────────────────────────────────────────────────────────────────
@@ -980,7 +980,7 @@ EXAMPLES = """
 Example prompts:
   • Is 0x00000000003b3cc22af3ae1eac0440bcee416b40 a drainer?
   • Full security check on wallet 0x...
-  • Scan my approvals for 0x... — are any dangerous?
+  • Scan my approvals for 0x... - are any dangerous?
   • Is this contract a rugpull? 0x...
   • Monitor these 3 wallets for threats: 0x... 0x... 0x...
   • Alert me if wallet 0x... has interacted with any malicious contract

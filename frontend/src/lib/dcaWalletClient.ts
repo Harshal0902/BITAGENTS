@@ -161,7 +161,13 @@ export async function withdrawTokens(token: string, amount: number, authToken: s
   });
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(typeof data.error === "string" ? data.error : "Withdrawal failed");
+    const detail =
+      typeof data.detail === "string"
+        ? data.detail
+        : typeof data.error === "string"
+          ? data.error
+          : "Withdrawal failed";
+    throw new Error(detail);
   }
   return data as {
     status: string;

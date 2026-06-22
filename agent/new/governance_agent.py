@@ -22,7 +22,7 @@ SNAPSHOT_GQL     = "https://hub.snapshot.org/graphql"
 
 # Tally GraphQL (free tier, no key needed for basic queries)
 TALLY_GQL        = "https://api.tally.xyz/query"
-TALLY_API_KEY    = ""   # optional — get free key at https://www.tally.xyz/
+TALLY_API_KEY    = ""   # optional - get free key at https://www.tally.xyz/
 
 # ─── Known DAO registry ───────────────────────────────────────────────────────
 # Maps token symbol / protocol name → Snapshot space ID + Tally governor address
@@ -418,7 +418,7 @@ def get_portfolio_governance_summary(token_symbols: list) -> dict:
         "total_active_votes": total_active,
         "action_needed": total_active > 0,
         "summary": (
-            f"⚠️ {total_active} active governance vote(s) affecting your portfolio — review and vote!"
+            f"⚠️ {total_active} active governance vote(s) affecting your portfolio - review and vote!"
             if total_active > 0
             else "✅ No active governance votes for your portfolio tokens right now."
         )
@@ -497,7 +497,7 @@ def get_governance_changes_history(dao_name: str, limit: int = 10) -> dict:
             "token": dao["token"],
             "recent_governance_changes": changes,
             "count": len(changes),
-            "note": "Pass/fail detection is heuristic — verify on the Snapshot link for official result."
+            "note": "Pass/fail detection is heuristic - verify on the Snapshot link for official result."
         }
     except Exception as e:
         return {"error": str(e)}
@@ -797,7 +797,7 @@ SYSTEM_PROMPT = """You are a crypto governance AI agent. You track DAO proposals
 → get_recent_proposals(dao_name, state='closed') for recent decisions
 
 ### "What are my voting deadlines?"
-→ get_voting_deadlines(dao_names=[...]) — pass all relevant DAOs
+→ get_voting_deadlines(dao_names=[...]) - pass all relevant DAOs
 
 ### "What changed in [DAO] recently?"
 → get_governance_changes_history(dao_name)
@@ -816,7 +816,7 @@ SYSTEM_PROMPT = """You are a crypto governance AI agent. You track DAO proposals
 - Use a clean table or bullet format for multiple proposals
 - Always include the direct Snapshot link for each proposal
 - For portfolio summaries, group by token/DAO
-- Be concise: title, deadline, leading choice, link — that's the minimum per proposal
+- Be concise: title, deadline, leading choice, link - that's the minimum per proposal
 - Flag 🔴 URGENT for proposals closing within 6 hours
 - End portfolio summaries with total count: "X active votes need your attention"
 """

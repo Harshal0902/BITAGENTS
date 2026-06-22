@@ -46,7 +46,7 @@ def get_contract_audit_status(contract_address: str) -> dict:
             if not result["source_verified"]:
                 result["risk_flags"].append("⚠️ Source code NOT verified on Etherscan")
             if result["is_proxy"]:
-                result["risk_flags"].append("⚠️ Proxy contract — implementation can be upgraded")
+                result["risk_flags"].append("⚠️ Proxy contract - implementation can be upgraded")
     except Exception as e:
         result["risk_flags"].append(f"Etherscan lookup failed: {e}")
 
@@ -105,9 +105,9 @@ def get_holder_concentration(contract_address: str, top_n: int = 10) -> dict:
 
             risk_flags = []
             if top_holders and top_holders[0]["percentage"] > 20:
-                risk_flags.append(f"🔴 Top holder owns {top_holders[0]['percentage']}% — whale risk")
+                risk_flags.append(f"🔴 Top holder owns {top_holders[0]['percentage']}% - whale risk")
             elif top_holders and top_holders[0]["percentage"] > 10:
-                risk_flags.append(f"🟡 Top holder owns {top_holders[0]['percentage']}% — moderate concentration")
+                risk_flags.append(f"🟡 Top holder owns {top_holders[0]['percentage']}% - moderate concentration")
 
             if concentration > 70:
                 risk_flags.append(f"🔴 Top {top_n} holders own {round(concentration, 1)}% of supply")
@@ -124,7 +124,7 @@ def get_holder_concentration(contract_address: str, top_n: int = 10) -> dict:
         return {
             "contract_address": contract_address,
             "top_holders": [],
-            "risk_flags": ["⚠️ Could not fetch holder data — may need Etherscan Pro API"],
+            "risk_flags": ["⚠️ Could not fetch holder data - may need Etherscan Pro API"],
             "note": data.get("message", "No data")
         }
     except Exception as e:
@@ -159,7 +159,7 @@ def get_token_info_coingecko(token_id: str) -> dict:
         if not links.get("repos_url", {}).get("github"):
             risk_flags.append("⚠️ No public GitHub repository")
         if dev.get("commit_count_4_weeks", 0) == 0:
-            risk_flags.append("🟡 No GitHub commits in last 4 weeks — low dev activity")
+            risk_flags.append("🟡 No GitHub commits in last 4 weeks - low dev activity")
 
         return {
             "name": d.get("name"),
@@ -328,11 +328,11 @@ def get_vesting_and_unlock_schedule(token_id: str) -> dict:
 
         if unlock_ratio and unlock_ratio < 30:
             risk_flags.append(
-                f"🔴 Only {unlock_ratio}% of total supply circulating — large unlock risk"
+                f"🔴 Only {unlock_ratio}% of total supply circulating - large unlock risk"
             )
         elif unlock_ratio and unlock_ratio < 60:
             risk_flags.append(
-                f"🟡 {unlock_ratio}% of total supply circulating — moderate unlock pressure possible"
+                f"🟡 {unlock_ratio}% of total supply circulating - moderate unlock pressure possible"
             )
 
         return {
@@ -386,16 +386,16 @@ def generate_due_diligence_score(findings: dict) -> dict:
 
     # Scoring logic
     if red_flags:
-        score = "🔴 RED — HIGH RISK"
+        score = "🔴 RED - HIGH RISK"
         summary = "Significant red flags detected. Proceed with extreme caution or avoid."
     elif len(yellow_flags) >= 3:
-        score = "🟡 YELLOW — MODERATE RISK"
+        score = "🟡 YELLOW - MODERATE RISK"
         summary = "Multiple caution signals. Do additional research before investing."
     elif yellow_flags:
-        score = "🟡 YELLOW — CAUTION"
+        score = "🟡 YELLOW - CAUTION"
         summary = "Some caution signals present. Review carefully."
     else:
-        score = "🟢 GREEN — LOWER RISK"
+        score = "🟢 GREEN - LOWER RISK"
         summary = "No major red flags found. Standard investment caution still applies."
 
     return {
@@ -503,7 +503,7 @@ TOOLS = [
                 "properties": {
                     "findings": {
                         "type": "object",
-                        "description": "Dict with keys: audit_flags, holder_flags, token_flags, treasury_flags, security_flags, vesting_flags — each a list of flag strings from the other tools.",
+                        "description": "Dict with keys: audit_flags, holder_flags, token_flags, treasury_flags, security_flags, vesting_flags - each a list of flag strings from the other tools.",
                         "properties": {
                             "audit_flags":    {"type": "array", "items": {"type": "string"}},
                             "holder_flags":   {"type": "array", "items": {"type": "string"}},

@@ -6,15 +6,19 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const appLinks = [
-  { href: "/agents", label: "Agents" },
-  { href: "/analytics", label: "Analytics" },
+  { href: "/agents", label: "Marketplace", match: (path: string) => path === "/agents" },
+  // {
+  //   href: "/agents/dca",
+  //   label: "Agents",
+  //   match: (path: string) => path.startsWith("/agents/") && path !== "/agents",
+  // },
+  { href: "/analytics", label: "Analytics", match: (path: string) => path === "/analytics" },
 ];
 
 const marketingLinks = [
   { href: "/#product", label: "Product" },
   { href: "/#how", label: "How It Works" },
   { href: "/#token-utility", label: "Token Utility" },
-  { href: "/#roadmap", label: "Roadmap" },
 ];
 
 const navLinkBase =
@@ -34,7 +38,7 @@ export function Nav({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-30 border-b border-grid bg-background/80 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-6">
-          <Link href="/" className="flex items-center">
+          <Link href="/" className="flex items-center gap-3">
             <Wordmark compact />
           </Link>
 
@@ -57,14 +61,14 @@ export function Nav({ children }: { children: React.ReactNode }) {
           ) : (
             <>
               <nav className="hidden items-center gap-2 md:flex">
-                {appLinks.map(({ href, label }) => (
-                  <Link key={href} href={href} className={appLinkClass(pathname === href || (href === "/agents" && pathname.startsWith("/agents/")))}>
+                {appLinks.map(({ href, label, match }) => (
+                  <Link key={href} href={href} className={appLinkClass(match(pathname))}>
                     {label}
                   </Link>
                 ))}
               </nav>
               <div className="hidden sm:block">
-                <WalletMultiButton className="wallet-connect-btn" />
+                <WalletMultiButton className="wallet-adapter-button-trigger" />
               </div>
             </>
           )}
@@ -72,8 +76,8 @@ export function Nav({ children }: { children: React.ReactNode }) {
 
         {!isPublicPage && (
           <div className="mx-auto flex max-w-7xl items-center gap-2 overflow-x-auto px-4 pb-3 sm:hidden">
-            {appLinks.map(({ href, label }) => (
-              <Link key={href} href={href} className={`min-w-fit ${appLinkClass(pathname === href || (href === "/agents" && pathname.startsWith("/agents/")))}`}>
+            {appLinks.map(({ href, label, match }) => (
+              <Link key={href} href={href} className={`min-w-fit ${appLinkClass(match(pathname))}`}>
                 {label}
               </Link>
             ))}
@@ -94,7 +98,11 @@ export function Wordmark({ compact = false }: { compact?: boolean }) {
       alt="BIT Agents"
       width={width}
       height={Math.round(width * 0.8)}
-      className={compact ? "block h-16 object-contain object-left" : "block h-auto max-w-full object-contain object-left"}
+      className={
+        compact
+          ? "block h-20 object-contain object-left"
+          : "block h-auto max-w-full object-contain object-left"
+      }
       style={{ width: compact ? 200 : "min(390px, 100%)" }}
     />
   );

@@ -78,7 +78,7 @@ export function simulateDcaAgent(command: string): SimulationResult {
           pubkey: "7Hk…q4Px9mN2",
           sol_balance: 2.418,
           usdc_balance: 142.5,
-          note: "Simulated devnet wallet — connect DCA_WALLET_PRIVATE_KEY for live swaps.",
+          note: "Simulated devnet wallet - connect DCA_WALLET_PRIVATE_KEY for live swaps.",
         }, null, 2)),
       ],
       reply:
@@ -92,7 +92,7 @@ export function simulateDcaAgent(command: string): SimulationResult {
         action("a1", "list_dca_plans", { status: "active" }, JSON.stringify({ plans: MOCK_PLANS, count: MOCK_PLANS.length }, null, 2)),
       ],
       reply:
-        "You have **2 DCA plans**:\n\n1. **USDC → JUP Daily** (`63309a2f`) — active · $10/day · 14 buys · $140 / $300 spent\n2. **SOL Micro DCA** (`f8a21bc0`) — paused · 0.05 SOL · every 15 min\n\nSay *pause plan f8a21bc0* or *execute plan 63309a2f now (dry run)* to manage them.",
+        "You have **2 DCA plans**:\n\n1. **USDC → JUP Daily** (`63309a2f`) - active · $10/day · 14 buys · $140 / $300 spent\n2. **SOL Micro DCA** (`f8a21bc0`) - paused · 0.05 SOL · every 15 min\n\nSay *pause plan f8a21bc0* or *execute plan 63309a2f now (dry run)* to manage them.",
     };
   }
 
@@ -105,7 +105,7 @@ export function simulateDcaAgent(command: string): SimulationResult {
           output_token: token,
           trend_7d: "+4.2%",
           volatility: "moderate",
-          dca_note: "Regular DCA smooths volatility — frequency depends on your horizon, not short-term trend.",
+          dca_note: "Regular DCA smooths volatility - frequency depends on your horizon, not short-term trend.",
         }, null, 2)),
       ],
       reply:
@@ -136,7 +136,7 @@ export function simulateDcaAgent(command: string): SimulationResult {
           plan_id: planId,
           dry_run: dryRun,
           tx: dryRun ? null : "5kF2…xR9p",
-          message: dryRun ? "Dry run OK — no transaction sent." : "Buy executed on devnet (simulated).",
+          message: dryRun ? "Dry run OK - no transaction sent." : "Buy executed on devnet (simulated).",
         }, null, 2)),
       ],
       reply: dryRun
@@ -158,7 +158,7 @@ export function simulateDcaAgent(command: string): SimulationResult {
           ],
         }, null, 2)),
       ],
-      reply: `Last 3 executions for \`${planId}\` (simulated):\n\n• Jun 18 — 10 USDC → JUP ✓\n• Jun 17 — 10 USDC → JUP ✓\n• Jun 16 — 10 USDC → JUP ✓`,
+      reply: `Last 3 executions for \`${planId}\` (simulated):\n\n• Jun 18 - 10 USDC → JUP ✓\n• Jun 17 - 10 USDC → JUP ✓\n• Jun 16 - 10 USDC → JUP ✓`,
     };
   }
 
@@ -215,12 +215,12 @@ export function simulateDcaAgent(command: string): SimulationResult {
       action("a1", "get_wallet_status", {}, JSON.stringify({ cluster: "devnet", ready: true }, null, 2)),
     ],
     reply:
-      "I'm the **Solana DCA Agent**. Try commands like:\n\n• Check my wallet status\n• List my DCA plans\n• DCA $10 USDC into JUP every day, budget $300\n• Analyze JUP for DCA timing\n• Execute plan 63309a2f now (dry run)\n• Pause plan f8a21bc0",
+      "I'm the **Solana DCA Agent**. Try commands like:\n\n• List my DCA plans\n• DCA $10 USDC into JUP every day, budget $300\n• Analyze JUP for DCA timing\n• Execute plan 63309a2f now (dry run)\n• Pause plan f8a21bc0",
   };
 }
 
 export const DCA_EXAMPLE_PROMPTS = [
-  "Check my wallet status",
+  // "Check my wallet status",
   "List my DCA plans",
   "DCA $10 USDC into JUP every day, budget $300",
   "Analyze JUP for DCA timing",
@@ -231,7 +231,7 @@ export const DCA_AGENT = {
   id: "dca",
   name: "DCA Agent",
   slug: "dca",
-  tagline: "Recurring buys · Jupiter swaps · Groq-powered",
+  tagline: "Recurring buys · Jupiter swaps",
   description:
     "Set up dollar-cost averaging on Solana. Schedule recurring token buys, preview Jupiter quotes, and manage plans from natural language.",
   status: "Running" as const,
