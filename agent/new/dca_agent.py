@@ -578,13 +578,13 @@ def get_jupiter_quote(
     output_token: str,
     amount: float,
     slippage_bps: int = 100,
+    taker: Optional[str] = None,
 ) -> dict:
     """
     Preview a swap using the Jupiter v2 build API.
 
-    The v2 /build endpoint replaces the old two-step
-    quote-api.jup.ag/v6/quote → quote-api.jup.ag/v6/swap flow.
-    We call it in 'preview' mode (no wallet/taker) to get routing info.
+    Jupiter v2 requires a taker wallet address even for quote previews.
+    Defaults to the configured AI Agent wallet pubkey.
     """
     amount = float(amount)
     slippage_bps = int(slippage_bps)
@@ -593,6 +593,12 @@ def get_jupiter_quote(
         return {
             "error": "Jupiter quotes require mainnet RPC. Current cluster is devnet.",
             "hint": "Set SOLANA_RPC_URL to a mainnet endpoint for token swaps.",
+        }
+
+    wallet_pubkey = (taker or get_wallet_pubkey() or "").strip()
+    if not wallet_pubkey:
+        return {
+            "error": "AI Agent wallet not configured. Set DCA_WALLET_PRIVATE_KEY for Jupiter quotes.",
         }
 
     inp = resolve_token(input_token)
@@ -605,13 +611,16 @@ def get_jupiter_quote(
     raw_amount = _lamports(amount, inp["decimals"])
 
     params = {
-        "inputMint":               inp["mint"],
-        "outputMint":              out["mint"],
-        "amount":                  str(raw_amount),
-        "slippageBps":             str(slippage_bps),
-        "wrapAndUnwrapSol":        "true",
+        "inputMint":                  inp["mint"],
+        "outputMint":                 out["mint"],
+        "amount":                     str(raw_amount),
+        "taker":                      wallet_pubkey,
+        "payer":                      wallet_pubkey,
+        "slippageBps":                str(slippage_bps),
+        "wrapAndUnwrapSol":           "true",
         "computeUnitPricePercentile": "high",
-        "maxAccounts":             "54",
+        "maxAccounts":                "54",
+        "skipUserAccountsRpcCalls":   "true",
     }
 
     try:
@@ -2279,7 +2288,7 @@ def _user_confirmed(user_input: Optional[str]) -> bool:
     text = (user_input or "").strip().lower()
     if not text:
         return False
-    return any(re.search(pattern, text) for pattern in _CONF_PHRASES)
+    return any(re.search(pattern, text) for pattern in _CONFIRM_PHRASES)
 
 
 def _user_declined(user_input: Optional[str]) -> bool:
