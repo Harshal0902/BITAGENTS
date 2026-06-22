@@ -2267,11 +2267,44 @@ def _confirmation_key(user_wallet: Optional[str], session_id: Optional[str]) -> 
     return f"{wallet}:{session}"
 
 
+def _canonicalize_confirm_value(key: str, value: Any) -> Any:
+    if value is None:
+        return None
+    if key in {"start_immediately", "dry_run", "active_only"}:
+        return _coerce_bool(value)
+    if key in {"max_executions", "slippage_bps"}:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return value
+    if key in {"amount_per_buy", "total_budget", "amount"} or isinstance(value, float):
+        try:
+            return round(float(value), 12)
+        except (TypeError, ValueError):
+            return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if key in {"input_token", "output_token", "token", "interval", "action", "plan_id", "name"}:
+            if _looks_like_mint(stripped):
+                return stripped
+            return stripped.upper()
+        try:
+            return round(float(stripped), 12)
+        except ValueError:
+            return stripped
+    return value
+
+
 def _normalize_confirmation_args(tool_name: str, args: dict) -> dict:
-    normalized = dict(args or {})
-    if tool_name in {"execute_dca_now", "execute_swap_buy"}:
-        normalized.pop("dry_run", None)
-    normalized.pop("user_wallet", None)
+    normalized: dict[str, Any] = {}
+    for key, value in (args or {}).items():
+        if key == "user_wallet":
+            continue
+        if tool_name in {"execute_dca_now", "execute_swap_buy"} and key == "dry_run":
+            continue
+        normalized[key] = _canonicalize_confirm_value(key, value)
     return normalized
 
 
@@ -2340,18 +2373,103 @@ def _summarize_pending_action(tool_name: str, args: dict) -> str:
     return f"{tool_name}({args})"
 
 
+def _merge_tool_args(stored: dict, current: dict) -> dict:
+    """Prefer stored pending args; fill gaps from the current tool call."""
+    merged = dict(stored or {})
+    for key, value in (current or {}).items():
+        if key == "user_wallet":
+            continue
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if key not in merged or merged[key] is None:
+            merged[key] = value
+    return merged
+
+
+def _format_pending_execution_reply(tool_name: str, result: str) -> str:
+    try:
+        data = json.loads(result)
+    except json.JSONDecodeError:
+        return result
+
+    if data.get("status") == "confirmation_required":
+        return str(data.get("message") or result)
+    if "error" in data:
+        return f"Could not complete the action: {data['error']}"
+
+    if tool_name == "create_dca_plan" and data.get("status") == "created":
+        plan = data.get("plan") or {}
+        parts = [
+            f"DCA plan **{plan.get('name', 'created')}** is live (ID `{plan.get('id')}`).",
+            f"Buying **{plan.get('amount_per_buy')} {plan.get('input_token')}** "
+            f"→ **{plan.get('output_token')}** every **{plan.get('interval')}**.",
+        ]
+        if plan.get("max_executions") is not None:
+            parts.append(f"Max buys: **{plan.get('max_executions')}**.")
+        if plan.get("total_budget") is not None:
+            parts.append(f"Budget: **{plan.get('total_budget')} {plan.get('input_token')}**.")
+        parts.append("\nNot financial advice. DYOR.")
+        return " ".join(parts)
+
+    if tool_name == "update_dca_plan_status" and "status" in data:
+        return f"Plan updated. New status: **{data['status']}**.\n\nNot financial advice. DYOR."
+
+    if tool_name in {"execute_dca_now", "execute_swap_buy"}:
+        msg = data.get("message") or data.get("status") or "Swap executed."
+        return f"{msg}\n\nNot financial advice. DYOR."
+
+    if tool_name == "withdraw_user_tokens":
+        sig = data.get("signature") or data.get("tx_signature")
+        if sig:
+            return f"Withdrawal sent. Signature: `{sig}`\n\nNot financial advice. DYOR."
+        return f"{data.get('message', 'Withdrawal submitted.')}\n\nNot financial advice. DYOR."
+
+    return result
+
+
+def _try_execute_pending_confirmation(
+    user_wallet: Optional[str],
+    session_id: Optional[str],
+    user_input: Optional[str],
+) -> Optional[tuple[str, dict, str, str]]:
+    """When the user confirms, run the stored pending action immediately."""
+    if not user_wallet or not _user_confirmed(user_input) or _user_declined(user_input):
+        return None
+
+    key = _confirmation_key(user_wallet, session_id)
+    with _CONFIRMATION_LOCK:
+        pending = _pending_confirmations.pop(key, None)
+    if not pending:
+        return None
+
+    tool_name = pending["tool"]
+    args = dict(pending.get("args") or {})
+    result = execute_tool(
+        tool_name,
+        args,
+        user_wallet=user_wallet,
+        user_input=user_input,
+        session_id=session_id,
+        skip_confirmation=True,
+    )
+    reply = _format_pending_execution_reply(tool_name, result)
+    return tool_name, args, result, reply
+
+
 def _check_action_confirmation(
     tool_name: str,
     args: dict,
     user_input: Optional[str],
     user_wallet: Optional[str],
     session_id: Optional[str],
-) -> Optional[str]:
-    if not _tool_requires_confirmation(tool_name, args):
-        return None
+    skip_confirmation: bool = False,
+) -> tuple[Optional[str], dict]:
+    if skip_confirmation or not _tool_requires_confirmation(tool_name, args):
+        return None, args
 
     key = _confirmation_key(user_wallet, session_id)
-    fingerprint = _action_fingerprint(tool_name, args)
     summary = _summarize_pending_action(tool_name, args)
 
     if _user_declined(user_input):
@@ -2365,33 +2483,20 @@ def _check_action_confirmation(
                     "cancelled_action": pending.get("summary") or summary,
                 },
                 indent=2,
-            )
+            ), args
         # No pending action - treat "no" as not confirmed and require confirmation.
 
     if _user_confirmed(user_input):
         with _CONFIRMATION_LOCK:
-            pending = _pending_confirmations.get(key)
-            if pending and pending.get("fingerprint") != fingerprint:
-                return json.dumps(
-                    {
-                        "status": "confirmation_required",
-                        "message": (
-                            "Your confirmation does not match the pending action. "
-                            f"Please confirm before I proceed: {summary}. Reply **yes** to proceed."
-                        ),
-                        "pending_action": summary,
-                        "tool": tool_name,
-                    },
-                    indent=2,
-                )
-            _pending_confirmations.pop(key, None)
-        return None
+            pending = _pending_confirmations.pop(key, None)
+        if pending and pending.get("tool") == tool_name:
+            args = _merge_tool_args(pending.get("args") or {}, args)
+        return None, args
 
     with _CONFIRMATION_LOCK:
         _pending_confirmations[key] = {
             "tool": tool_name,
             "args": args,
-            "fingerprint": fingerprint,
             "summary": summary,
         }
 
@@ -2406,7 +2511,7 @@ def _check_action_confirmation(
             "tool": tool_name,
         },
         indent=2,
-    )
+    ), args
 
 
 def execute_tool(
@@ -2415,6 +2520,7 @@ def execute_tool(
     user_wallet: Optional[str] = None,
     user_input: Optional[str] = None,
     session_id: Optional[str] = None,
+    skip_confirmation: bool = False,
 ) -> str:
     func = TOOL_MAP.get(tool_name)
     if not func:
@@ -2460,12 +2566,13 @@ def execute_tool(
             elif tool_name in {"get_dca_plan", "update_dca_plan_status", "execute_dca_now", "get_dca_history"}:
                 args["user_wallet"] = auth_wallet
 
-        blocked = _check_action_confirmation(
+        blocked, args = _check_action_confirmation(
             tool_name,
             args,
             user_input=user_input,
             user_wallet=auth_wallet,
             session_id=session_id,
+            skip_confirmation=skip_confirmation,
         )
         if blocked:
             return blocked
@@ -2485,6 +2592,15 @@ def run_agent_with_actions(
 ) -> tuple[str, list, list[dict[str, Any]]]:
     """Run one user turn; returns reply, updated history, and tool action trace."""
     actions: list[dict[str, Any]] = []
+
+    pending_execution = _try_execute_pending_confirmation(user_wallet, session_id, user_input)
+    if pending_execution:
+        tool_name, args, result, reply = pending_execution
+        actions.append({"tool": tool_name, "args": args, "result": result})
+        conversation_history.append({"role": "user", "content": user_input.strip()})
+        conversation_history.append({"role": "assistant", "content": reply})
+        return reply, conversation_history, actions
+
     prompt = user_input.strip()
     lower = prompt.lower()
     if re.search(r"\b(list|show|view|see)\b", lower) and re.search(r"\bplan", lower):
@@ -2493,6 +2609,12 @@ def run_agent_with_actions(
             "\n[Instruction: call list_dca_plans for this user before answering. "
             f"Use active_only={str(active_only).lower()}. "
             "Do not guess plan counts or IDs.]"
+        )
+    if _user_confirmed(user_input) and not _user_declined(user_input):
+        prompt += (
+            "\n[Instruction: the user confirmed the pending action. "
+            "Do not ask for confirmation again. Execute the confirmed mutating tool "
+            "with the same parameters as before. Do not call list_dca_plans unless they asked.]"
         )
     if user_wallet:
         prompt = f"[Connected user wallet: {user_wallet}]\n{prompt}"
