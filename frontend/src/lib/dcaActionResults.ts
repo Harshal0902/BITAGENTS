@@ -96,6 +96,34 @@ export function parseActionResult(result: string): ParsedActionResult {
   };
 }
 
+export function parseConfirmationRequired(result: string): {
+  message: string;
+  pendingAction?: string;
+} | null {
+  try {
+    const parsed = JSON.parse(result) as Record<string, unknown>;
+    if (parsed.status !== "confirmation_required") return null;
+    if (typeof parsed.message !== "string") return null;
+    return {
+      message: parsed.message,
+      pendingAction:
+        typeof parsed.pending_action === "string" ? parsed.pending_action : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function findLatestConfirmationRequired(
+  actions: Array<{ result: string }>
+): { message: string; pendingAction?: string } | null {
+  for (let i = actions.length - 1; i >= 0; i -= 1) {
+    const pending = parseConfirmationRequired(actions[i].result);
+    if (pending) return pending;
+  }
+  return null;
+}
+
 export function mergeTransactions(
   existing: ParsedTransaction[],
   incoming: ParsedTransaction[]

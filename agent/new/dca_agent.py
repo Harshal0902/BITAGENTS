@@ -1083,7 +1083,7 @@ def _execute_devnet_sol_transfer(amount_sol: float) -> dict:
         return {"error": str(e)}
 
 
-ASSOCIATED_TOKEN_PROGRAM_ID = "ATokenGPvbdGoxRfTH6KzqYShx9fN2L6Q"
+ASSOCIATED_TOKEN_PROGRAM_ID = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 SYSTEM_PROGRAM_ID = SOL_ADDRESS_SHORT
@@ -1161,6 +1161,17 @@ def _create_ata_instruction(
     )
 
 
+def _normalize_rpc_pubkey(value: Any) -> Optional[str]:
+    if isinstance(value, str) and len(value.strip()) >= 32:
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("pubkey", "address", "value"):
+            nested = value.get(key)
+            if isinstance(nested, str) and len(nested.strip()) >= 32:
+                return nested.strip()
+    return None
+
+
 def _wallet_token_account_for_mint(
     wallet_pubkey: str,
     mint_address: str,
@@ -1184,8 +1195,10 @@ def _wallet_token_account_for_mint(
             [wallet_pubkey, {"mint": mint_address}, {"encoding": "jsonParsed"}],
         )
         accounts = (result or {}).get("value") or []
-        if accounts:
-            return accounts[0].get("pubkey")
+        for entry in accounts:
+            pubkey = _normalize_rpc_pubkey(entry.get("pubkey") if isinstance(entry, dict) else entry)
+            if pubkey:
+                return pubkey
     except Exception:
         pass
     return None

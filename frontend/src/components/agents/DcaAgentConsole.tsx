@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Panel } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DcaAgentDeposit } from "@/components/agents/DcaAgentDeposit";
-import { explorerUrlForSignature, mergeTransactions } from "@/lib/dcaActionResults";
+import { explorerUrlForSignature, findLatestConfirmationRequired, mergeTransactions } from "@/lib/dcaActionResults";
 import { DCA_AGENT, DCA_EXAMPLE_PROMPTS } from "@/lib/dcaAgentSimulation";
 import {
   fetchDcaAgentHealth,
@@ -151,6 +152,8 @@ export function DcaAgentConsole() {
   const [actions, setActions] = useState<AgentAction[]>([]);
   const [transactions, setTransactions] = useState<ParsedTransaction[]>([]);
   const [userBalances, setUserBalances] = useState<UserDepositBalances | null>(null);
+  const [agentConfirmOpen, setAgentConfirmOpen] = useState(false);
+  const [agentConfirmMessage, setAgentConfirmMessage] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const actionsEndRef = useRef<HTMLDivElement>(null);
 
@@ -203,6 +206,13 @@ export function DcaAgentConsole() {
       setSessionId(data.session_id);
       setActions((prev) => [...prev, ...mapped]);
       setTransactions((prev) => mergeTransactions(prev, turnTxs));
+
+      const pendingConfirm = findLatestConfirmationRequired(mapped);
+      if (pendingConfirm) {
+        setAgentConfirmMessage(pendingConfirm.message);
+        setAgentConfirmOpen(true);
+      }
+
       setMessages((prev) => [
         ...prev,
         {
@@ -424,6 +434,33 @@ export function DcaAgentConsole() {
           </div>
         </Panel>
       </div>
+
+      <ConfirmDialog
+        open={agentConfirmOpen}
+        onOpenChange={(open) => {
+          setAgentConfirmOpen(open);
+          if (!open) setAgentConfirmMessage(null);
+        }}
+        title="Confirm DCA action"
+        description={
+          <p className="whitespace-pre-wrap">
+            {agentConfirmMessage ?? "Please confirm before the agent proceeds."}
+          </p>
+        }
+        confirmLabel="Yes, proceed"
+        cancelLabel="No, cancel"
+        busy={busy}
+        onCancel={() => {
+          setAgentConfirmOpen(false);
+          setAgentConfirmMessage(null);
+          void runCommand("no, cancel");
+        }}
+        onConfirm={() => {
+          setAgentConfirmOpen(false);
+          setAgentConfirmMessage(null);
+          void runCommand("yes, confirm");
+        }}
+      />
     </div>
   );
 }

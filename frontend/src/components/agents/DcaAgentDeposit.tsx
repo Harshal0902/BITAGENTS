@@ -10,6 +10,7 @@ import {
 } from "@solana/spl-token";
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import { useCallback, useEffect, useState } from "react";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Panel } from "@/components/AppShell";
 import { LegalSignInNotice } from "@/components/legal/LegalSignInNotice";
 import { explorerUrlForSignature } from "@/lib/dcaActionResults";
@@ -84,6 +85,10 @@ export function DcaAgentDeposit({
   const [verifyBusy, setVerifyBusy] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
   const [depositPhase, setDepositPhase] = useState<string | null>(null);
+  const [withdrawConfirmOpen, setWithdrawConfirmOpen] = useState(false);
+  const [pendingWithdraw, setPendingWithdraw] = useState<{ token: string; amount: number } | null>(
+    null
+  );
 
   const refreshBalances = useCallback(async () => {
     if (!publicKey || !authToken) {
@@ -323,7 +328,7 @@ export function DcaAgentDeposit({
   const selectedWithdrawRow = balances.find((row) => row.token === withdrawToken);
   const withdrawableAmount = selectedWithdrawRow?.withdrawable ?? 0;
 
-  async function handleWithdraw() {
+  function requestWithdraw() {
     if (!publicKey || !authToken || !withdrawToken || !withdrawAmount) return;
     const parsed = Number(withdrawAmount);
     if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -334,21 +339,29 @@ export function DcaAgentDeposit({
       setError(`Maximum withdrawable ${withdrawToken}: ${withdrawableAmount}`);
       return;
     }
+    setError(null);
+    setPendingWithdraw({ token: withdrawToken, amount: parsed });
+    setWithdrawConfirmOpen(true);
+  }
 
-    const confirmed = window.confirm(
-      `Please confirm before proceeding:\n\nWithdraw ${parsed} ${withdrawToken} to your connected wallet?`
-    );
-    if (!confirmed) return;
+  async function executeWithdraw() {
+    if (!publicKey || !authToken || !pendingWithdraw) return;
 
     setWithdrawBusy(true);
     setError(null);
     setLastWithdrawTx(null);
 
     try {
-      const result = await withdrawTokens(withdrawToken, parsed, authToken);
+      const result = await withdrawTokens(
+        pendingWithdraw.token,
+        pendingWithdraw.amount,
+        authToken
+      );
       if (result.signature) setLastWithdrawTx(result.signature);
       await refreshBalances();
       setWithdrawAmount("");
+      setWithdrawConfirmOpen(false);
+      setPendingWithdraw(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Withdrawal failed");
     } finally {
@@ -535,7 +548,7 @@ export function DcaAgentDeposit({
               />
               <button
                 type="button"
-                onClick={() => void handleWithdraw()}
+                onClick={() => requestWithdraw()}
                 disabled={
                   withdrawBusy ||
                   !connected ||
@@ -605,6 +618,32 @@ export function DcaAgentDeposit({
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={withdrawConfirmOpen}
+        onOpenChange={(open) => {
+          setWithdrawConfirmOpen(open);
+          if (!open) setPendingWithdraw(null);
+        }}
+        title="Confirm withdrawal"
+        description={
+          pendingWithdraw ? (
+            <p>
+              Please confirm before proceeding: withdraw{" "}
+              <strong className="text-foreground">
+                {pendingWithdraw.amount} {pendingWithdraw.token}
+              </strong>{" "}
+              to your connected wallet.
+            </p>
+          ) : (
+            "Please confirm this withdrawal."
+          )
+        }
+        confirmLabel="Withdraw"
+        cancelLabel="Cancel"
+        busy={withdrawBusy}
+        onConfirm={() => void executeWithdraw()}
+      />
     </Panel>
   );
 }
