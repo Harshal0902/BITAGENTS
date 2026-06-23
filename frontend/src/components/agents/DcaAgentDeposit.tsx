@@ -391,7 +391,7 @@ export function DcaAgentDeposit({
   }
 
   return (
-    <Panel title="// AI Agent wallet · deposit & withdraw">
+    <Panel title="AI Agent wallet · deposit & withdraw">
       <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
@@ -413,14 +413,14 @@ export function DcaAgentDeposit({
             )}
           </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        {/* <div className="flex flex-wrap items-center gap-3">
           <WalletMultiButton className="wallet-adapter-button-trigger" />
           {connected && publicKey && (
             <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
               {publicKey.toBase58().slice(0, 4)}…{publicKey.toBase58().slice(-4)}
             </span>
           )}
-        </div>
+        </div> */}
 
         <LegalSignInNotice />
 

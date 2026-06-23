@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
-import { AgentCard } from "@/components/agents/AgentCard";
+import { MarketplaceFeaturedAgents } from "@/components/agents/MarketplaceFeaturedAgents";
 import { MarketplaceStatsBar } from "@/components/agents/MarketplaceStatsBar";
 import { AppShell } from "@/components/AppShell";
 import { AGENT_CATEGORIES, FEATURED_AGENTS } from "@/lib/agentsCatalog";
@@ -15,68 +15,19 @@ export function AgentMarketplace() {
     >
       <MarketplaceStatsBar />
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_280px]">
+      <div className="mt-8 grid gap-6">
         <section>
           <div className="mb-4 flex items-center justify-between gap-3">
             <h2 className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-              // Featured agents
+              Featured agents
             </h2>
             <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
               {listedCount} listed
             </span>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {FEATURED_AGENTS.map((agent) => (
-              <AgentCard key={agent.id} agent={agent} />
-            ))}
-          </div>
+          <MarketplaceFeaturedAgents />
         </section>
-
-        <aside className="space-y-6">
-          <div className="border border-grid bg-surface/40">
-            <div className="border-b border-grid px-4 py-2.5">
-              <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-                // Categories
-              </span>
-            </div>
-            <ul className="divide-y divide-grid">
-              {AGENT_CATEGORIES.map(({ name, count }) => (
-                <li
-                  key={name}
-                  className="flex items-center justify-between px-4 py-3 font-mono text-xs uppercase tracking-[0.12em]"
-                >
-                  <span className="text-foreground">{name}</span>
-                  <span className="text-muted-foreground">{count}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="border border-grid bg-surface/40">
-            <div className="border-b border-grid px-4 py-2.5">
-              <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-                // Quick links
-              </span>
-            </div>
-            <div className="space-y-3 p-4">
-              <Link
-                href="/agents/dca"
-                className="flex items-center justify-between bg-signal px-4 py-3 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-primary-foreground transition hover:opacity-90"
-              >
-                Monitor running agents
-                <ArrowRight size={14} />
-              </Link>
-              <Link
-                href="/analytics"
-                className="flex items-center justify-between border border-grid px-4 py-3 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-signal hover:text-signal"
-              >
-                Protocol analytics
-                <ArrowRight size={14} />
-              </Link>
-            </div>
-          </div>
-        </aside>
       </div>
     </AppShell>
   );

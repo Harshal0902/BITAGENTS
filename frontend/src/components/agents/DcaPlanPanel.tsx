@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
 import { Panel } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { explorerUrlForSignature } from "@/lib/dcaActionResults";
@@ -15,6 +16,10 @@ import {
   type DcaPlanSummary,
   type LedgerEntry,
 } from "@/lib/dcaPlanClient";
+
+const SECTION_MAX_HEIGHT = "max-h-[280px]";
+
+type PlanStatusFilter = "all" | "active" | "paused" | "completed" | "cancelled";
 
 function shortMint(mint?: string | null) {
   if (!mint) return "—";
@@ -38,15 +43,58 @@ function statusClass(status: string) {
   return "text-foreground";
 }
 
+function CollapsibleSection({
+  title,
+  count,
+  defaultOpen = true,
+  headerExtra,
+  children,
+}: {
+  title: string;
+  count?: number;
+  defaultOpen?: boolean;
+  headerExtra?: ReactNode;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <Panel
+      title={`${title}${count != null ? ` (${count})` : ""}`}
+      action={
+        <div className="flex items-center gap-2">
+          {headerExtra}
+          <button
+            type="button"
+            onClick={() => setOpen((value) => !value)}
+            className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground transition hover:text-signal"
+            aria-expanded={open}
+          >
+            {open ? "Hide" : "Show"}
+            <ChevronDown
+              size={14}
+              className={`transition-transform ${open ? "rotate-180" : ""}`}
+            />
+          </button>
+        </div>
+      }
+    >
+      {open ? (
+        <div className={`${SECTION_MAX_HEIGHT} overflow-y-auto pr-1`}>{children}</div>
+      ) : (
+        <p className="font-mono text-[10px] text-muted-foreground">Section collapsed.</p>
+      )}
+    </Panel>
+  );
+}
+
 function PlanRow({
   plan,
-  cluster,
   authToken,
   busy,
   onUpdated,
 }: {
   plan: DcaPlanSummary;
-  cluster?: string;
   authToken: string;
   busy: boolean;
   onUpdated: () => void;
@@ -112,9 +160,7 @@ function PlanRow({
         </div>
       </dl>
 
-      {actionError && (
-        <p className="mt-2 font-mono text-[10px] text-warn">{actionError}</p>
-      )}
+      {actionError && <p className="mt-2 font-mono text-[10px] text-warn">{actionError}</p>}
 
       <div className="mt-3 flex flex-wrap gap-2">
         {plan.status === "active" && (
@@ -190,9 +236,7 @@ function ExecutionRow({ row, cluster }: { row: DcaExecutionRow; cluster?: string
         {formatTime(row.at)} · plan `{row.plan_id}` · {row.amount} {row.input_token}
         {row.output_amount != null && ` → ${row.output_amount} ${row.output_token}`}
       </div>
-      {row.error && (
-        <p className="mt-1 font-mono text-[10px] text-warn">{row.error}</p>
-      )}
+      {row.error && <p className="mt-1 font-mono text-[10px] text-warn">{row.error}</p>}
       {href && row.signature && (
         <a
           href={href}
@@ -252,6 +296,8 @@ export function DcaPlanPanel({
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<PlanStatusFilter>("all");
+  const [searchQuery, setSearchQuery] = useState("");
 
   const reload = useCallback(async () => {
     if (!authToken) {
@@ -288,54 +334,92 @@ export function DcaPlanPanel({
     return () => window.clearInterval(interval);
   }, [authToken, reload]);
 
+  const filteredPlans = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return plans.filter((plan) => {
+      if (statusFilter !== "all" && plan.status !== statusFilter) return false;
+      if (!query) return true;
+      return (
+        plan.name.toLowerCase().includes(query) ||
+        plan.pair.toLowerCase().includes(query) ||
+        plan.id.toLowerCase().includes(query) ||
+        (plan.input_mint ?? "").toLowerCase().includes(query) ||
+        (plan.output_mint ?? "").toLowerCase().includes(query)
+      );
+    });
+  }, [plans, statusFilter, searchQuery]);
+
   if (!authToken) {
     return (
-      <Panel title="// Your DCA plans">
+      <CollapsibleSection title="Your DCA plans" defaultOpen>
         <p className="font-mono text-xs text-muted-foreground">
           Sign in with your wallet to view plans and swap history here — no need to ask the agent to list them.
         </p>
-      </Panel>
+      </CollapsibleSection>
     );
   }
 
   return (
     <div className="space-y-6">
-      <Panel
-        title="// Your DCA plans"
-        action={
+      <CollapsibleSection
+        title="Your DCA plans"
+        count={filteredPlans.length}
+        defaultOpen
+        headerExtra={
           <button
             type="button"
             onClick={() => void reload()}
             disabled={loading}
             className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground transition hover:text-signal disabled:opacity-40"
           >
-            {loading ? "Refreshing…" : "Refresh"}
+            {loading ? "…" : "Refresh"}
           </button>
         }
       >
-        {error && (
-          <p className="mb-3 font-mono text-[11px] text-warn">{error}</p>
-        )}
-        {plans.length === 0 && !loading && (
+        {error && <p className="mb-3 font-mono text-[11px] text-warn">{error}</p>}
+
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search name, pair, id, mint…"
+            className="flex-1 border border-grid bg-background px-3 py-2 font-mono text-[11px] text-foreground outline-none focus:border-signal"
+          />
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as PlanStatusFilter)}
+            className="border border-grid bg-background px-3 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-foreground outline-none focus:border-signal"
+          >
+            <option value="all">All statuses</option>
+            <option value="active">Active</option>
+            <option value="paused">Paused</option>
+            <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+
+        {filteredPlans.length === 0 && !loading && (
           <p className="font-mono text-xs text-muted-foreground">
-            No DCA plans yet. Create one via chat above.
+            {plans.length === 0
+              ? "No DCA plans yet. Create one via chat above."
+              : "No plans match your filters."}
           </p>
         )}
+
         <div className="grid gap-3 lg:grid-cols-2">
-          {plans.map((plan) => (
+          {filteredPlans.map((plan) => (
             <PlanRow
               key={plan.id}
               plan={plan}
-              cluster={cluster}
               authToken={authToken}
               busy={loading}
               onUpdated={() => void reload()}
             />
           ))}
         </div>
-      </Panel>
+      </CollapsibleSection>
 
-      <Panel title="// DCA swap history">
+      <CollapsibleSection title="DCA swap history" count={executions.length} defaultOpen={false}>
         {executions.length === 0 && !loading && (
           <p className="font-mono text-xs text-muted-foreground">
             Completed DCA buys will appear here with on-chain signatures.
@@ -346,9 +430,13 @@ export function DcaPlanPanel({
             <ExecutionRow key={`${row.plan_id}-${row.at}-${index}`} row={row} cluster={cluster} />
           ))}
         </div>
-      </Panel>
+      </CollapsibleSection>
 
-      <Panel title="// Wallet ledger · deposits & withdrawals">
+      <CollapsibleSection
+        title="Wallet ledger · deposits & withdrawals"
+        count={ledger.length}
+        defaultOpen={false}
+      >
         {ledger.length === 0 && !loading && (
           <p className="font-mono text-xs text-muted-foreground">
             Deposits, DCA spends, acquired tokens, and withdrawals are recorded here.
@@ -359,7 +447,7 @@ export function DcaPlanPanel({
             <LedgerRow key={entry.id} entry={entry} cluster={cluster} />
           ))}
         </div>
-      </Panel>
+      </CollapsibleSection>
     </div>
   );
 }

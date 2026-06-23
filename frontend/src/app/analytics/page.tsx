@@ -25,19 +25,19 @@ export default function AnalyticsPage() {
             </div>
 
             <div className="mt-6 grid gap-6 lg:grid-cols-2">
-                <Panel title="// Agent Tasks · 24h Volume">
+                <Panel title="Agent Tasks · 24h Volume">
                     <Chart data={taskVolume} color="var(--signal)" gradientId="tasks" />
                 </Panel>
 
-                <Panel title="// New Agent Deployments">
+                <Panel title="New Agent Deployments">
                     <Chart data={deployments} color="var(--warn)" gradientId="deployments" />
                 </Panel>
 
-                <Panel title="// Task Completion Rate · 30d">
+                <Panel title="Task Completion Rate · 30d">
                     <Chart data={completions} color="var(--signal)" gradientId="completions" />
                 </Panel>
 
-                <Panel title="// Marketplace Settlement">
+                <Panel title="Marketplace Settlement">
                     <div className="space-y-5 py-2">
                         <Split label="Agent developers" pct={55} value="$23,540" />
                         <Split label="Task runners" pct={35} value="$14,980" />

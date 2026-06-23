@@ -288,6 +288,26 @@ def sol_rpc(method: str, params: list, timeout: int = 30) -> Any:
     return data.get("result")
 
 
+def _rpc_u64(value: Any) -> int:
+    """Normalize Solana RPC numeric results (plain int or {value: int})."""
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    if isinstance(value, dict):
+        for key in ("value", "amount", "lamports"):
+            if key in value:
+                return _rpc_u64(value[key])
+    return 0
+
+
 def _short_mint(mint: str) -> str:
     if len(mint) <= 12:
         return mint
@@ -508,7 +528,7 @@ def get_wallet_status() -> dict:
             "note": "Set DCA_WALLET_PRIVATE_KEY (base58 or JSON array) to enable live swaps.",
         }
     try:
-        lamports = sol_rpc("getBalance", [pubkey])
+        lamports = _rpc_u64(sol_rpc("getBalance", [pubkey]))
         balance = lamports / 1e9
         return {
             "wallet_configured": True,
@@ -2853,6 +2873,14 @@ def run_agent_with_actions(
             "\n[Instruction: call list_dca_plans for this user before answering. "
             f"Use active_only={str(active_only).lower()}. "
             "Do not guess plan counts or IDs.]"
+        )
+    if re.search(r"\bbalance", lower) and re.search(
+        r"\b(check|show|view|see|my|wallet|deposit|available)\b", lower
+    ):
+        prompt += (
+            "\n[Instruction: call get_user_deposit_balance(user_wallet) once for the connected user. "
+            "Summarize deposited, available, withdrawable, and reserved amounts per token. "
+            "Do not retry tools in a loop if one call succeeds. get_wallet_status is optional.]"
         )
     if _user_confirmed(user_input) and not _user_declined(user_input):
         prompt += (

@@ -6,13 +6,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const appLinks = [
-  { href: "/agents", label: "Marketplace", match: (path: string) => path === "/agents" },
-  // {
-  //   href: "/agents/dca",
-  //   label: "Agents",
-  //   match: (path: string) => path.startsWith("/agents/") && path !== "/agents",
-  // },
-  { href: "/analytics", label: "Analytics", match: (path: string) => path === "/analytics" },
+  { href: "/agents", label: "Marketplace", match: (path: string) => path === "/agents" }
 ];
 
 const marketingLinks = [

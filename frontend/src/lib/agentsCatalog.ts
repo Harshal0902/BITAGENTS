@@ -147,7 +147,6 @@ export function getAgentBySlug(slug: string): MarketplaceAgent | undefined {
 }
 
 export const DCA_QUICK_ACTIONS = [
-  // "Check my wallet status",
   "List my DCA plans",
   "Analyze SOL for DCA timing",
   "Execute plan dry run",

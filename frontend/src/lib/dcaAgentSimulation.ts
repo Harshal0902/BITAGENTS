@@ -220,7 +220,6 @@ export function simulateDcaAgent(command: string): SimulationResult {
 }
 
 export const DCA_EXAMPLE_PROMPTS = [
-  // "Check my wallet status",
   "List my DCA plans",
   "DCA $10 USDC into JUP every day, budget $300",
   "Analyze JUP for DCA timing",
@@ -233,7 +232,7 @@ export const DCA_AGENT = {
   slug: "dca",
   tagline: "Recurring buys · Jupiter swaps",
   description:
-    "Set up dollar-cost averaging on Solana. Schedule recurring token buys, preview Jupiter quotes, and manage plans from natural language.",
+    "Set up dollar-cost averaging on Solana.",
   status: "Running" as const,
   task: "Monitoring 2 active DCA plans on devnet",
   strategy: "dca-scheduler",

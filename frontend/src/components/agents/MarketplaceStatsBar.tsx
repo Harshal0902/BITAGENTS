@@ -26,11 +26,11 @@ export function MarketplaceStatsBar() {
   }, []);
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       <Stat label="Active DCA plans" value={stats.liveAgents} accent="signal" />
       <Stat label="DCA swaps · 24h" value={stats.tasks24h} />
       <Stat label="DCA users" value={stats.activeBuilders} />
-      <Stat label="Uptime · 30d" value={stats.uptime30d} accent="signal" />
+      {/* <Stat label="Uptime · 30d" value={stats.uptime30d} accent="signal" /> */}
     </div>
   );
 }

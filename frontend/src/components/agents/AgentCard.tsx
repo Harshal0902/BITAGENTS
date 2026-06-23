@@ -5,7 +5,13 @@ import Link from "next/link";
 import { AGENT_ICONS } from "@/lib/agentsCatalog";
 import type { MarketplaceAgent } from "@/lib/agentsCatalog";
 
-export function AgentCard({ agent }: { agent: MarketplaceAgent }) {
+export function AgentCard({
+  agent,
+  runsLabel = "Runs",
+}: {
+  agent: MarketplaceAgent;
+  runsLabel?: string;
+}) {
   const Icon = AGENT_ICONS[agent.iconId];
 
   const inner = (
@@ -14,10 +20,10 @@ export function AgentCard({ agent }: { agent: MarketplaceAgent }) {
         <div className="flex h-10 w-10 items-center justify-center border border-grid bg-background/80 text-signal">
           <Icon size={18} strokeWidth={1.75} />
         </div>
-        <div className="flex items-center gap-1 font-mono text-[11px] text-muted-foreground">
+        {/* <div className="flex items-center gap-1 font-mono text-[11px] text-muted-foreground">
           <Star size={12} className="fill-signal text-signal" />
           <span className="text-foreground">{agent.rating.toFixed(1)}</span>
-        </div>
+        </div> */}
       </div>
 
       <h3 className="mt-4 font-display text-lg font-bold transition group-hover:text-signal">
@@ -38,7 +44,7 @@ export function AgentCard({ agent }: { agent: MarketplaceAgent }) {
         </div>
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-            Runs
+            {runsLabel}
           </div>
           <div className="mt-1 font-display text-xl font-bold tabular-nums">{agent.runs}</div>
         </div>

@@ -249,8 +249,7 @@ export function DcaAgentConsole() {
           id: "welcome",
           role: "assistant",
           content: h
-            ? `Connected to DCA agent (**${h.model}** · **${h.cluster}**). Ask me to check your wallet, create plans, or manage DCA schedules.`
-            // : "DCA agent API is offline. Start it locally:\n\n`cd agent/new`\n`python dca_api.py`\n\nSet `OPEN_ROUTER_API` and `DATABASE_URL` in `agent/new/.env`.",
+            ? `Connected to DCA agent (**${h.model}** · **${h.cluster}**). Ask me to create plans, or manage DCA schedules.`
             : "DCA agent API is offline.",
         },
       ]);
@@ -333,7 +332,7 @@ export function DcaAgentConsole() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+      {/* <div className="flex flex-wrap items-center gap-3 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
         <Link href="/agents" className="transition hover:text-signal">
           ← Marketplace
         </Link>
@@ -356,7 +355,7 @@ export function DcaAgentConsole() {
             </span>
           </>
         )}
-      </div>
+      </div> */}
 
       {error && (
         <div className="border border-warn/40 bg-warn/10 px-4 py-3 font-mono text-xs text-warn">{error}</div>
@@ -396,7 +395,6 @@ export function DcaAgentConsole() {
 
       {userBalances && userBalances.balances.length > 0 && (
         <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-          DCA commands use wallet{" "}
           <span className="text-foreground">
             {userBalances.user_wallet.slice(0, 4)}…{userBalances.user_wallet.slice(-4)}
           </span>
@@ -404,7 +402,7 @@ export function DcaAgentConsole() {
       )}
 
       {transactions.length > 0 && (
-        <Panel title="// On-chain transactions · session">
+        <Panel title="On-chain transactions · session">
           <div className="grid gap-2 sm:grid-cols-2">
             {transactions.map((tx) => (
               <TxLink key={tx.signature} tx={tx} cluster={cluster} />
@@ -414,7 +412,7 @@ export function DcaAgentConsole() {
       )}
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Panel title="// Command · DCA Agent">
+        <Panel title="Command · DCA Agent">
           <div className="flex max-h-[420px] flex-col gap-4 overflow-y-auto pr-1">
             {messages.map((msg) => (
               <div
@@ -502,10 +500,10 @@ export function DcaAgentConsole() {
         </Panel>
 
         <Panel
-          title="// Agent actions · live"
+          title="Agent actions · live"
           action={
             <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-              {agentOnline ? "Live api" : "waiting"}
+              {!agentOnline && "Waiting"}
             </span>
           }
         >
