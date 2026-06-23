@@ -1,12 +1,9 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { AgentCard } from "@/components/agents/AgentCard";
-import { AppShell, Stat } from "@/components/AppShell";
-import {
-  AGENT_CATEGORIES,
-  FEATURED_AGENTS,
-  MARKETPLACE_STATS,
-} from "@/lib/agentsCatalog";
+import { MarketplaceStatsBar } from "@/components/agents/MarketplaceStatsBar";
+import { AppShell } from "@/components/AppShell";
+import { AGENT_CATEGORIES, FEATURED_AGENTS } from "@/lib/agentsCatalog";
 
 export function AgentMarketplace() {
   const listedCount = FEATURED_AGENTS.length;
@@ -16,12 +13,7 @@ export function AgentMarketplace() {
       title="Agent Marketplace"
       subtitle="Discover and deploy autonomous AI agents. Pay per task · settle on Solana."
     >
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Live agents" value={MARKETPLACE_STATS.liveAgents} accent="signal" />
-        <Stat label="Tasks · 24h" value={MARKETPLACE_STATS.tasks24h} />
-        <Stat label="Active builders" value={MARKETPLACE_STATS.activeBuilders} />
-        <Stat label="Uptime · 30d" value={MARKETPLACE_STATS.uptime30d} accent="signal" />
-      </div>
+      <MarketplaceStatsBar />
 
       <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_280px]">
         <section>

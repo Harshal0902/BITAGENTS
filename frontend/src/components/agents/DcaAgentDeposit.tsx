@@ -60,10 +60,12 @@ export function DcaAgentDeposit({
   cluster,
   authToken,
   onBalancesChange,
+  refreshTick = 0,
 }: {
   cluster?: string;
   authToken?: string | null;
   onBalancesChange?: (balances: UserDepositBalances | null) => void;
+  refreshTick?: number;
 }) {
   const { connection } = useConnection();
   const { publicKey, sendTransaction, connected } = useWallet();
@@ -86,9 +88,11 @@ export function DcaAgentDeposit({
   const [success, setSuccess] = useState<string | null>(null);
   const [depositPhase, setDepositPhase] = useState<string | null>(null);
   const [withdrawConfirmOpen, setWithdrawConfirmOpen] = useState(false);
-  const [pendingWithdraw, setPendingWithdraw] = useState<{ token: string; amount: number } | null>(
-    null
-  );
+  const [pendingWithdraw, setPendingWithdraw] = useState<{
+    token: string;
+    amount: number;
+    mint?: string | null;
+  } | null>(null);
 
   const refreshBalances = useCallback(async () => {
     if (!publicKey || !authToken) {
@@ -113,6 +117,19 @@ export function DcaAgentDeposit({
   useEffect(() => {
     void refreshBalances();
   }, [refreshBalances]);
+
+  useEffect(() => {
+    if (!authToken) return;
+    const interval = window.setInterval(() => {
+      void refreshBalances();
+    }, 60_000);
+    return () => window.clearInterval(interval);
+  }, [authToken, refreshBalances]);
+
+  useEffect(() => {
+    if (refreshTick <= 0) return;
+    void refreshBalances();
+  }, [refreshTick, refreshBalances]);
 
   useEffect(() => {
     if (!authToken) return;
@@ -340,7 +357,11 @@ export function DcaAgentDeposit({
       return;
     }
     setError(null);
-    setPendingWithdraw({ token: withdrawToken, amount: parsed });
+    setPendingWithdraw({
+      token: withdrawToken,
+      amount: parsed,
+      mint: selectedWithdrawRow?.mint,
+    });
     setWithdrawConfirmOpen(true);
   }
 
@@ -607,6 +628,11 @@ export function DcaAgentDeposit({
                       <span className="text-signal">dca +{row.acquired_from_dca}</span>
                     )}
                   </div>
+                  {row.mint && (
+                    <div className="mt-1 break-all font-mono text-[9px] text-muted-foreground">
+                      {row.mint}
+                    </div>
+                  )}
                   <div className="mt-1 grid grid-cols-3 gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
                     <span>dep {row.deposited}</span>
                     <span>rsv {row.reserved_for_plans}</span>
@@ -628,13 +654,20 @@ export function DcaAgentDeposit({
         title="Confirm withdrawal"
         description={
           pendingWithdraw ? (
-            <p>
-              Please confirm before proceeding: withdraw{" "}
-              <strong className="text-foreground">
-                {pendingWithdraw.amount} {pendingWithdraw.token}
-              </strong>{" "}
-              to your connected wallet.
-            </p>
+            <>
+              <p>
+                Please confirm before proceeding: withdraw{" "}
+                <strong className="text-foreground">
+                  {pendingWithdraw.amount} {pendingWithdraw.token}
+                </strong>{" "}
+                to your connected wallet.
+              </p>
+              {pendingWithdraw.mint && (
+                <code className="mt-2 block break-all font-mono text-[10px] text-muted-foreground">
+                  Mint: {pendingWithdraw.mint}
+                </code>
+              )}
+            </>
           ) : (
             "Please confirm this withdrawal."
           )

@@ -30,7 +30,9 @@ from pydantic import BaseModel, Field
 from deposit_ledger import (
     get_agent_wallet_info,
     get_user_balances,
+    get_user_dca_executions,
     list_user_deposits,
+    list_user_ledger_history,
     verify_and_record_deposit,
     withdraw_user_tokens,
 )
@@ -39,6 +41,7 @@ from db import (
     assert_chat_session_access,
     db_configured,
     delete_chat_session,
+    get_platform_metrics,
     init_db,
     load_chat_history,
 )
@@ -49,10 +52,15 @@ from dca_agent import (
     SCHEDULER_POLL_SECONDS,
     SOLANA_CLUSTER,
     SOLANA_RPC,
+    get_dca_history,
+    get_dca_plan,
     get_wallet_pubkey,
+    list_dca_plans,
     resolve_token,
     run_agent_with_actions,
+    start_metrics_scheduler,
     start_scheduler,
+    update_dca_plan_status,
 )
 from wallet_auth import (
     create_auth_challenge,
@@ -121,6 +129,10 @@ class WithdrawRequest(BaseModel):
     amount: float = Field(gt=0)
 
 
+class PlanStatusRequest(BaseModel):
+    action: str = Field(min_length=3)
+
+
 def _redact_rpc_url(rpc_url: str) -> str:
     parts = urlsplit(rpc_url)
     if not parts.query:
@@ -164,6 +176,8 @@ def _startup() -> None:
         print("  ⚠️  DCA_INTERNAL_API_KEY not set (optional for local dev)")
     if start_scheduler():
         print(f"  ⏱️  DCA scheduler started (every {SCHEDULER_POLL_SECONDS}s)")
+    if start_metrics_scheduler():
+        print("  📊 Platform metrics scheduler started (refresh every 24h)")
 
 
 @app.get("/health")
@@ -297,6 +311,76 @@ def wallet_withdraw(
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+@app.get("/plans")
+def list_plans(
+    auth_wallet: str = Depends(require_wallet_session),
+    active_only: bool = Query(False),
+    status: Optional[str] = Query(None),
+) -> dict[str, Any]:
+    result = list_dca_plans(status=status, user_wallet=auth_wallet, active_only=active_only)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.get("/plans/{plan_id}")
+def get_plan(
+    plan_id: str,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = get_dca_plan(plan_id, user_wallet=auth_wallet)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@app.get("/plans/{plan_id}/executions")
+def plan_executions(
+    plan_id: str,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = get_dca_history(plan_id, user_wallet=auth_wallet)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@app.post("/plans/{plan_id}/status")
+def plan_status(
+    plan_id: str,
+    body: PlanStatusRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = update_dca_plan_status(plan_id, body.action.strip(), user_wallet=auth_wallet)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.get("/wallet/ledger")
+def wallet_ledger(
+    auth_wallet: str = Depends(require_wallet_session),
+    limit: int = Query(50, ge=1, le=200),
+) -> dict[str, Any]:
+    return list_user_ledger_history(auth_wallet, limit)
+
+
+@app.get("/wallet/dca-executions")
+def wallet_dca_executions(
+    auth_wallet: str = Depends(require_wallet_session),
+    limit: int = Query(100, ge=1, le=200),
+) -> dict[str, Any]:
+    return get_user_dca_executions(auth_wallet, limit)
+
+
+@app.get("/metrics")
+def platform_metrics(
+    refresh: bool = Query(False),
+    _: None = Depends(require_internal_key),
+) -> dict[str, Any]:
+    return get_platform_metrics(refresh=refresh)
 
 
 @app.post("/chat", response_model=ChatResponse)

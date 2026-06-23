@@ -367,6 +367,52 @@ def list_user_deposits(user_wallet: str, limit: int = 20) -> dict[str, Any]:
     }
 
 
+def list_user_ledger_history(user_wallet: str, limit: int = 50) -> dict[str, Any]:
+    """All ledger movements: deposits, DCA spends, acquires, withdrawals."""
+    user_wallet = user_wallet.strip()
+    rows = load_ledger_for_user(user_wallet, limit=limit)
+    return {
+        "user_wallet": user_wallet,
+        "entries": rows,
+        "count": len(rows),
+    }
+
+
+def get_user_dca_executions(user_wallet: str, limit: int = 100) -> dict[str, Any]:
+    """Flatten DCA swap executions across all plans for one user."""
+    user_wallet = user_wallet.strip()
+    plans = _load_plans(user_wallet)
+    executions: list[dict[str, Any]] = []
+    for plan in plans:
+        for entry in plan.get("executions") or []:
+            result = entry.get("result") or {}
+            executions.append({
+                "plan_id": plan["id"],
+                "plan_name": plan["name"],
+                "pair": f"{plan['input_token']} → {plan['output_token']}",
+                "input_mint": plan.get("input_mint"),
+                "output_mint": plan.get("output_mint"),
+                "at": entry.get("at"),
+                "amount": entry.get("amount"),
+                "input_token": entry.get("input_token"),
+                "output_token": entry.get("output_token"),
+                "dry_run": entry.get("dry_run", False),
+                "status": result.get("status"),
+                "signature": result.get("signature"),
+                "explorer_url": result.get("explorer_url"),
+                "output_amount": result.get("output_amount"),
+                "error": result.get("error"),
+            })
+    executions.sort(key=lambda row: row.get("at") or "", reverse=True)
+    if limit:
+        executions = executions[:limit]
+    return {
+        "user_wallet": user_wallet,
+        "executions": executions,
+        "count": len(executions),
+    }
+
+
 def _user_plan_usage(user_wallet: str) -> dict[str, dict[str, float]]:
     return _user_plan_usage_from_plans(user_wallet, _load_plans(user_wallet))
 
@@ -477,9 +523,15 @@ def get_user_balances(user_wallet: str) -> dict[str, Any]:
             max(ledger["deposited"] + ledger["acquired"] - ledger["withdrawn"] - reserved, 0.0),
             9,
         )
+        token_mint = None
+        for row in user_rows:
+            if str(row.get("token", "")).upper() == token.upper() and row.get("mint"):
+                token_mint = row["mint"]
+                break
         breakdown.append(
             {
                 "token": token,
+                "mint": token_mint,
                 "deposited": ledger["deposited"],
                 "acquired_from_dca": ledger["acquired"],
                 "withdrawn": ledger["withdrawn"],

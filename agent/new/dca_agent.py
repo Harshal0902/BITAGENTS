@@ -129,6 +129,21 @@ _RESOLVED_TOKEN_CACHE: dict[str, dict] = {}
 
 _scheduler_lock    = threading.Lock()
 _scheduler_running = False
+_metrics_lock      = threading.Lock()
+_metrics_running   = False
+
+# Plan feasibility limits
+MIN_INTERVAL_SECONDS = 10
+MAX_MAX_EXECUTIONS = 10_000
+MAX_PLAN_DURATION_DAYS = 730
+MIN_TOKEN_AMOUNTS: dict[str, float] = {
+    "SOL": 0.000001,
+    "WSOL": 0.000001,
+    "USDC": 0.01,
+    "USDT": 0.01,
+}
+DEFAULT_MIN_TOKEN_AMOUNT = 0.000001
+METRICS_REFRESH_SECONDS = int(os.environ.get("DCA_METRICS_REFRESH_SECONDS", str(24 * 3600)))
 
 # Rate-limit state (mirrors jupiterFetch in Node.js)
 _last_jupiter_call_at: float = 0.0
@@ -1405,6 +1420,118 @@ def _normalize_tool_args(func, tool_args: dict) -> dict:
     return {k: v for k, v in tool_args.items() if k in allowed}
 
 
+def _min_amount_for_token(token_info: dict) -> float:
+    symbol = str(token_info.get("symbol", "")).upper()
+    floor = MIN_TOKEN_AMOUNTS.get(symbol, DEFAULT_MIN_TOKEN_AMOUNT)
+    decimals = int(token_info.get("decimals") or 9)
+    unit = 10 ** (-decimals)
+    return max(floor, unit)
+
+
+def validate_dca_plan_feasibility(
+    inp: dict,
+    out: dict,
+    amount_per_buy: float,
+    interval_minutes: float,
+    total_budget: Optional[float],
+    max_executions: Optional[int],
+    user_wallet: str,
+) -> Optional[dict]:
+    """Return an error dict if the plan is impossible or unsafe to create."""
+    if amount_per_buy <= 0:
+        return {"error": "Amount per buy must be greater than zero."}
+
+    min_buy = _min_amount_for_token(inp)
+    if amount_per_buy < min_buy:
+        return {
+            "error": (
+                f"Amount per buy ({amount_per_buy} {inp['symbol']}) is below the minimum "
+                f"({min_buy} {inp['symbol']}). Swaps this small cannot execute on Solana/Jupiter."
+            )
+        }
+
+    interval_seconds = interval_minutes * 60
+    if interval_seconds < MIN_INTERVAL_SECONDS:
+        return {
+            "error": (
+                f"Interval is too short ({interval_seconds:.0f}s). "
+                f"Minimum interval is {MIN_INTERVAL_SECONDS} seconds."
+            )
+        }
+
+    if max_executions is not None:
+        if max_executions <= 0:
+            return {"error": "max_executions must be at least 1 when specified."}
+        if max_executions > MAX_MAX_EXECUTIONS:
+            return {
+                "error": (
+                    f"max_executions ({max_executions}) exceeds the limit of {MAX_MAX_EXECUTIONS}."
+                )
+            }
+        required = amount_per_buy * max_executions
+        if total_budget is not None and total_budget + 1e-12 < required:
+            return {
+                "error": (
+                    f"Budget ({total_budget} {inp['symbol']}) is less than "
+                    f"{max_executions} buys × {amount_per_buy} = {required} {inp['symbol']}."
+                )
+            }
+        duration_days = (max_executions * interval_minutes) / (60 * 24)
+        if duration_days > MAX_PLAN_DURATION_DAYS:
+            return {
+                "error": (
+                    f"Plan would run for ~{duration_days:.0f} days "
+                    f"({max_executions} buys every {interval_minutes} min), "
+                    f"which exceeds the {MAX_PLAN_DURATION_DAYS}-day limit."
+                )
+            }
+
+    if total_budget is not None and total_budget < amount_per_buy:
+        return {
+            "error": (
+                f"Total budget ({total_budget} {inp['symbol']}) is less than one buy "
+                f"({amount_per_buy} {inp['symbol']})."
+            )
+        }
+
+    from deposit_ledger import check_plan_budget, get_user_balances
+
+    budget_check = check_plan_budget(
+        user_wallet,
+        inp["symbol"],
+        total_budget,
+        amount_per_buy,
+        max_executions,
+    )
+    if "error" in budget_check:
+        return budget_check
+
+    balances = get_user_balances(user_wallet)
+    needed = total_budget
+    if needed is None:
+        if max_executions is not None:
+            needed = amount_per_buy * max_executions
+        else:
+            needed = amount_per_buy
+    available = 0.0
+    for row in balances.get("balances") or []:
+        if str(row.get("token", "")).upper() == inp["symbol"].upper():
+            available = float(row.get("available") or 0)
+            break
+    if needed is not None and available + 1e-12 < needed:
+        return {
+            "error": (
+                f"Insufficient {inp['symbol']} balance. Need up to {needed}, "
+                f"but only {available} is available after plan reservations."
+            )
+        }
+
+    if inp["mint"] == out["mint"]:
+        return {"error": "Input and output token cannot be the same."}
+
+    return None
+
+
 def create_dca_plan(
     input_token: str,
     output_token: str,
@@ -1441,22 +1568,22 @@ def create_dca_plan(
         else:
             name = f"{inp['symbol']} -> {sym} DCA"
 
-    from deposit_ledger import check_plan_budget
-
-    budget_check = check_plan_budget(
-        user_wallet or "",
-        inp["symbol"],
-        total_budget,
-        amount_per_buy,
-        max_executions,
-    )
-    if "error" in budget_check:
-        return budget_check
-
     try:
         interval_minutes = _parse_interval(interval)
     except ValueError as e:
         return {"error": str(e)}
+
+    feasibility = validate_dca_plan_feasibility(
+        inp,
+        out,
+        amount_per_buy,
+        interval_minutes,
+        total_budget,
+        max_executions,
+        user_wallet.strip(),
+    )
+    if feasibility:
+        return feasibility
 
     now      = datetime.now(timezone.utc)
     next_run = now if start_immediately else now + timedelta(minutes=interval_minutes)
@@ -1737,7 +1864,8 @@ def _scheduler_loop(poll_seconds: int = SCHEDULER_POLL_SECONDS) -> None:
                 if due.tzinfo is None:
                     due = due.replace(tzinfo=timezone.utc)
                 if due <= now:
-                    print(f"\n  ⏰ DCA due: {plan['name']} ({plan['id']})")
+                    owner = (plan.get("user_wallet") or "unknown")[:8]
+                    print(f"\n  ⏰ DCA due: {plan['name']} ({plan['id']}) · user {owner}…")
                     result = _run_plan_execution(plan["id"])
                     if result.get("status") == "success":
                         print(f"  ✅ Tx: {result.get('signature', 'ok')}")
@@ -1762,6 +1890,45 @@ def start_scheduler() -> bool:
 def stop_scheduler() -> None:
     global _scheduler_running
     _scheduler_running = False
+
+
+def _metrics_loop(refresh_seconds: int = METRICS_REFRESH_SECONDS) -> None:
+    global _metrics_running
+    from db import compute_platform_metrics, upsert_platform_metrics
+
+    while _metrics_running:
+        try:
+            metrics = compute_platform_metrics()
+            upsert_platform_metrics(metrics)
+            print(f"  📊 Platform metrics refreshed ({metrics.get('executions_24h', 0)} swaps · 24h)")
+        except Exception as exc:
+            print(f"  ⚠️  Metrics refresh error: {exc}")
+        slept = 0
+        while slept < refresh_seconds and _metrics_running:
+            time.sleep(min(60, refresh_seconds - slept))
+            slept += min(60, refresh_seconds - slept)
+
+
+def start_metrics_scheduler() -> bool:
+    global _metrics_running
+    with _metrics_lock:
+        if _metrics_running:
+            return False
+        _metrics_running = True
+        from db import compute_platform_metrics, upsert_platform_metrics
+
+        try:
+            upsert_platform_metrics(compute_platform_metrics())
+        except Exception as exc:
+            print(f"  ⚠️  Initial metrics refresh failed: {exc}")
+        t = threading.Thread(target=_metrics_loop, daemon=True, name="dca-metrics")
+        t.start()
+        return True
+
+
+def stop_metrics_scheduler() -> None:
+    global _metrics_running
+    _metrics_running = False
 
 
 # ─── User deposit ledger (AI Agent wallet) ───────────────────────────────────
@@ -2339,11 +2506,81 @@ def _tool_requires_confirmation(tool_name: str, args: dict) -> bool:
     return True
 
 
+def _resolve_token_brief(raw: Any) -> dict[str, Any]:
+    if raw is None:
+        return {"symbol": "?", "mint": None}
+    text = str(raw).strip()
+    if not text:
+        return {"symbol": "?", "mint": None}
+    resolved = resolve_token(text)
+    if "error" in resolved:
+        if _looks_like_mint(text):
+            return {"symbol": text[:6] + "…", "mint": text}
+        return {"symbol": text.upper(), "mint": None}
+    return {"symbol": resolved["symbol"], "mint": resolved["mint"]}
+
+
+def _token_with_mint(raw: Any) -> str:
+    info = _resolve_token_brief(raw)
+    symbol = info.get("symbol") or "?"
+    mint = info.get("mint")
+    if mint:
+        return f"**{symbol}** (`{mint}`)"
+    return f"**{symbol}**"
+
+
+def _pending_action_details(tool_name: str, args: dict) -> dict[str, Any]:
+    if tool_name == "create_dca_plan":
+        inp = _resolve_token_brief(args.get("input_token"))
+        out = _resolve_token_brief(args.get("output_token"))
+        return {
+            "action": tool_name,
+            "input_token": inp.get("symbol"),
+            "input_mint": inp.get("mint"),
+            "output_token": out.get("symbol"),
+            "output_mint": out.get("mint"),
+            "amount_per_buy": args.get("amount_per_buy"),
+            "interval": args.get("interval"),
+            "max_executions": args.get("max_executions"),
+            "total_budget": args.get("total_budget"),
+            "start_immediately": args.get("start_immediately"),
+        }
+    if tool_name == "execute_swap_buy":
+        inp = _resolve_token_brief(args.get("input_token"))
+        out = _resolve_token_brief(args.get("output_token"))
+        return {
+            "action": tool_name,
+            "input_token": inp.get("symbol"),
+            "input_mint": inp.get("mint"),
+            "output_token": out.get("symbol"),
+            "output_mint": out.get("mint"),
+            "amount": args.get("amount"),
+        }
+    if tool_name == "withdraw_user_tokens":
+        tok = _resolve_token_brief(args.get("token"))
+        return {
+            "action": tool_name,
+            "token": tok.get("symbol"),
+            "mint": tok.get("mint"),
+            "amount": args.get("amount"),
+        }
+    if tool_name == "update_dca_plan_status":
+        return {
+            "action": tool_name,
+            "plan_id": args.get("plan_id"),
+            "status_action": args.get("action"),
+        }
+    if tool_name == "execute_dca_now":
+        return {"action": tool_name, "plan_id": args.get("plan_id")}
+    return {"action": tool_name, "args": args}
+
+
 def _summarize_pending_action(tool_name: str, args: dict) -> str:
     if tool_name == "create_dca_plan":
         parts = [
-            f"buy **{args.get('amount_per_buy')} {args.get('input_token')}**",
-            f"→ **{args.get('output_token')}**",
+            f"buy {_token_with_mint(args.get('input_token'))} "
+            f"amount **{args.get('amount_per_buy')}**",
+            f"→ {_token_with_mint(args.get('output_token'))}",
             f"every **{args.get('interval')}**",
         ]
         if args.get("max_executions") is not None:
@@ -2363,12 +2600,16 @@ def _summarize_pending_action(tool_name: str, args: dict) -> str:
 
     if tool_name == "execute_swap_buy":
         return (
-            f"Execute **live swap**: **{args.get('amount')} {args.get('input_token')}** "
-            f"→ **{args.get('output_token')}**"
+            f"Execute **live swap**: **{args.get('amount')}** "
+            f"{_token_with_mint(args.get('input_token'))} "
+            f"→ {_token_with_mint(args.get('output_token'))}"
         )
 
     if tool_name == "withdraw_user_tokens":
-        return f"Withdraw **{args.get('amount')} {args.get('token')}** to your wallet"
+        return (
+            f"Withdraw **{args.get('amount')}** "
+            f"{_token_with_mint(args.get('token'))} to your wallet"
+        )
 
     return f"{tool_name}({args})"
 
@@ -2498,8 +2739,10 @@ def _check_action_confirmation(
             "tool": tool_name,
             "args": args,
             "summary": summary,
+            "details": _pending_action_details(tool_name, args),
         }
 
+    details = _pending_action_details(tool_name, args)
     return json.dumps(
         {
             "status": "confirmation_required",
@@ -2508,6 +2751,7 @@ def _check_action_confirmation(
                 "Reply **yes** or **confirm** to proceed, or **no** to cancel."
             ),
             "pending_action": summary,
+            "confirmation_details": details,
             "tool": tool_name,
         },
         indent=2,

@@ -114,4 +114,70 @@ export async function proxyDcaWithdraw(
   });
 }
 
+export async function proxyDcaPlans(
+  authToken: string,
+  params?: { active_only?: boolean; status?: string }
+): Promise<Response> {
+  const search = new URLSearchParams();
+  if (params?.active_only) search.set("active_only", "true");
+  if (params?.status) search.set("status", params.status);
+  const qs = search.toString();
+  return fetch(`${getDcaAgentBaseUrl()}/plans${qs ? `?${qs}` : ""}`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyDcaPlanExecutions(
+  planId: string,
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getDcaAgentBaseUrl()}/plans/${encodeURIComponent(planId)}/executions`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyDcaPlanStatus(
+  planId: string,
+  action: string,
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getDcaAgentBaseUrl()}/plans/${encodeURIComponent(planId)}/status`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ action }),
+  });
+}
+
+export async function proxyDcaWalletLedger(
+  authToken: string,
+  limit = 50
+): Promise<Response> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return fetch(`${getDcaAgentBaseUrl()}/wallet/ledger?${params}`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyDcaExecutions(
+  authToken: string,
+  limit = 100
+): Promise<Response> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return fetch(`${getDcaAgentBaseUrl()}/wallet/dca-executions?${params}`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyDcaMetrics(refresh = false): Promise<Response> {
+  const params = refresh ? "?refresh=true" : "";
+  return fetch(`${getDcaAgentBaseUrl()}/metrics${params}`, {
+    cache: "no-store",
+    headers: buildHeaders(),
+  });
+}
+
 export { getAuthToken };

@@ -5,7 +5,8 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { Panel } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DcaAgentDeposit } from "@/components/agents/DcaAgentDeposit";
-import { explorerUrlForSignature, findLatestConfirmationRequired, mergeTransactions } from "@/lib/dcaActionResults";
+import { DcaPlanPanel } from "@/components/agents/DcaPlanPanel";
+import { explorerUrlForSignature, findLatestConfirmationRequired, mergeTransactions, type ConfirmationDetails } from "@/lib/dcaActionResults";
 import { DCA_AGENT, DCA_EXAMPLE_PROMPTS } from "@/lib/dcaAgentSimulation";
 import {
   fetchDcaAgentHealth,
@@ -26,6 +27,84 @@ type ChatMessage = {
   errors?: string[];
   transactions?: ParsedTransaction[];
 };
+
+function ConfirmDetailsView({ details }: { details?: ConfirmationDetails }) {
+  if (!details) return null;
+
+  if (details.action === "create_dca_plan") {
+    return (
+      <dl className="mt-3 space-y-2 border-t border-grid pt-3 font-mono text-[11px]">
+        <div className="grid grid-cols-[100px_1fr] gap-1">
+          <dt className="text-muted-foreground">From</dt>
+          <dd>
+            {details.input_token}{" "}
+            {details.input_mint && (
+              <code className="block break-all text-[10px] text-foreground">{details.input_mint}</code>
+            )}
+          </dd>
+          <dt className="text-muted-foreground">To</dt>
+          <dd>
+            {details.output_token}{" "}
+            {details.output_mint && (
+              <code className="block break-all text-[10px] text-foreground">{details.output_mint}</code>
+            )}
+          </dd>
+          <dt className="text-muted-foreground">Amount</dt>
+          <dd>{details.amount_per_buy}</dd>
+          <dt className="text-muted-foreground">Interval</dt>
+          <dd>{details.interval}</dd>
+          {details.max_executions != null && (
+            <>
+              <dt className="text-muted-foreground">Max buys</dt>
+              <dd>{details.max_executions}</dd>
+            </>
+          )}
+          {details.total_budget != null && (
+            <>
+              <dt className="text-muted-foreground">Budget</dt>
+              <dd>
+                {details.total_budget} {details.input_token}
+              </dd>
+            </>
+          )}
+        </div>
+      </dl>
+    );
+  }
+
+  if (details.action === "execute_swap_buy" || details.action === "withdraw_user_tokens") {
+    return (
+      <dl className="mt-3 space-y-2 border-t border-grid pt-3 font-mono text-[11px]">
+        <div className="grid grid-cols-[100px_1fr] gap-1">
+          <dt className="text-muted-foreground">Token</dt>
+          <dd>
+            {details.input_token ?? details.token}{" "}
+            {(details.input_mint ?? details.mint) && (
+              <code className="block break-all text-[10px] text-foreground">
+                {details.input_mint ?? details.mint}
+              </code>
+            )}
+          </dd>
+          {details.output_token && (
+            <>
+              <dt className="text-muted-foreground">To</dt>
+              <dd>
+                {details.output_token}{" "}
+                {details.output_mint && (
+                  <code className="block break-all text-[10px] text-foreground">{details.output_mint}</code>
+                )}
+              </dd>
+            </>
+          )}
+          <dt className="text-muted-foreground">Amount</dt>
+          <dd>{details.amount ?? details.amount_per_buy}</dd>
+        </div>
+      </dl>
+    );
+  }
+
+  return null;
+}
 
 function formatReply(text: string) {
   return text.split("\n").map((line, i) => {
@@ -154,6 +233,8 @@ export function DcaAgentConsole() {
   const [userBalances, setUserBalances] = useState<UserDepositBalances | null>(null);
   const [agentConfirmOpen, setAgentConfirmOpen] = useState(false);
   const [agentConfirmMessage, setAgentConfirmMessage] = useState<string | null>(null);
+  const [agentConfirmDetails, setAgentConfirmDetails] = useState<ConfirmationDetails | undefined>();
+  const [dataRefreshTick, setDataRefreshTick] = useState(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const actionsEndRef = useRef<HTMLDivElement>(null);
 
@@ -210,8 +291,11 @@ export function DcaAgentConsole() {
       const pendingConfirm = findLatestConfirmationRequired(mapped);
       if (pendingConfirm) {
         setAgentConfirmMessage(pendingConfirm.message);
+        setAgentConfirmDetails(pendingConfirm.details);
         setAgentConfirmOpen(true);
       }
+
+      setDataRefreshTick((tick) => tick + 1);
 
       setMessages((prev) => [
         ...prev,
@@ -291,7 +375,12 @@ export function DcaAgentConsole() {
         </div>
       )}
 
-      <DcaAgentDeposit cluster={cluster} authToken={token} onBalancesChange={setUserBalances} />
+      <DcaAgentDeposit
+        cluster={cluster}
+        authToken={token}
+        refreshTick={dataRefreshTick}
+        onBalancesChange={setUserBalances}
+      />
 
       {!publicKey && (
         <div className="border border-grid bg-surface/40 px-4 py-3 font-mono text-xs text-muted-foreground">
@@ -435,17 +524,25 @@ export function DcaAgentConsole() {
         </Panel>
       </div>
 
+      <DcaPlanPanel authToken={token} cluster={cluster} refreshTick={dataRefreshTick} />
+
       <ConfirmDialog
         open={agentConfirmOpen}
         onOpenChange={(open) => {
           setAgentConfirmOpen(open);
-          if (!open) setAgentConfirmMessage(null);
+          if (!open) {
+            setAgentConfirmMessage(null);
+            setAgentConfirmDetails(undefined);
+          }
         }}
         title="Confirm DCA action"
         description={
-          <p className="whitespace-pre-wrap">
-            {agentConfirmMessage ?? "Please confirm before the agent proceeds."}
-          </p>
+          <>
+            <p className="whitespace-pre-wrap">
+              {agentConfirmMessage ?? "Please confirm before the agent proceeds."}
+            </p>
+            <ConfirmDetailsView details={agentConfirmDetails} />
+          </>
         }
         confirmLabel="Yes, proceed"
         cancelLabel="No, cancel"
@@ -453,11 +550,13 @@ export function DcaAgentConsole() {
         onCancel={() => {
           setAgentConfirmOpen(false);
           setAgentConfirmMessage(null);
+          setAgentConfirmDetails(undefined);
           void runCommand("no, cancel");
         }}
         onConfirm={() => {
           setAgentConfirmOpen(false);
           setAgentConfirmMessage(null);
+          setAgentConfirmDetails(undefined);
           void runCommand("yes, confirm");
         }}
       />

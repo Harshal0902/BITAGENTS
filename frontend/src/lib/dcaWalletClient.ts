@@ -1,5 +1,6 @@
 export type TokenBalanceRow = {
   token: string;
+  mint?: string | null;
   deposited: number;
   acquired_from_dca?: number;
   withdrawn?: number;

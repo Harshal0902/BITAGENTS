@@ -157,6 +157,22 @@ SCHEMA_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_wallet_sessions_wallet ON wallet_sessions (user_wallet)",
     "CREATE INDEX IF NOT EXISTS idx_wallet_sessions_expires ON wallet_sessions (expires_at)",
+    """
+    CREATE TABLE IF NOT EXISTS dca_platform_metrics (
+        id                  VARCHAR(32) PRIMARY KEY DEFAULT 'global',
+        total_plans         INTEGER NOT NULL DEFAULT 0,
+        active_plans        INTEGER NOT NULL DEFAULT 0,
+        total_users         INTEGER NOT NULL DEFAULT 0,
+        total_executions    INTEGER NOT NULL DEFAULT 0,
+        successful_swaps    INTEGER NOT NULL DEFAULT 0,
+        failed_swaps        INTEGER NOT NULL DEFAULT 0,
+        total_volume_sol    DOUBLE PRECISION NOT NULL DEFAULT 0,
+        total_deposits      INTEGER NOT NULL DEFAULT 0,
+        total_withdrawals   INTEGER NOT NULL DEFAULT 0,
+        executions_24h      INTEGER NOT NULL DEFAULT 0,
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
 ]
 
 MIGRATION_STATEMENTS = [
@@ -634,3 +650,135 @@ def delete_chat_session(session_id: str) -> bool:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM chat_sessions WHERE id = %s", (session_id,))
             return cur.rowcount > 0
+
+
+# ─── Platform metrics ─────────────────────────────────────────────────────────
+
+def compute_platform_metrics() -> dict[str, Any]:
+    """Aggregate live stats from plans and ledger."""
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM dca_plans")
+            total_plans = int(cur.fetchone()["n"])
+            cur.execute("SELECT COUNT(*) AS n FROM dca_plans WHERE status = 'active'")
+            active_plans = int(cur.fetchone()["n"])
+            cur.execute(
+                "SELECT COUNT(DISTINCT user_wallet) AS n FROM dca_plans WHERE user_wallet IS NOT NULL"
+            )
+            total_users = int(cur.fetchone()["n"])
+            cur.execute("SELECT COALESCE(SUM(executions_count), 0) AS n FROM dca_plans")
+            total_executions = int(cur.fetchone()["n"])
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(spent_so_far), 0) AS n
+                FROM dca_plans WHERE UPPER(input_token) = 'SOL'
+                """
+            )
+            total_volume_sol = float(cur.fetchone()["n"])
+            cur.execute("SELECT COUNT(*) AS n FROM user_ledger WHERE direction = 'deposit'")
+            total_deposits = int(cur.fetchone()["n"])
+            cur.execute("SELECT COUNT(*) AS n FROM user_ledger WHERE direction = 'withdraw'")
+            total_withdrawals = int(cur.fetchone()["n"])
+            cur.execute(
+                """
+                SELECT COUNT(*) AS n FROM user_ledger
+                WHERE direction = 'spend' AND reference_type = 'swap'
+                  AND verified_at >= NOW() - INTERVAL '24 hours'
+                """
+            )
+            executions_24h = int(cur.fetchone()["n"])
+            cur.execute(
+                """
+                SELECT COUNT(*) AS n FROM user_ledger
+                WHERE direction = 'spend' AND reference_type = 'swap'
+                """
+            )
+            successful_swaps = int(cur.fetchone()["n"])
+    failed_swaps = max(0, total_executions - successful_swaps)
+    return {
+        "total_plans": total_plans,
+        "active_plans": active_plans,
+        "total_users": total_users,
+        "total_executions": total_executions,
+        "successful_swaps": successful_swaps,
+        "failed_swaps": failed_swaps,
+        "total_volume_sol": round(total_volume_sol, 9),
+        "total_deposits": total_deposits,
+        "total_withdrawals": total_withdrawals,
+        "executions_24h": executions_24h,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def upsert_platform_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO dca_platform_metrics (
+                    id, total_plans, active_plans, total_users, total_executions,
+                    successful_swaps, failed_swaps, total_volume_sol,
+                    total_deposits, total_withdrawals, executions_24h, updated_at
+                ) VALUES (
+                    'global', %(total_plans)s, %(active_plans)s, %(total_users)s,
+                    %(total_executions)s, %(successful_swaps)s, %(failed_swaps)s,
+                    %(total_volume_sol)s, %(total_deposits)s, %(total_withdrawals)s,
+                    %(executions_24h)s, NOW()
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    total_plans = EXCLUDED.total_plans,
+                    active_plans = EXCLUDED.active_plans,
+                    total_users = EXCLUDED.total_users,
+                    total_executions = EXCLUDED.total_executions,
+                    successful_swaps = EXCLUDED.successful_swaps,
+                    failed_swaps = EXCLUDED.failed_swaps,
+                    total_volume_sol = EXCLUDED.total_volume_sol,
+                    total_deposits = EXCLUDED.total_deposits,
+                    total_withdrawals = EXCLUDED.total_withdrawals,
+                    executions_24h = EXCLUDED.executions_24h,
+                    updated_at = NOW()
+                RETURNING *
+                """,
+                metrics,
+            )
+            row = cur.fetchone()
+    return {
+        "total_plans": int(row["total_plans"]),
+        "active_plans": int(row["active_plans"]),
+        "total_users": int(row["total_users"]),
+        "total_executions": int(row["total_executions"]),
+        "successful_swaps": int(row["successful_swaps"]),
+        "failed_swaps": int(row["failed_swaps"]),
+        "total_volume_sol": float(row["total_volume_sol"]),
+        "total_deposits": int(row["total_deposits"]),
+        "total_withdrawals": int(row["total_withdrawals"]),
+        "executions_24h": int(row["executions_24h"]),
+        "updated_at": _iso(row["updated_at"]),
+    }
+
+
+def get_platform_metrics(refresh: bool = False) -> dict[str, Any]:
+    init_db()
+    if refresh:
+        return upsert_platform_metrics(compute_platform_metrics())
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM dca_platform_metrics WHERE id = 'global'")
+            row = cur.fetchone()
+    if not row:
+        return upsert_platform_metrics(compute_platform_metrics())
+    return {
+        "total_plans": int(row["total_plans"]),
+        "active_plans": int(row["active_plans"]),
+        "total_users": int(row["total_users"]),
+        "total_executions": int(row["total_executions"]),
+        "successful_swaps": int(row["successful_swaps"]),
+        "failed_swaps": int(row["failed_swaps"]),
+        "total_volume_sol": float(row["total_volume_sol"]),
+        "total_deposits": int(row["total_deposits"]),
+        "total_withdrawals": int(row["total_withdrawals"]),
+        "executions_24h": int(row["executions_24h"]),
+        "updated_at": _iso(row["updated_at"]),
+    }

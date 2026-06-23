@@ -96,9 +96,28 @@ export function parseActionResult(result: string): ParsedActionResult {
   };
 }
 
+export type ConfirmationDetails = {
+  action?: string;
+  input_token?: string;
+  input_mint?: string;
+  output_token?: string;
+  output_mint?: string;
+  amount_per_buy?: number;
+  amount?: number;
+  interval?: string;
+  max_executions?: number;
+  total_budget?: number;
+  start_immediately?: boolean;
+  token?: string;
+  mint?: string;
+  plan_id?: string;
+  status_action?: string;
+};
+
 export function parseConfirmationRequired(result: string): {
   message: string;
   pendingAction?: string;
+  details?: ConfirmationDetails;
 } | null {
   try {
     const parsed = JSON.parse(result) as Record<string, unknown>;
@@ -108,6 +127,10 @@ export function parseConfirmationRequired(result: string): {
       message: parsed.message,
       pendingAction:
         typeof parsed.pending_action === "string" ? parsed.pending_action : undefined,
+      details:
+        parsed.confirmation_details && typeof parsed.confirmation_details === "object"
+          ? (parsed.confirmation_details as ConfirmationDetails)
+          : undefined,
     };
   } catch {
     return null;
@@ -116,7 +139,7 @@ export function parseConfirmationRequired(result: string): {
 
 export function findLatestConfirmationRequired(
   actions: Array<{ result: string }>
-): { message: string; pendingAction?: string } | null {
+): { message: string; pendingAction?: string; details?: ConfirmationDetails } | null {
   for (let i = actions.length - 1; i >= 0; i -= 1) {
     const pending = parseConfirmationRequired(actions[i].result);
     if (pending) return pending;
