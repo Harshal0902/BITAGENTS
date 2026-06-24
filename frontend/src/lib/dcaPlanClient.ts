@@ -29,6 +29,8 @@ export type DcaExecutionRow = {
   output_mint?: string;
   at?: string;
   amount?: number;
+  platform_fee?: number;
+  total_cost?: number;
   input_token?: string;
   output_token?: string;
   dry_run?: boolean;
@@ -181,6 +183,8 @@ export function ledgerDirectionLabel(direction: string): string {
       return "Withdraw";
     case "spend":
       return "DCA spend";
+    case "dca_fee":
+      return "DCA fee (0.5%)";
     case "acquire":
       return "DCA acquire";
     default:

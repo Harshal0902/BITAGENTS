@@ -67,6 +67,23 @@ function ConfirmDetailsView({ details }: { details?: ConfirmationDetails }) {
               </dd>
             </>
           )}
+          {details.platform_fee_per_buy != null && (
+            <>
+              <dt className="text-muted-foreground">Fee / buy</dt>
+              <dd>
+                {details.platform_fee_per_buy} {details.platform_fee_token ?? details.input_token}{" "}
+                (0.5%)
+              </dd>
+            </>
+          )}
+          {details.total_cost_per_buy != null && (
+            <>
+              <dt className="text-muted-foreground">Total / buy</dt>
+              <dd>
+                {details.total_cost_per_buy} {details.input_token} (swap + fee)
+              </dd>
+            </>
+          )}
         </div>
       </dl>
     );
@@ -411,8 +428,8 @@ export function DcaAgentConsole() {
         </Panel>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Panel title="Command · DCA Agent">
+      <div className="grid gap-6 grid-cols-3 lg:grid-cols-3">
+        <Panel title="Command · DCA Agent" className="lg:col-span-2">
           <div className="flex max-h-[420px] flex-col gap-4 overflow-y-auto pr-1">
             {messages.map((msg) => (
               <div
@@ -510,7 +527,7 @@ export function DcaAgentConsole() {
           <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1 font-mono text-xs">
             {actions.length === 0 && (
               <p className="text-muted-foreground">
-                Tool calls from the Python agent appear here - wallet checks, quotes, plan updates, swaps, and tx
+                Tool calls from the DCA agent appear here - wallet checks, quotes, plan updates, swaps, and tx
                 signatures.
               </p>
             )}

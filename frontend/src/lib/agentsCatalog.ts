@@ -66,7 +66,7 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     category: "Trading",
     description: "Set up dollar-cost averaging on Solana. Schedule recurring token buys, preview Jupiter quotes, and manage plans from natural language.",
     tagline: "Recurring buys · Jupiter swaps · OpenRouter-powered",
-    pricePerTask: "Free",
+    pricePerTask: "0.5% / tx",
     runs: "102",
     rating: 4.9,
     iconId: "swap",

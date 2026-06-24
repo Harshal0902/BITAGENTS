@@ -33,6 +33,23 @@ from dca_agent import (
 
 _ledger_lock = threading.Lock()
 
+# Platform fee on each successful scheduled DCA execution (input token).
+DCA_PLATFORM_FEE_RATE = 0.005  # 0.5%
+
+
+def dca_platform_fee(swap_amount: float) -> float:
+    """Fee charged in the swap input token after a successful DCA buy."""
+    amount = float(swap_amount)
+    if amount <= 0:
+        return 0.0
+    return round(amount * DCA_PLATFORM_FEE_RATE, 12)
+
+
+def dca_execution_total_cost(swap_amount: float) -> float:
+    """Swap amount plus platform fee for one DCA execution."""
+    amount = float(swap_amount)
+    return round(amount + dca_platform_fee(amount), 12)
+
 MINT_TO_SYMBOL = {info["mint"]: sym for sym, info in TOKEN_MINTS.items() if sym != "WSOL"}
 
 
@@ -394,6 +411,8 @@ def get_user_dca_executions(user_wallet: str, limit: int = 100) -> dict[str, Any
                 "output_mint": plan.get("output_mint"),
                 "at": entry.get("at"),
                 "amount": entry.get("amount"),
+                "platform_fee": entry.get("platform_fee"),
+                "total_cost": entry.get("total_cost"),
                 "input_token": entry.get("input_token"),
                 "output_token": entry.get("output_token"),
                 "dry_run": entry.get("dry_run", False),
@@ -439,13 +458,14 @@ def _user_plan_usage_from_plans(
         else:
             max_exec = plan.get("max_executions")
             per_buy = float(plan.get("amount_per_buy") or 0)
+            per_execution = dca_execution_total_cost(per_buy)
             if max_exec not in (None, "null", ""):
                 try:
-                    bucket["reserved"] += per_buy * int(max_exec)
+                    bucket["reserved"] += per_execution * int(max_exec)
                 except (TypeError, ValueError):
                     bucket["reserved"] += spent
             else:
-                bucket["reserved"] += max(spent, per_buy)
+                bucket["reserved"] += max(spent, per_execution)
 
     return usage
 
@@ -662,6 +682,62 @@ def record_user_acquire(
     }
 
 
+def record_dca_platform_fee(
+    user_wallet: str,
+    input_token: str,
+    swap_amount: float,
+    *,
+    reference_id: str,
+    signature: Optional[str] = None,
+    plan_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Record the 0.5% platform fee for a successful DCA execution (input token)."""
+    fee = dca_platform_fee(swap_amount)
+    if fee <= 0:
+        return {"status": "skipped", "fee": 0.0, "token": input_token}
+
+    ref_id = reference_id[:128]
+    if plan_id:
+        ref_id = f"{plan_id}:{ref_id}"[:128]
+
+    result = record_user_spend(
+        user_wallet,
+        input_token,
+        fee,
+        reference_type="dca_fee",
+        reference_id=ref_id,
+        signature=signature,
+    )
+    if "error" in result:
+        return result
+    result["fee"] = fee
+    result["fee_rate"] = DCA_PLATFORM_FEE_RATE
+    result["fee_token"] = result.get("spend", {}).get("token") or input_token
+    return result
+
+
+def check_user_can_spend_dca(
+    user_wallet: str,
+    input_token: str,
+    swap_amount: float,
+) -> dict[str, Any]:
+    """Ensure the user can cover swap amount plus the DCA platform fee."""
+    total = dca_execution_total_cost(swap_amount)
+    check = check_user_can_spend(user_wallet, input_token, total)
+    if "error" in check:
+        fee = dca_platform_fee(swap_amount)
+        check["swap_amount"] = float(swap_amount)
+        check["platform_fee"] = fee
+        check["total_required"] = total
+        check["fee_rate"] = DCA_PLATFORM_FEE_RATE
+    else:
+        check["swap_amount"] = float(swap_amount)
+        check["platform_fee"] = dca_platform_fee(swap_amount)
+        check["total_required"] = total
+        check["fee_rate"] = DCA_PLATFORM_FEE_RATE
+    return check
+
+
 def withdraw_user_tokens(user_wallet: str, token: str, amount: float) -> dict[str, Any]:
     """Send tokens from the agent wallet back to the user and record the withdrawal."""
     from dca_agent import send_tokens_to_user
@@ -798,11 +874,11 @@ def check_plan_budget(
             break
 
     if total_budget is None and max_executions is not None:
-        required = float(amount_per_buy) * int(max_executions)
+        required = dca_execution_total_cost(float(amount_per_buy)) * int(max_executions)
     elif total_budget is not None:
         required = float(total_budget)
     else:
-        required = float(amount_per_buy)
+        required = dca_execution_total_cost(float(amount_per_buy))
 
     spendable = round(max(deposited - spent, 0.0), 9)
     if spendable + 1e-12 < required:

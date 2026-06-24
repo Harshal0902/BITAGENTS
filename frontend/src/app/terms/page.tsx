@@ -66,7 +66,7 @@ export default function TermsPage() {
           title: "8. Changes & contact",
           body: [
             "We may update these terms at any time. Continued use after changes constitutes acceptance.",
-            "Questions: legal@bitagents.io",
+            "Questions: legal@bitagents.app",
           ],
         },
       ]}

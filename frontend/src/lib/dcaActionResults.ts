@@ -108,6 +108,10 @@ export type ConfirmationDetails = {
   max_executions?: number;
   total_budget?: number;
   start_immediately?: boolean;
+  platform_fee_per_buy?: number;
+  platform_fee_token?: string;
+  total_cost_per_buy?: number;
+  fee_rate?: number;
   token?: string;
   mint?: string;
   plan_id?: string;

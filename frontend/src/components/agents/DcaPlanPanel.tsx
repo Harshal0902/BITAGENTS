@@ -135,6 +135,7 @@ function PlanRow({
           <dt>Buy</dt>
           <dd className="text-foreground">
             {plan.amount_per_buy} / {plan.interval}
+            <span className="block text-[9px] text-muted-foreground">+ 0.5% fee per successful buy</span>
           </dd>
         </div>
         <div>
@@ -234,6 +235,9 @@ function ExecutionRow({ row, cluster }: { row: DcaExecutionRow; cluster?: string
       </div>
       <div className="mt-1 font-mono text-[10px] text-muted-foreground">
         {formatTime(row.at)} · plan `{row.plan_id}` · {row.amount} {row.input_token}
+        {row.platform_fee != null && row.platform_fee > 0 && (
+          <> · fee {row.platform_fee} {row.input_token}</>
+        )}
         {row.output_amount != null && ` → ${row.output_amount} ${row.output_token}`}
       </div>
       {row.error && <p className="mt-1 font-mono text-[10px] text-warn">{row.error}</p>}

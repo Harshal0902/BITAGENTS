@@ -59,7 +59,7 @@ export default function PrivacyPage() {
         },
         {
           title: "7. Contact",
-          body: ["Privacy questions: privacy@bitagents.io"],
+          body: ["Privacy questions: privacy@bitagents.app"],
         },
       ]}
     />

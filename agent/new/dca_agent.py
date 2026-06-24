@@ -1458,6 +1458,8 @@ def validate_dca_plan_feasibility(
     user_wallet: str,
 ) -> Optional[dict]:
     """Return an error dict if the plan is impossible or unsafe to create."""
+    from deposit_ledger import check_plan_budget, dca_execution_total_cost, get_user_balances
+
     if amount_per_buy <= 0:
         return {"error": "Amount per buy must be greater than zero."}
 
@@ -1488,12 +1490,13 @@ def validate_dca_plan_feasibility(
                     f"max_executions ({max_executions}) exceeds the limit of {MAX_MAX_EXECUTIONS}."
                 )
             }
-        required = amount_per_buy * max_executions
+        required = dca_execution_total_cost(amount_per_buy) * max_executions
         if total_budget is not None and total_budget + 1e-12 < required:
             return {
                 "error": (
                     f"Budget ({total_budget} {inp['symbol']}) is less than "
-                    f"{max_executions} buys × {amount_per_buy} = {required} {inp['symbol']}."
+                    f"{max_executions} buys × {dca_execution_total_cost(amount_per_buy)} "
+                    f"(swap + 0.5% fee) = {required} {inp['symbol']}."
                 )
             }
         duration_days = (max_executions * interval_minutes) / (60 * 24)
@@ -1506,15 +1509,13 @@ def validate_dca_plan_feasibility(
                 )
             }
 
-    if total_budget is not None and total_budget < amount_per_buy:
+    if total_budget is not None and total_budget < dca_execution_total_cost(amount_per_buy):
         return {
             "error": (
                 f"Total budget ({total_budget} {inp['symbol']}) is less than one buy "
-                f"({amount_per_buy} {inp['symbol']})."
+                f"({dca_execution_total_cost(amount_per_buy)} {inp['symbol']} including 0.5% fee)."
             )
         }
-
-    from deposit_ledger import check_plan_budget, get_user_balances
 
     budget_check = check_plan_budget(
         user_wallet,
@@ -1530,9 +1531,9 @@ def validate_dca_plan_feasibility(
     needed = total_budget
     if needed is None:
         if max_executions is not None:
-            needed = amount_per_buy * max_executions
+            needed = dca_execution_total_cost(amount_per_buy) * max_executions
         else:
-            needed = amount_per_buy
+            needed = dca_execution_total_cost(amount_per_buy)
     available = 0.0
     for row in balances.get("balances") or []:
         if str(row.get("token", "")).upper() == inp["symbol"].upper():
@@ -1795,20 +1796,29 @@ def analyze_dca_timing(output_token: str, lookback_days: int = 7) -> dict:
 
 
 def _run_plan_execution(plan_id: str, dry_run: bool = False, force: bool = False) -> dict:
+    from deposit_ledger import (
+        check_user_can_spend_dca,
+        dca_execution_total_cost,
+        dca_platform_fee,
+        record_dca_platform_fee,
+    )
+
     plan = _find_plan(plan_id)
     if not plan:
         return {"error": f"Plan '{plan_id}' not found."}
     if plan["status"] != "active" and not force:
         return {"error": f"Plan is {plan['status']}, not active."}
 
-    amount          = float(plan["amount_per_buy"])
-    spent           = float(plan.get("spent_so_far", 0))
-    budget          = _coerce_nullable_float(plan.get("total_budget"))
-    max_exec        = _coerce_nullable_int(plan.get("max_executions"))
+    amount           = float(plan["amount_per_buy"])
+    fee              = dca_platform_fee(amount)
+    total_cost       = dca_execution_total_cost(amount)
+    spent            = float(plan.get("spent_so_far", 0))
+    budget           = _coerce_nullable_float(plan.get("total_budget"))
+    max_exec         = _coerce_nullable_int(plan.get("max_executions"))
     executions_count = int(plan.get("executions_count", 0))
     interval_minutes = float(plan.get("interval_minutes", 1440))
 
-    if budget is not None and spent + amount > budget:
+    if budget is not None and spent + total_cost > budget + 1e-12:
         _update_plan(plan_id, {"status": "completed"})
         return {"error": "Budget exhausted. Plan marked completed.", "plan_id": plan_id}
 
@@ -1818,9 +1828,12 @@ def _run_plan_execution(plan_id: str, dry_run: bool = False, force: bool = False
 
     plan_user = (plan.get("user_wallet") or "").strip()
     if not dry_run:
-        from deposit_ledger import check_user_can_spend
-
-        spend_check = check_user_can_spend(plan_user, plan["input_token"], amount)
+        spend_check = check_user_can_spend_dca(plan_user, plan["input_token"], amount)
+        if "error" in spend_check:
+            spend_check["plan_id"] = plan_id
+            return spend_check
+    elif plan_user:
+        spend_check = check_user_can_spend_dca(plan_user, plan["input_token"], amount)
         if "error" in spend_check:
             spend_check["plan_id"] = plan_id
             return spend_check
@@ -1836,24 +1849,50 @@ def _run_plan_execution(plan_id: str, dry_run: bool = False, force: bool = False
 
     now         = datetime.now(timezone.utc)
     exec_record = {
-        "at":           now.isoformat(),
-        "amount":       amount,
-        "input_token":  plan["input_token"],
-        "output_token": plan["output_token"],
-        "result":       {k: v for k, v in result.items() if k not in ("build_data", "quote")},
-        "dry_run":      dry_run,
+        "at":            now.isoformat(),
+        "amount":        amount,
+        "platform_fee":  fee,
+        "total_cost":    total_cost,
+        "input_token":   plan["input_token"],
+        "output_token":  plan["output_token"],
+        "result":        {k: v for k, v in result.items() if k not in ("build_data", "quote")},
+        "dry_run":       dry_run,
     }
 
     if dry_run:
-        return {"plan_id": plan_id, "dry_run": True, "preview": result}
+        preview = dict(result) if isinstance(result, dict) else {"preview": result}
+        preview["platform_fee"] = fee
+        preview["platform_fee_token"] = plan["input_token"]
+        preview["total_cost"] = total_cost
+        preview["fee_rate"] = 0.005
+        return {"plan_id": plan_id, "dry_run": True, "preview": preview}
 
-    success = result.get("status") in ("success", "dry_run")
+    success = result.get("status") == "success"
     if success:
+        if plan_user and fee > 0:
+            fee_record = record_dca_platform_fee(
+                plan_user,
+                plan["input_token"],
+                amount,
+                reference_id=(result.get("signature") or plan_id)[:128],
+                signature=result.get("signature"),
+                plan_id=plan_id,
+            )
+            if "error" in fee_record:
+                exec_record["fee_error"] = fee_record["error"]
+            else:
+                exec_record["fee_recorded"] = fee_record.get("fee", fee)
+
+        result["platform_fee"] = fee
+        result["platform_fee_token"] = plan["input_token"]
+        result["total_cost"] = total_cost
+        result["fee_rate"] = 0.005
+
         next_run   = now + timedelta(minutes=interval_minutes)
         executions = plan.get("executions", []) + [exec_record]
         _update_plan(plan_id, {
             "executions_count":  executions_count + 1,
-            "spent_so_far":      round(spent + amount, 8),
+            "spent_so_far":      round(spent + total_cost, 8),
             "next_execution_at": next_run.isoformat(),
             "executions":        executions[-50:],
         })
@@ -2265,7 +2304,8 @@ SYSTEM_PROMPT = """You are a Solana DCA (Dollar-Cost Averaging) agent. You help 
 - Users deposit tokens to the **AI Agent wallet** before running DCA.
 - Always call get_agent_wallet to show the deposit address when asked.
 - After a user deposits, they (or the frontend) provide a tx signature - call verify_user_deposit(signature, user_wallet) to record on-chain proof.
-- Before create_dca_plan, call get_user_deposit_balance(user_wallet) and ensure available balance covers total_budget (or amount_per_buy × max_executions).
+- Before create_dca_plan, call get_user_deposit_balance(user_wallet) and ensure available balance covers total_budget (or amount_per_buy × max_executions **including the 0.5% platform fee per buy**).
+- **Platform fee**: each **successful scheduled DCA buy** charges **0.5% of the swap amount in the input token** (e.g. SOL→USDC fee is in SOL; TokenA→TokenB fee is in TokenA). One-off execute_swap_buy previews are fee-free; plan executions are not.
 - create_dca_plan **requires user_wallet** - never create a plan without it.
 - Each user's DCA spend is limited to their verified deposit balance for that input token.
 - The agent wallet is shared on-chain, but the ledger tracks deposits **per user wallet**. User A cannot spend User B's deposits.
@@ -2551,8 +2591,12 @@ def _token_with_mint(raw: Any) -> str:
 
 def _pending_action_details(tool_name: str, args: dict) -> dict[str, Any]:
     if tool_name == "create_dca_plan":
+        from deposit_ledger import dca_execution_total_cost, dca_platform_fee
+
         inp = _resolve_token_brief(args.get("input_token"))
         out = _resolve_token_brief(args.get("output_token"))
+        amount = float(args.get("amount_per_buy") or 0)
+        fee = dca_platform_fee(amount) if amount > 0 else 0
         return {
             "action": tool_name,
             "input_token": inp.get("symbol"),
@@ -2560,6 +2604,10 @@ def _pending_action_details(tool_name: str, args: dict) -> dict[str, Any]:
             "output_token": out.get("symbol"),
             "output_mint": out.get("mint"),
             "amount_per_buy": args.get("amount_per_buy"),
+            "platform_fee_per_buy": fee,
+            "platform_fee_token": inp.get("symbol"),
+            "total_cost_per_buy": dca_execution_total_cost(amount) if amount > 0 else None,
+            "fee_rate": 0.005,
             "interval": args.get("interval"),
             "max_executions": args.get("max_executions"),
             "total_budget": args.get("total_budget"),
@@ -2609,6 +2657,7 @@ def _summarize_pending_action(tool_name: str, args: dict) -> str:
             parts.append(f"budget **{args.get('total_budget')} {args.get('input_token')}**")
         if args.get("start_immediately"):
             parts.append("start immediately")
+        parts.append("**0.5% platform fee per successful buy (charged in input token)**")
         return "Create DCA plan: " + ", ".join(parts)
 
     if tool_name == "update_dca_plan_status":
@@ -2616,7 +2665,10 @@ def _summarize_pending_action(tool_name: str, args: dict) -> str:
         return f"**{action.title()}** DCA plan `{args.get('plan_id')}`"
 
     if tool_name == "execute_dca_now":
-        return f"Execute next **live buy** for plan `{args.get('plan_id')}`"
+        return (
+            f"Execute next **live buy** for plan `{args.get('plan_id')}` "
+            f"(includes **0.5% platform fee** in the plan input token)"
+        )
 
     if tool_name == "execute_swap_buy":
         return (
@@ -2671,6 +2723,7 @@ def _format_pending_execution_reply(tool_name: str, result: str) -> str:
             parts.append(f"Max buys: **{plan.get('max_executions')}**.")
         if plan.get("total_budget") is not None:
             parts.append(f"Budget: **{plan.get('total_budget')} {plan.get('input_token')}**.")
+        parts.append("Each successful buy includes a **0.5% platform fee** in the input token.")
         parts.append("\nNot financial advice. DYOR.")
         return " ".join(parts)
 
@@ -2679,6 +2732,11 @@ def _format_pending_execution_reply(tool_name: str, result: str) -> str:
 
     if tool_name in {"execute_dca_now", "execute_swap_buy"}:
         msg = data.get("message") or data.get("status") or "Swap executed."
+        if data.get("platform_fee"):
+            msg += (
+                f" Platform fee: **{data.get('platform_fee')} "
+                f"{data.get('platform_fee_token', '')}**."
+            )
         return f"{msg}\n\nNot financial advice. DYOR."
 
     if tool_name == "withdraw_user_tokens":
