@@ -1187,13 +1187,16 @@ def _create_ata_instruction(
     owner: "Pubkey",
     mint: "Pubkey",
     token_program_id: str = TOKEN_PROGRAM_ID,
+    idempotent: bool = True,
 ):
     from solders.instruction import AccountMeta, Instruction
 
     ata = _associated_token_address(owner, mint, token_program_id)
+    # CreateIdempotent (1) succeeds even if the ATA already exists.
+    data = bytes([1]) if idempotent else bytes([])
     return Instruction(
         Pubkey.from_string(ASSOCIATED_TOKEN_PROGRAM_ID),
-        bytes([]),
+        data,
         [
             AccountMeta(payer, True, True),
             AccountMeta(ata, False, True),
@@ -1216,35 +1219,102 @@ def _normalize_rpc_pubkey(value: Any) -> Optional[str]:
     return None
 
 
-def _wallet_token_account_for_mint(
+def _parse_token_account_entry(entry: dict) -> tuple[Optional[str], int, str]:
+    """Parse getTokenAccountsByOwner entry -> (pubkey, raw_amount, token_program_id)."""
+    pubkey = _normalize_rpc_pubkey(entry.get("pubkey"))
+    account = entry.get("account") or {}
+    program_id = account.get("owner") or TOKEN_PROGRAM_ID
+    raw = 0
+    data = account.get("data")
+    if isinstance(data, dict):
+        parsed = data.get("parsed") or {}
+        info = parsed.get("info") or {}
+        token_amount = info.get("tokenAmount") or {}
+        raw = int(token_amount.get("amount") or 0)
+    return pubkey, raw, program_id
+
+
+def _associated_token_account_exists(
+    owner_wallet: str,
+    mint_address: str,
+    token_program_id: str,
+) -> bool:
+    """True when the wallet's associated token account is already on-chain."""
+    try:
+        owner = Pubkey.from_string(owner_wallet)
+        mint = Pubkey.from_string(mint_address)
+        ata = str(_associated_token_address(owner, mint, token_program_id))
+        info = sol_rpc("getAccountInfo", [ata, {"encoding": "base64"}])
+        return bool(info and info.get("value"))
+    except Exception:
+        return False
+
+
+def _find_wallet_token_account(
     wallet_pubkey: str,
     mint_address: str,
-    token_program_id: Optional[str] = None,
-) -> Optional[str]:
-    """Find an existing token account for wallet+mint (legacy or Token-2022)."""
-    program_id = token_program_id or _resolve_token_program_for_mint(mint_address)
-    try:
-        owner = Pubkey.from_string(wallet_pubkey)
-        mint = Pubkey.from_string(mint_address)
-        derived = str(_associated_token_address(owner, mint, program_id))
-        balance = sol_rpc("getTokenAccountBalance", [derived])
-        if balance and balance.get("value"):
-            return derived
-    except Exception:
-        pass
+    min_raw_amount: int = 1,
+) -> Optional[tuple[str, str]]:
+    """
+    Locate a token account owned by wallet_pubkey with enough balance.
+    Returns (token_account_pubkey, token_program_id).
+    """
+    best: Optional[tuple[str, int, str]] = None
 
     try:
         result = sol_rpc(
             "getTokenAccountsByOwner",
             [wallet_pubkey, {"mint": mint_address}, {"encoding": "jsonParsed"}],
         )
-        accounts = (result or {}).get("value") or []
-        for entry in accounts:
-            pubkey = _normalize_rpc_pubkey(entry.get("pubkey") if isinstance(entry, dict) else entry)
-            if pubkey:
-                return pubkey
+        for entry in (result or {}).get("value") or []:
+            if not isinstance(entry, dict):
+                continue
+            pubkey, raw, program_id = _parse_token_account_entry(entry)
+            if not pubkey or raw < min_raw_amount:
+                continue
+            if best is None or raw > best[1]:
+                best = (pubkey, raw, program_id)
     except Exception:
         pass
+
+    if best:
+        return best[0], best[2]
+
+    token_program_id = _resolve_token_program_for_mint(mint_address)
+    programs_to_try = []
+    for program_id in (token_program_id, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID):
+        if program_id not in programs_to_try:
+            programs_to_try.append(program_id)
+
+    try:
+        owner = Pubkey.from_string(wallet_pubkey)
+        mint = Pubkey.from_string(mint_address)
+    except Exception:
+        return None
+
+    for program_id in programs_to_try:
+        try:
+            derived = str(_associated_token_address(owner, mint, program_id))
+            balance = sol_rpc("getTokenAccountBalance", [derived])
+            raw = int(((balance or {}).get("value") or {}).get("amount") or 0)
+            if raw >= min_raw_amount:
+                return derived, program_id
+        except Exception:
+            continue
+
+    return None
+
+
+def _wallet_token_account_for_mint(
+    wallet_pubkey: str,
+    mint_address: str,
+    token_program_id: Optional[str] = None,
+    min_raw_amount: int = 1,
+) -> Optional[str]:
+    """Find an existing token account for wallet+mint (legacy or Token-2022)."""
+    found = _find_wallet_token_account(wallet_pubkey, mint_address, min_raw_amount)
+    if found:
+        return found[0]
     return None
 
 
@@ -1327,30 +1397,31 @@ def send_tokens_to_user(
     except Exception:
         return {"error": "Invalid token mint address."}
 
-    token_program_id = _resolve_token_program_for_mint(mint_address)
     raw_amount = _lamports(amount, decimals)
     if raw_amount <= 0:
         return {"error": "Amount is too small for this token's decimals."}
 
     agent_owner = keypair.pubkey()
-    source_account = _wallet_token_account_for_mint(
-        str(agent_owner),
-        mint_address,
-        token_program_id,
-    )
-    if not source_account:
+    found = _find_wallet_token_account(str(agent_owner), mint_address, raw_amount)
+    if not found:
         return {
             "error": (
-                f"Agent wallet has no token account for mint {mint_address}. "
-                "Nothing to withdraw for this token."
-            )
+                f"The agent wallet has no on-chain token account with enough "
+                f"{mint_address} to send {amount}. "
+                "Your ledger balance may include tokens that are not yet settled on-chain, "
+                "or the agent may need SOL for rent when receiving this token. "
+                "Try again after the DCA swap confirms, or contact support."
+            ),
+            "mint": mint_address,
+            "requested_amount": amount,
         }
 
+    source_account, token_program_id = found
     source_ata = Pubkey.from_string(source_account)
     dest_ata = _associated_token_address(recipient, mint, token_program_id)
 
     instructions = []
-    if not _ata_exists(user_wallet, mint_address):
+    if not _associated_token_account_exists(user_wallet, mint_address, token_program_id):
         instructions.append(
             _create_ata_instruction(agent_owner, recipient, mint, token_program_id)
         )
@@ -1365,7 +1436,10 @@ def send_tokens_to_user(
     )
 
     try:
-        return _send_signed_transaction(keypair, instructions)
+        result = _send_signed_transaction(keypair, instructions)
+        if result.get("status") == "success":
+            result["created_user_ata"] = len(instructions) > 1
+        return result
     except Exception as e:
         return {"error": str(e)}
 

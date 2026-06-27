@@ -24,7 +24,7 @@ except ImportError:
 
 from db import get_conn, init_db
 
-PUBLIC_APP_URL = os.environ.get("BITAGENTS_PUBLIC_URL", "https://bitagents.io").rstrip("/")
+PUBLIC_APP_URL = os.environ.get("BITAGENTS_PUBLIC_URL", "https://bitagents.app").rstrip("/")
 SESSION_TTL_HOURS = int(os.environ.get("DCA_SESSION_TTL_HOURS", "24"))
 CHALLENGE_TTL_MINUTES = int(os.environ.get("DCA_CHALLENGE_TTL_MINUTES", "10"))
 INTERNAL_API_KEY = os.environ.get("DCA_INTERNAL_API_KEY", "").strip()
