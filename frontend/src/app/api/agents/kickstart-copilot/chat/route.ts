@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAuthToken, proxyDcaChat } from "@/server/agentsApiProxy";
+import { getAuthToken, proxyKickstartChat } from "@/server/agentsApiProxy";
 
 export async function POST(request: Request) {
   const authToken = getAuthToken(request);
@@ -20,7 +20,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const res = await proxyDcaChat({ message, session_id: body.session_id }, authToken);
+    const res = await proxyKickstartChat({ message, session_id: body.session_id }, authToken);
     const data = await res.json();
     if (!res.ok) {
       return NextResponse.json(data, { status: res.status });
@@ -29,8 +29,8 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json(
       {
-        error: "Cannot reach DCA agent API",
-        detail: "Start the agent locally: cd agent/new && python dca_api.py",
+        error: "Cannot reach Kickstart Copilot API",
+        detail: "Start the agent API: cd agent/new && python agents_api.py",
       },
       { status: 503 }
     );

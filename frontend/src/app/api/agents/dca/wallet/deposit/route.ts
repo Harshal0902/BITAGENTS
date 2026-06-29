@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAuthToken, proxyDcaDepositVerify } from "@/server/dcaAgentProxy";
+import { getAuthToken, proxyDcaDepositVerify } from "@/server/agentsApiProxy";
 
 export async function POST(request: Request) {
   const authToken = getAuthToken(request);

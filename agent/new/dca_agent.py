@@ -2448,6 +2448,10 @@ Tokens: accept any SPL token by symbol or mint address (e.g. JUP or a full mint)
 Common tokens: SOL, USDC, USDT, JUP, BONK, WIF, RAY, ORCA, PYTH, JTO, RENDER
 """
 
+from shared_governance import GOVERNANCE_PROMPT
+
+SYSTEM_PROMPT = SYSTEM_PROMPT + GOVERNANCE_PROMPT
+
 
 def _openrouter_headers() -> dict[str, str]:
     if not OPEN_ROUTER_API:
@@ -2980,6 +2984,50 @@ def execute_tool(
         return json.dumps({"error": str(e)})
 
 
+def _detect_plan_list_intent(user_input: str) -> Optional[dict[str, Any]]:
+    lower = user_input.lower()
+    if re.search(r"\b(detail|details|history|execution|executions|pause|resume|cancel)\b", lower):
+        return None
+    wants_plans = (
+        (re.search(r"\b(list|show|view|see)\b", lower) and re.search(r"\bplan", lower))
+        or re.search(r"\bmy\b.*\bdca\b", lower)
+        or re.search(r"\bdca\b.*\bplan", lower)
+    )
+    if not wants_plans:
+        return None
+    active_only = bool(re.search(r"\bactive\b", lower))
+    status = None
+    for s in ("paused", "completed", "cancelled", "active"):
+        if re.search(rf"\b{s}\b", lower):
+            status = s
+            break
+    return {"active_only": active_only, "status": status}
+
+
+def _format_dca_plans_reply(result: dict) -> str:
+    if result.get("error"):
+        return f"Could not list plans: {result['error']}"
+    plans = result.get("plans") or []
+    count = int(result.get("count") or 0)
+    if count == 0:
+        return (
+            "You have **no DCA plans** yet. "
+            "Ask me to create one (e.g. \"DCA 10 USDC into JUP daily\")."
+        )
+    lines = [f"**{count} DCA plan(s)** for your wallet:\n"]
+    for p in plans:
+        max_exec = p.get("max_executions")
+        max_label = max_exec if max_exec is not None else "∞"
+        lines.append(
+            f"- **{p.get('name', 'Plan')}** (`{p.get('id')}`)\n"
+            f"  Pair: {p.get('pair')} | Status: **{p.get('status')}**\n"
+            f"  Buys: {p.get('executions', 0)}/{max_label} | Spent: {p.get('spent', 0)}\n"
+            f"  Mints: {p.get('input_mint')} → {p.get('output_mint')}"
+        )
+    lines.append("\nNot financial advice. DYOR.")
+    return "\n".join(lines)
+
+
 def run_agent_with_actions(
     user_input: str,
     conversation_history: list,
@@ -2993,6 +3041,24 @@ def run_agent_with_actions(
     if pending_execution:
         tool_name, args, result, reply = pending_execution
         actions.append({"tool": tool_name, "args": args, "result": result})
+        conversation_history.append({"role": "user", "content": user_input.strip()})
+        conversation_history.append({"role": "assistant", "content": reply})
+        return reply, conversation_history, actions
+
+    plan_intent = _detect_plan_list_intent(user_input) if user_wallet else None
+    if plan_intent:
+        list_args = {
+            "user_wallet": user_wallet,
+            "active_only": plan_intent["active_only"] and not plan_intent.get("status"),
+            "status": plan_intent.get("status"),
+        }
+        result = list_dca_plans(**list_args)
+        reply = _format_dca_plans_reply(result)
+        actions.append({
+            "tool": "list_dca_plans",
+            "args": list_args,
+            "result": json.dumps(result, indent=2),
+        })
         conversation_history.append({"role": "user", "content": user_input.strip()})
         conversation_history.append({"role": "assistant", "content": reply})
         return reply, conversation_history, actions

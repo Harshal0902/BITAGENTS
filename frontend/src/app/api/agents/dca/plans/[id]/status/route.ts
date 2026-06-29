@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAuthToken, proxyDcaPlanStatus } from "@/server/dcaAgentProxy";
+import { getAuthToken, proxyDcaPlanStatus } from "@/server/agentsApiProxy";
 
 export async function POST(
   request: NextRequest,

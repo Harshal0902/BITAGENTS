@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { proxyDcaWalletAgent } from "@/server/dcaAgentProxy";
+import { proxyDcaWalletAgent } from "@/server/agentsApiProxy";
 
 export async function GET() {
   try {

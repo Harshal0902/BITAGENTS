@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { proxyDcaResolveToken } from "@/server/dcaAgentProxy";
+import { proxyDcaResolveToken } from "@/server/agentsApiProxy";
 
 export async function GET(request: NextRequest) {
   const query = request.nextUrl.searchParams.get("query")?.trim();

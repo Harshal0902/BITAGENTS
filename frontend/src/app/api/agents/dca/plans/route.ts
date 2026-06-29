@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAuthToken, proxyDcaPlans } from "@/server/dcaAgentProxy";
+import { getAuthToken, proxyDcaPlans } from "@/server/agentsApiProxy";
 
 export async function GET(request: NextRequest) {
   const authToken = getAuthToken(request);

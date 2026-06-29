@@ -173,6 +173,18 @@ SCHEMA_STATEMENTS = [
         updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS user_watchlists (
+        id              BIGSERIAL PRIMARY KEY,
+        user_wallet     VARCHAR(64) NOT NULL,
+        mint            VARCHAR(64) NOT NULL,
+        symbol          VARCHAR(32),
+        name            TEXT,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_wallet, mint)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_user_watchlists_wallet ON user_watchlists (user_wallet)",
 ]
 
 MIGRATION_STATEMENTS = [
@@ -782,3 +794,84 @@ def get_platform_metrics(refresh: bool = False) -> dict[str, Any]:
         "executions_24h": int(row["executions_24h"]),
         "updated_at": _iso(row["updated_at"]),
     }
+
+
+# ─── User watchlists (Kickstart Copilot) ──────────────────────────────────────
+
+def add_watchlist_token(
+    user_wallet: str,
+    mint: str,
+    symbol: Optional[str] = None,
+    name: Optional[str] = None,
+) -> dict[str, Any]:
+    init_db()
+    wallet = user_wallet.strip()
+    mint = mint.strip()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO user_watchlists (user_wallet, mint, symbol, name)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_wallet, mint) DO UPDATE SET
+                    symbol = COALESCE(EXCLUDED.symbol, user_watchlists.symbol),
+                    name = COALESCE(EXCLUDED.name, user_watchlists.name)
+                RETURNING id, symbol, name, created_at
+                """,
+                (wallet, mint, symbol, name),
+            )
+            row = cur.fetchone()
+    return {
+        "status": "added",
+        "user_wallet": wallet,
+        "mint": mint,
+        "symbol": row["symbol"] if row else symbol,
+        "name": row["name"] if row else name,
+    }
+
+
+def remove_watchlist_token(user_wallet: str, mint: str) -> dict[str, Any]:
+    init_db()
+    wallet = user_wallet.strip()
+    mint = mint.strip()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM user_watchlists WHERE user_wallet = %s AND mint = %s",
+                (wallet, mint),
+            )
+            removed = cur.rowcount > 0
+    if not removed:
+        return {"error": "Token not on watchlist.", "mint": mint}
+    return {"status": "removed", "user_wallet": wallet, "mint": mint}
+
+
+def list_watchlist(user_wallet: str) -> dict[str, Any]:
+    init_db()
+    wallet = user_wallet.strip()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mint, symbol, name, created_at
+                FROM user_watchlists
+                WHERE user_wallet = %s
+                ORDER BY created_at DESC
+                """,
+                (wallet,),
+            )
+            rows = cur.fetchall()
+    watchlist = [
+        {
+            "mint": row["mint"],
+            "symbol": row["symbol"],
+            "name": row["name"],
+            "added_at": _iso(row["created_at"]),
+        }
+        for row in rows
+    ]
+    return {"user_wallet": wallet, "count": len(watchlist), "watchlist": watchlist}
+
+
+def compare_watchlist_tokens(user_wallet: str) -> dict[str, Any]:
+    return list_watchlist(user_wallet)

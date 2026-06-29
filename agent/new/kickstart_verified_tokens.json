@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "description": "EasyA Kickstart verified token allowlist. Only tokens listed here (with active: true) are used by the Kickstart Token Copilot.",
+  "tokens": [
+    {
+      "symbol": "BITAGENTS",
+      "name": "BIT AGENTS",
+      "mint": "iu3A7azWTm3zQSk81SUC1JctB4zPYnxLmcmqq71EASY",
+      "launch_date": "2026-06-11",
+      "description": "Welcome to BIT AGENTS We're building an AI Agent and Compute Marketplace. Users need agents that can monitor wallets, perform research, automate workflows, and execute tasks. BIT AGENTS provides a marketplace where users can discover, deploy, and interact with AI agents tailored to their needs. Our goal is to make AI agents accessible, affordable, and on-chain.",
+      "website": "https://bitagents.app",
+      "twitter": "https://x.com/bitagentsapp",
+      "telegram": "https://t.me/bitagentscommunity",
+      "active": true
+    },
+    {
+      "symbol": "WEB3AUTO",
+      "name": "Web3 Automated",
+      "mint": "6bPi7tGnWRjGBo95GerL2udVoFDjfcmfsVxrHhL5DRmR",
+      "launch_date": "2026-03-21",
+      "description": "Agentic customer support platform for Web3 teams, providing 24/7 AI agents across websites, Discord, Telegram, and email.",
+      "website": "https://web3automated.com",
+      "twitter": "https://x.com/web3automated",
+      "telegram": "",
+      "active": true
+    },
+    {
+      "symbol": "VSK",
+      "name": "Varsko Intelligence",
+      "mint": "12z7AWnW5Q8mAS9qFtCWnnMdhNvqScZHe8w627EfEASY",
+      "launch_date": "2026-06-18",
+      "description": "AI-powered intelligence platform combining proprietary expert networks with real-time open-source intelligence to deliver company-specific insights, foresight, and executive briefings.",
+      "website": "https://varskoai.com",
+      "twitter": "https://x.com/varskointel",
+      "telegram": "",
+      "active": true
+    },
+    {
+      "symbol": "CPX",
+      "name": "CapIX Protocol",
+      "mint": "bS532krUcXBMNqXURPtGqYA7dhEsenYe2z9QKkcEASY",
+      "launch_date": "2026-06-11",
+      "description": "The official token powering CapIX.Network, the Capacity Inference Exchange, enabling AI-driven capacity inference and decentralized network participation.",
+      "website": "https://capix.network",
+      "twitter": "https://x.com/cpx_token",
+      "telegram": "",
+      "active": true
+    },
+    {
+      "symbol": "KAIMO",
+      "name": "Kaimo",
+      "mint": "8QzDDk7iqzgCpwK3DYLkRmrosC8fbyfBBkGv3XvEASY",
+      "launch_date": "2026-05-23",
+      "description": "Agentic e-commerce tooling for the UK, enabling automated purchasing using product URLs, buyer details, and fiat or x402 payments.",
+      "website": "https://kaimo-no.github.io",
+      "twitter": "https://x.com/kaimo_no",
+      "telegram": "",
+      "active": true
+    },
+    {
+      "symbol": "CVT",
+      "name": "Covenant Foundation",
+      "mint": "y4JiNFzBPofqiCpuDTcVq11nhUDQoDzeK1UBCoXxF9y",
+      "launch_date": "2026-05-12",
+      "description": "Building the next generation of ventures through agentic governance infrastructure, research, and AI-powered coordination.",
+      "website": "https://covenant.foundation",
+      "twitter": "https://x.com/launchcovenant",
+      "telegram": "",
+      "active": true
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { proxyDcaHealth } from "@/server/dcaAgentProxy";
+import { proxyDcaHealth } from "@/server/agentsApiProxy";
 
 export async function GET() {
   try {

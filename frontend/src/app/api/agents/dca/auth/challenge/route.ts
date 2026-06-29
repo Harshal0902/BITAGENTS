@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { proxyDcaAuthChallenge } from "@/server/dcaAgentProxy";
+import { proxyDcaAuthChallenge } from "@/server/agentsApiProxy";
 
 export async function GET(request: Request) {
   const userWallet = new URL(request.url).searchParams.get("user_wallet")?.trim();

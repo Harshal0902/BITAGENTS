@@ -169,6 +169,14 @@ export function formatMetricNumber(value: number): string {
   return String(value);
 }
 
+export function formatVolumeSol(value: number): string {
+  if (value <= 0) return "0 SOL";
+  if (value >= 1_000) return `${(value / 1_000).toFixed(2)}k SOL`;
+  if (value >= 100) return `${value.toFixed(1)} SOL`;
+  if (value >= 1) return `${value.toFixed(2)} SOL`;
+  return `${value.toFixed(4)} SOL`;
+}
+
 export function executionExplorerUrl(row: DcaExecutionRow, cluster?: string): string | null {
   if (row.explorer_url) return row.explorer_url;
   if (row.signature) return explorerUrlForSignature(row.signature, cluster);

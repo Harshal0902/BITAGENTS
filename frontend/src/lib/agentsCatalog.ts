@@ -34,8 +34,9 @@ export type MarketplaceAgent = {
   category: AgentCategory;
   description: string;
   tagline: string;
-  pricePerTask: string;
-  runs: string;
+  pricePerTask?: string;
+  runs?: string;
+  volumeSol?: string;
   rating: number;
   iconId: AgentIconId;
   available: boolean;
@@ -44,7 +45,7 @@ export type MarketplaceAgent = {
 };
 
 export const MARKETPLACE_STATS = {
-  liveAgents: "1",
+  liveAgents: "2",
   tasks24h: "102",
   activeBuilders: "22",
   uptime30d: "99.2%",
@@ -67,10 +68,25 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     description: "Set up dollar-cost averaging on Solana. Schedule recurring token buys, preview Jupiter quotes, and manage plans from natural language.",
     tagline: "Recurring buys · Jupiter swaps · OpenRouter-powered",
     pricePerTask: "0.5% / tx",
-    runs: "102",
+    runs: "-",
+    volumeSol: "-",
     rating: 4.9,
     iconId: "swap",
     available: true,
+    model: "meta-llama/llama-3.3-70b-instruct",
+    cluster: "mainnet",
+  },
+  {
+    id: "kickstart-copilot",
+    slug: "kickstart-copilot",
+    name: "EasyA Analysis Agent",
+    category: "Research",
+    description:
+      "Free AI copilot for Solana token discovery, live analytics, health scores, comparisons, risk checks, and launch operations guidance.",
+    tagline: "Token research · health scores · launch ops",
+    rating: 4.9,
+    iconId: "search",
+    available: false,
     model: "meta-llama/llama-3.3-70b-instruct",
     cluster: "mainnet",
   },
@@ -81,8 +97,6 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     category: "Monitor",
     description: "Track wallet flows, token balances, and notable on-chain activity in real time.",
     tagline: "Balance alerts · flow tracking · wallet intel",
-    pricePerTask: "-",
-    runs: "-",
     rating: 4.9,
     iconId: "wallet",
     available: false,
@@ -95,8 +109,6 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     description:
       "Summarize on-chain data, social sentiment, and protocol fundamentals into concise research briefs.",
     tagline: "On-chain research · sentiment · briefs",
-    pricePerTask: "-",
-    runs: "-",
     rating: 4.8,
     iconId: "search",
     available: false,
@@ -108,8 +120,6 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     category: "Alerts",
     description: "Configure price, volume, and wallet triggers with instant notifications.",
     tagline: "Price alerts · volume spikes · custom triggers",
-    pricePerTask: "-",
-    runs: "-",
     rating: 4.7,
     iconId: "bell",
     available: false,
@@ -121,8 +131,6 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     category: "Automation",
     description: "Pull structured data from protocols, APIs, and on-chain programs on a schedule.",
     tagline: "Scheduled pulls · structured output · API ready",
-    pricePerTask: "-",
-    runs: "-",
     rating: 4.9,
     iconId: "bot",
     available: false,
@@ -134,8 +142,6 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     category: "Monitor",
     description: "Aggregate holdings, PnL, and exposure across wallets and protocols.",
     tagline: "Multi-wallet · PnL · exposure",
-    pricePerTask: "-",
-    runs: "-",
     rating: 4.6,
     iconId: "radar",
     available: false,

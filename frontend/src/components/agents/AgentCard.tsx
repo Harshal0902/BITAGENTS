@@ -1,18 +1,13 @@
 "use client";
 
-import { ArrowRight, Star } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import Link from "next/link";
 import { AGENT_ICONS } from "@/lib/agentsCatalog";
 import type { MarketplaceAgent } from "@/lib/agentsCatalog";
 
-export function AgentCard({
-  agent,
-  runsLabel = "Runs",
-}: {
-  agent: MarketplaceAgent;
-  runsLabel?: string;
-}) {
+export function AgentCard({ agent }: { agent: MarketplaceAgent }) {
   const Icon = AGENT_ICONS[agent.iconId];
+  const showDcaStats = agent.slug === "dca";
 
   const inner = (
     <article className="group flex h-full flex-col border border-grid bg-surface/40 p-5 transition hover:border-signal/60 hover:bg-surface/70">
@@ -20,10 +15,6 @@ export function AgentCard({
         <div className="flex h-10 w-10 items-center justify-center border border-grid bg-background/80 text-signal">
           <Icon size={18} strokeWidth={1.75} />
         </div>
-        {/* <div className="flex items-center gap-1 font-mono text-[11px] text-muted-foreground">
-          <Star size={12} className="fill-signal text-signal" />
-          <span className="text-foreground">{agent.rating.toFixed(1)}</span>
-        </div> */}
       </div>
 
       <h3 className="mt-4 font-display text-lg font-bold transition group-hover:text-signal">
@@ -32,23 +23,36 @@ export function AgentCard({
       <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
         {agent.category}
       </p>
+      <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{agent.tagline}</p>
 
-      <div className="mt-5 grid grid-cols-2 gap-4 border-t border-grid pt-4">
-        <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-            Per task
+      {showDcaStats && (
+        <div className="mt-5 grid grid-cols-3 gap-3 border-t border-grid pt-4">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+              Per task
+            </div>
+            <div className="mt-1 font-display text-base font-bold tabular-nums text-signal md:text-lg">
+              {agent.pricePerTask ?? "-"}
+            </div>
           </div>
-          <div className="mt-1 font-display text-xl font-bold tabular-nums text-signal">
-            {agent.pricePerTask}
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+              Total tx
+            </div>
+            <div className="mt-1 font-display text-base font-bold tabular-nums md:text-lg">
+              {agent.runs ?? "-"}
+            </div>
+          </div>
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+              Volume
+            </div>
+            <div className="mt-1 font-display text-base font-bold tabular-nums text-signal md:text-lg">
+              {agent.volumeSol ?? "-"}
+            </div>
           </div>
         </div>
-        <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-            {runsLabel}
-          </div>
-          <div className="mt-1 font-display text-xl font-bold tabular-nums">{agent.runs}</div>
-        </div>
-      </div>
+      )}
 
       <div className="mt-auto pt-5">
         {agent.available ? (

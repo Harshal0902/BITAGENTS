@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { proxyDcaAuthVerify } from "@/server/agentsApiProxy";
+import { proxyAgentsAuthVerify } from "@/server/agentsApiProxy";
 
 export async function POST(request: Request) {
   let body: { user_wallet?: string; message?: string; signature?: string };
@@ -9,18 +9,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const userWallet = body.user_wallet?.trim();
-  const message = body.message?.trim();
-  const signature = body.signature?.trim();
-  if (!userWallet || !message || !signature) {
+  if (!body.user_wallet || !body.message || !body.signature) {
     return NextResponse.json({ error: "user_wallet, message, and signature are required" }, { status: 400 });
   }
 
   try {
-    const res = await proxyDcaAuthVerify({ user_wallet: userWallet, message, signature });
+    const res = await proxyAgentsAuthVerify({
+      user_wallet: body.user_wallet,
+      message: body.message,
+      signature: body.signature,
+    });
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch {
-    return NextResponse.json({ error: "DCA agent API offline" }, { status: 503 });
+    return NextResponse.json({ error: "Cannot reach agents API" }, { status: 503 });
   }
 }

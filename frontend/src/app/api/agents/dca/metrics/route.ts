@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { proxyDcaMetrics } from "@/server/dcaAgentProxy";
+import { proxyDcaMetrics } from "@/server/agentsApiProxy";
 
 export async function GET() {
   const res = await proxyDcaMetrics(false);

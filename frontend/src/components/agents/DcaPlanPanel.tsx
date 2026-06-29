@@ -22,13 +22,13 @@ const SECTION_MAX_HEIGHT = "max-h-[280px]";
 type PlanStatusFilter = "all" | "active" | "paused" | "completed" | "cancelled";
 
 function shortMint(mint?: string | null) {
-  if (!mint) return "—";
+  if (!mint) return "-";
   if (mint.length <= 12) return mint;
   return `${mint.slice(0, 4)}…${mint.slice(-4)}`;
 }
 
 function formatTime(iso?: string | null) {
-  if (!iso) return "—";
+  if (!iso) return "-";
   try {
     return new Date(iso).toLocaleString();
   } catch {
@@ -230,7 +230,7 @@ function ExecutionRow({ row, cluster }: { row: DcaExecutionRow; cluster?: string
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-mono text-[11px] text-foreground">{row.pair}</span>
         <span className={`font-mono text-[10px] uppercase ${ok ? "text-signal" : "text-warn"}`}>
-          {row.dry_run ? "dry run" : row.error ? "failed" : row.status ?? "—"}
+          {row.dry_run ? "dry run" : row.error ? "failed" : row.status ?? "-"}
         </span>
       </div>
       <div className="mt-1 font-mono text-[10px] text-muted-foreground">
@@ -357,7 +357,7 @@ export function DcaPlanPanel({
     return (
       <CollapsibleSection title="Your DCA plans" defaultOpen>
         <p className="font-mono text-xs text-muted-foreground">
-          Sign in with your wallet to view plans and swap history here — no need to ask the agent to list them.
+          Sign in with your wallet to view plans and swap history here - no need to ask the agent to list them.
         </p>
       </CollapsibleSection>
     );

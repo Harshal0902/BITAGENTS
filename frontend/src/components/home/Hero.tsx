@@ -7,7 +7,7 @@ export function Hero() {
                         The marketplace for <span className="text-signal">autonomous AI agents</span>.
                     </h1>
                     <p className="mt-6 max-w-xl text-lg leading-relaxed text-muted-foreground">
-                        BIT Agents is the on-chain marketplace where users discover, deploy, and run specialized AI agents for wallet monitoring, research, automation, and on-chain workflows.
+                        BIT Agents is the on-chain marketplace where users discover, and run specialized AI agents for wallet monitoring, research, automation, and on-chain workflows.
                     </p>
                     <div id="hero-cta" className="mt-10 flex flex-wrap gap-3">
                         <a href="/agents" className="group inline-flex items-center gap-2 bg-signal px-5 py-3 text-sm font-mono font-semibold uppercase tracking-[0.14em] text-primary-foreground transition hover:opacity-90">

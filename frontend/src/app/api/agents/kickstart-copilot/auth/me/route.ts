@@ -1,17 +1,17 @@
 import { NextResponse } from "next/server";
-import { getAuthToken, proxyDcaAuthMe } from "@/server/agentsApiProxy";
+import { getAuthToken, proxyAgentsAuthMe } from "@/server/agentsApiProxy";
 
 export async function GET(request: Request) {
-  const token = getAuthToken(request);
-  if (!token) {
+  const authToken = getAuthToken(request);
+  if (!authToken) {
     return NextResponse.json({ error: "Missing session token" }, { status: 401 });
   }
 
   try {
-    const res = await proxyDcaAuthMe(token);
+    const res = await proxyAgentsAuthMe(authToken);
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch {
-    return NextResponse.json({ error: "DCA agent API offline" }, { status: 503 });
+    return NextResponse.json({ error: "Cannot reach agents API" }, { status: 503 });
   }
 }
