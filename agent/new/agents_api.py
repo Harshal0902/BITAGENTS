@@ -64,11 +64,12 @@ from dca_agent import (
     start_scheduler,
     update_dca_plan_status,
 )
+from easya_screener_client import CACHE_TTL_SECONDS, screener_configured
 from kickstart_copilot_agent import (
     KICKSTART_MODEL,
+    list_verified_kickstart_tokens,
     run_kickstart_agent,
 )
-from kickstart_token_registry import list_verified_kickstart_tokens
 from wallet_auth import (
     create_auth_challenge,
     get_session_info,
@@ -240,6 +241,9 @@ def kickstart_health() -> dict[str, Any]:
         "model": KICKSTART_MODEL,
         "pricing": "free",
         "auth_required": True,
+        "data_source": "easy_screener",
+        "easy_screener_configured": screener_configured(),
+        "cache_ttl_seconds": CACHE_TTL_SECONDS,
         "openrouter_configured": bool(OPEN_ROUTER_API),
         "cluster": SOLANA_CLUSTER,
     }
@@ -538,7 +542,7 @@ def kickstart_verified_tokens(
     tag: Optional[str] = Query(None),
     _: None = Depends(require_internal_key),
 ) -> dict[str, Any]:
-    """EasyA Kickstart verified token allowlist (editable via kickstart_verified_tokens.json)."""
+    """EasyA Kickstart tokens from EASY Screener (cached up to 1h per token on server)."""
     return list_verified_kickstart_tokens(
         category=category,
         tag=tag,
