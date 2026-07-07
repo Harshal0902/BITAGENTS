@@ -7,7 +7,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Wallet sign-in required" }, { status: 401 });
   }
 
-  let body: { message?: string; session_id?: string };
+  let body: {
+    message?: string;
+    session_id?: string;
+    history?: { role: "user" | "assistant"; content: string }[];
+  };
   try {
     body = await request.json();
   } catch {
@@ -20,7 +24,10 @@ export async function POST(request: Request) {
   }
 
   try {
-    const res = await proxyKickstartChat({ message, session_id: body.session_id }, authToken);
+    const res = await proxyKickstartChat(
+      { message, session_id: body.session_id, history: body.history },
+      authToken
+    );
     const data = await res.json();
     if (!res.ok) {
       return NextResponse.json(data, { status: res.status });

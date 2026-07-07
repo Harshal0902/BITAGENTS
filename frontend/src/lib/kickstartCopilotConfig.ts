@@ -2,19 +2,20 @@ export const KICKSTART_COPILOT = {
   id: "kickstart-copilot",
   name: "EasyA Analysis Agent",
   slug: "kickstart-copilot",
-  tagline: "Token discovery · analytics · health scores",
+  tagline: "Solana token analysis · powered by EASY Screener",
   description:
-    "Free AI copilot for Solana token research, comparisons, risk checks, and launch operations guidance.",
+    "AI agent for live Solana token research - price, liquidity, holders, risk checks, health scores, and diligence summaries using EASY Screener data.",
   status: "Running" as const,
   model: "meta-llama/llama-3.3-70b-instruct",
   cluster: "mainnet-beta",
+  dataSource: "EASY Screener",
+  dataSourceUrl: "https://easyscreener.xyz",
 };
 
 export const KICKSTART_EXAMPLE_PROMPTS = [
-  "List verified Kickstart tokens",
+  "Give me an overview of $COLD",
   "Give me an overview of BITAGENTS",
   "Analyze BITAGENTS token health",
-  "What are the risks for BIT AGENTS?",
-  "How do I lock liquidity for BITAGENTS?",
-  "Watch BITAGENTS",
+  "Search tokens named cold",
+  "Compare CPX and BITAGENTS",
 ] as const;

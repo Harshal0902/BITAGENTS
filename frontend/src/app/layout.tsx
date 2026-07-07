@@ -1,6 +1,6 @@
 import "./globals.css";
 import "@solana/wallet-adapter-react-ui/styles.css";
-import type { Metadata } from "next";
+import { constructMetadata } from '@/lib/utils';
 import dynamic from "next/dynamic";
 import { Nav } from "@/components/Nav";
 import { Toaster } from "@/components/ui/sonner";
@@ -10,10 +10,7 @@ const SolanaProviders = dynamic(
   { ssr: false }
 );
 
-export const metadata: Metadata = {
-  title: "BIT Agents",
-  description: "The on-chain marketplace for autonomous AI agents."
-};
+export const metadata = constructMetadata();
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

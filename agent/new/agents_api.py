@@ -130,6 +130,12 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
 
 
+class KickstartChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+    session_id: Optional[str] = None
+    history: Optional[list[dict[str, str]]] = None
+
+
 class ChatResponse(BaseModel):
     reply: str
     session_id: str
@@ -154,6 +160,18 @@ def _redact_rpc_url(rpc_url: str) -> str:
     if not parts.query:
         return rpc_url
     return urlunsplit((parts.scheme, parts.netloc, parts.path, "api-key=REDACTED", parts.fragment))
+
+
+def _normalize_chat_history(history: Optional[list[dict[str, str]]]) -> list[dict[str, str]]:
+    if not history:
+        return []
+    normalized: list[dict[str, str]] = []
+    for msg in history[-20:]:
+        role = (msg.get("role") or "").strip()
+        content = (msg.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            normalized.append({"role": role, "content": content})
+    return normalized
 
 
 def require_internal_key(x_internal_key: Optional[str] = Header(default=None)) -> None:
@@ -485,19 +503,15 @@ def clear_dca_session(
 
 @app.post("/kickstart/chat", response_model=ChatResponse)
 def kickstart_chat(
-    body: ChatRequest,
+    body: KickstartChatRequest,
     auth_wallet: str = Depends(require_wallet_session),
 ) -> ChatResponse:
     session_id = body.session_id or str(uuid.uuid4())
-    access_error = assert_chat_session_access(session_id, auth_wallet)
-    if access_error:
-        raise HTTPException(status_code=403, detail=access_error)
-
-    history = load_chat_history(session_id)
+    history = _normalize_chat_history(body.history)
     user_message = body.message.strip()
 
     try:
-        reply, history, actions = run_kickstart_agent(
+        reply, _, actions = run_kickstart_agent(
             user_message,
             history,
             user_wallet=auth_wallet,
@@ -512,7 +526,6 @@ def kickstart_chat(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    append_chat_messages(session_id, user_message, reply, actions, user_wallet=auth_wallet)
     return ChatResponse(reply=reply, session_id=session_id, actions=actions)
 
 
@@ -521,11 +534,8 @@ def clear_kickstart_session(
     session_id: str,
     auth_wallet: str = Depends(require_wallet_session),
 ) -> dict[str, bool]:
-    access_error = assert_chat_session_access(session_id, auth_wallet)
-    if access_error:
-        raise HTTPException(status_code=403, detail=access_error)
-    deleted = delete_chat_session(session_id)
-    return {"ok": deleted}
+    # Kickstart chat is stateless - nothing persisted in the database.
+    return {"ok": True}
 
 
 @app.get("/kickstart/watchlist")
@@ -542,7 +552,7 @@ def kickstart_verified_tokens(
     tag: Optional[str] = Query(None),
     _: None = Depends(require_internal_key),
 ) -> dict[str, Any]:
-    """EasyA Kickstart tokens from EASY Screener (cached up to 1h per token on server)."""
+    """Tokens from EASY Screener (cached up to 1h per token on server)."""
     return list_verified_kickstart_tokens(
         category=category,
         tag=tag,

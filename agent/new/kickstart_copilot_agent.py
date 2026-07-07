@@ -1,5 +1,5 @@
 """
-EasyA Analysis Agent — Solana token discovery, analytics, and guidance.
+EasyA Analysis Agent - Solana token discovery, analytics, and guidance.
 
 Free for users (wallet sign-in required). Token data from EASY Screener (cached 1h per mint).
 """
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from typing import Any, Optional
 
@@ -166,11 +167,25 @@ def _screener_gate() -> Optional[dict[str, Any]]:
     }
 
 
+def _normalize_token_input(token: str) -> str:
+    return (token or "").strip().lstrip("$")
+
+
 def _token_bundle(token: str) -> dict[str, Any]:
     blocked = _screener_gate()
     if blocked:
         return blocked
-    return get_token_bundle(token)
+    return get_token_bundle(_normalize_token_input(token))
+
+
+def _resolve_screener_token(token: str) -> dict[str, Any]:
+    blocked = _screener_gate()
+    if blocked:
+        return blocked
+    result = screener_resolve_token(_normalize_token_input(token))
+    if isinstance(result, dict) and result.get("error"):
+        return result
+    return result if isinstance(result, dict) else {"error": "Token not found on EASY Screener."}
 
 
 def _row(bundle: dict[str, Any]) -> dict[str, Any]:
@@ -215,18 +230,18 @@ def list_verified_kickstart_tokens(
 
     return {
         "source": "easy_screener",
-        "enforced": True,
         "cache_ttl_seconds": CACHE_TTL_SECONDS,
         "count": len(tokens),
         "tokens": tokens,
         "attribution": ATTRIBUTION,
+        "note": "Tokens indexed on EASY Screener. Use search_tokens or get_token_overview for any symbol or mint.",
     }
 
 
 def search_tokens(
     query: str,
     limit: int = 10,
-    verified_only: bool = True,
+    verified_only: bool = False,
     tag: Optional[str] = None,
     category: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -259,17 +274,13 @@ def search_tokens(
                 filtered.append(t)
         tokens = filtered or tokens
 
-    if not tokens:
-        listed = list_verified_kickstart_tokens(active_only=verified_only)
-        tokens = listed.get("tokens") or []
-
     return {
         "query": query,
         "source": "easy_screener",
         "count": min(len(tokens), limit),
         "tokens": tokens[:limit],
         "attribution": ATTRIBUTION,
-        "note": "Only EasyA Kickstart tokens indexed by EASY Screener are returned.",
+        "note": "Results from EASY Screener search. Disambiguate by mint or market cap if multiple matches.",
     }
 
 
@@ -279,10 +290,20 @@ def get_token_overview(token: str) -> dict[str, Any]:
         return bundle
     row = _row(bundle)
     summary = bundle.get("summary") or {}
+    description = ""
+    if isinstance(summary, dict):
+        description = (
+            summary.get("summary")
+            or summary.get("description")
+            or summary.get("text")
+            or ""
+        )
     return {
         "symbol": row.get("symbol"),
         "name": row.get("name"),
         "mint": row.get("mint"),
+        "description": description or row.get("name"),
+        "launch_date": row.get("created_at"),
         "blockchain": row.get("chain") or "Solana",
         "cluster": SOLANA_CLUSTER,
         "verified": row.get("is_verified"),
@@ -328,7 +349,7 @@ def get_token_analytics(token: str) -> dict[str, Any]:
         "price_change_24h_pct": row.get("price_change_24h_pct"),
         "verified": row.get("is_verified"),
         "attribution": ATTRIBUTION,
-        "note": "Null numeric fields mean upstream data is missing — do not treat as zero.",
+        "note": "Null numeric fields mean upstream data is missing - do not treat as zero.",
     }
 
 
@@ -355,14 +376,63 @@ def get_token_performance(token: str, days: int = 7) -> dict[str, Any]:
     }
 
 
+def _locked_percent(locked: Optional[dict[str, Any]]) -> Optional[float]:
+    if not locked:
+        return None
+    for key in ("percent", "percentLocked", "lockedPercent"):
+        value = locked.get(key)
+        if value is not None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _risks_from_bundle(bundle: dict[str, Any], row: dict[str, Any]) -> list[dict[str, Any]]:
+    risks: list[dict[str, Any]] = []
+
+    liq = row.get("liquidity_usd")
+    if liq is not None and liq < 5_000:
+        risks.append({
+            "severity": "medium",
+            "title": "Low liquidity",
+            "detail": "Large trades may cause high slippage; exit risk elevated.",
+        })
+
+    pct_locked = _locked_percent(bundle.get("locked_supply"))
+    if pct_locked is not None and pct_locked < 50:
+        risks.append({
+            "severity": "medium",
+            "title": "Low locked supply",
+            "detail": f"Only {pct_locked:.1f}% locked per EASY Screener Streamflow data.",
+        })
+
+    if row.get("is_verified") is False:
+        risks.append({
+            "severity": "low",
+            "title": "Not verified on EASY Screener",
+            "detail": "Extra diligence recommended for unverified listings.",
+        })
+
+    summary = bundle.get("summary") or {}
+    trust = summary.get("trustScore") or summary.get("githubTrustScore")
+    if isinstance(trust, (int, float)) and trust < 35:
+        risks.append({
+            "severity": "medium",
+            "title": "Low EASY Screener trust score",
+            "detail": f"Trust score {trust}/100 - review AI + GitHub diligence summary.",
+        })
+
+    return risks
+
+
 def analyze_token_health(token: str) -> dict[str, Any]:
     bundle = _token_bundle(token)
     if bundle.get("error"):
         return bundle
     row = _row(bundle)
-    analytics = get_token_analytics(token)
-    risks = detect_token_risks(token)
-    risk_items = risks.get("risks") or []
+    risk_items = _risks_from_bundle(bundle, row)
     summary = bundle.get("summary") or {}
 
     strengths: list[str] = []
@@ -370,7 +440,7 @@ def analyze_token_health(token: str) -> dict[str, Any]:
     score = 50
 
     if row.get("is_verified"):
-        strengths.append("Listed and verified on EASY Screener / EasyA Kickstart")
+        strengths.append("Verified on EASY Screener")
         score += 10
 
     liq = row.get("liquidity_usd")
@@ -400,14 +470,13 @@ def analyze_token_health(token: str) -> dict[str, Any]:
             weaknesses.append(f"Low EASY Screener trust score ({trust})")
             score -= 8
 
-    locked = bundle.get("locked_supply") or {}
-    pct_locked = locked.get("percentLocked") or locked.get("lockedPercent")
+    pct_locked = _locked_percent(bundle.get("locked_supply"))
     if pct_locked is not None:
-        if float(pct_locked) >= 80:
-            strengths.append(f"High locked supply ({pct_locked}%)")
+        if pct_locked >= 80:
+            strengths.append(f"High locked supply ({pct_locked:.1f}%)")
             score += 8
-        elif float(pct_locked) < 20:
-            weaknesses.append(f"Low locked supply ({pct_locked}%)")
+        elif pct_locked < 20:
+            weaknesses.append(f"Low locked supply ({pct_locked:.1f}%)")
             score -= 6
 
     for r in risk_items:
@@ -419,7 +488,7 @@ def analyze_token_health(token: str) -> dict[str, Any]:
             score -= 5
 
     if not any(r.get("severity") == "high" for r in risk_items):
-        strengths.append("No critical red flags in EASY Screener diligence data")
+        strengths.append("No critical red flags in available EASY Screener data")
 
     vol = row.get("volume_24h_usd")
     if vol is not None and liq is not None and vol < 1_000 and liq > 0:
@@ -435,8 +504,16 @@ def analyze_token_health(token: str) -> dict[str, Any]:
         "strengths": strengths or ["Insufficient data for strengths"],
         "weaknesses": weaknesses or ["No major weaknesses flagged from available data"],
         "overall_health_score": score,
-        "analytics_snapshot": analytics,
-        "easya_summary": summary,
+        "analytics_snapshot": {
+            "price_usd": row.get("price_usd"),
+            "market_cap_usd": row.get("market_cap_usd"),
+            "liquidity_usd": row.get("liquidity_usd"),
+            "volume_24h_usd": row.get("volume_24h_usd"),
+            "holder_count": row.get("holder_count"),
+            "price_change_24h_pct": row.get("price_change_24h_pct"),
+        },
+        "easya_summary": summary or None,
+        "summary_unavailable": bundle.get("summary_unavailable"),
         "risks": risk_items,
         "attribution": ATTRIBUTION,
     }
@@ -477,45 +554,10 @@ def detect_token_risks(token: str) -> dict[str, Any]:
     if bundle.get("error"):
         return bundle
     row = _row(bundle)
-    risks: list[dict[str, Any]] = []
-
-    liq = row.get("liquidity_usd")
-    if liq is not None and liq < 5_000:
-        risks.append({
-            "severity": "medium",
-            "title": "Low liquidity",
-            "detail": "Large trades may cause high slippage; exit risk elevated.",
-        })
-
-    locked = bundle.get("locked_supply") or {}
-    pct_locked = locked.get("percentLocked") or locked.get("lockedPercent")
-    if pct_locked is not None and float(pct_locked) < 50:
-        risks.append({
-            "severity": "medium",
-            "title": "Low locked supply",
-            "detail": f"Only {pct_locked}% locked per EASY Screener Streamflow data.",
-        })
-
-    if row.get("is_verified") is False:
-        risks.append({
-            "severity": "low",
-            "title": "Not verified on EASY Screener",
-            "detail": "Extra diligence recommended for unverified Kickstart listings.",
-        })
-
-    summary = bundle.get("summary") or {}
-    trust = summary.get("trustScore") or summary.get("githubTrustScore")
-    if isinstance(trust, (int, float)) and trust < 35:
-        risks.append({
-            "severity": "medium",
-            "title": "Low EASY Screener trust score",
-            "detail": f"Trust score {trust}/100 — review AI + GitHub diligence summary.",
-        })
-
     return {
         "symbol": row.get("symbol"),
         "mint": row.get("mint"),
-        "risks": risks,
+        "risks": _risks_from_bundle(bundle, row),
         "attribution": ATTRIBUTION,
     }
 
@@ -585,7 +627,7 @@ def answer_token_faq(token: str, question: Optional[str] = None) -> dict[str, An
     row = _row(bundle)
     locked = bundle.get("locked_supply") or {}
     summary = bundle.get("summary") or {}
-    pct_locked = locked.get("percentLocked") or locked.get("lockedPercent")
+    pct_locked = _locked_percent(locked)
     faq = {
         "listed_on_easy_screener": row.get("is_verified"),
         "liquidity_locked": (
@@ -612,7 +654,7 @@ def answer_token_faq(token: str, question: Optional[str] = None) -> dict[str, An
 
 
 def add_to_watchlist(token: str, user_wallet: str) -> dict[str, Any]:
-    tok = screener_resolve_token(token)
+    tok = _resolve_screener_token(token)
     if tok.get("error"):
         return tok
     return add_watchlist_token(
@@ -624,7 +666,7 @@ def add_to_watchlist(token: str, user_wallet: str) -> dict[str, Any]:
 
 
 def remove_from_watchlist(token: str, user_wallet: str) -> dict[str, Any]:
-    tok = screener_resolve_token(token)
+    tok = _resolve_screener_token(token)
     if tok.get("error"):
         return tok
     return remove_watchlist_token(user_wallet, tok["mint"])
@@ -645,8 +687,8 @@ def compare_watchlist(user_wallet: str) -> dict[str, Any]:
 
 
 TOOLS = [
-    {"type": "function", "function": {"name": "list_verified_kickstart_tokens", "description": "List EasyA Kickstart verified tokens (the allowlist).", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "category": {"type": "string"}, "tag": {"type": "string"}}, "required": []}}},
-    {"type": "function", "function": {"name": "search_tokens", "description": "Discover EasyA verified tokens by keyword, category, or tag.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}, "verified_only": {"type": "boolean"}, "tag": {"type": "string"}, "category": {"type": "string"}}, "required": ["query"]}}},
+    {"type": "function", "function": {"name": "list_verified_kickstart_tokens", "description": "List tokens from EASY Screener (verified Kickstart sample or search by query).", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "category": {"type": "string"}, "tag": {"type": "string"}}, "required": []}}},
+    {"type": "function", "function": {"name": "search_tokens", "description": "Search EASY Screener for tokens by name, symbol, or keyword.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}, "verified_only": {"type": "boolean"}, "tag": {"type": "string"}, "category": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {"name": "get_token_overview", "description": "Full verified token summary.", "parameters": {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]}}},
     {"type": "function", "function": {"name": "get_token_analytics", "description": "Live price, mcap, liquidity, volume, holders, buy/sell ratio.", "parameters": {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]}}},
     {"type": "function", "function": {"name": "get_token_performance", "description": "Historical performance over N days.", "parameters": {"type": "object", "properties": {"token": {"type": "string"}, "days": {"type": "integer"}}, "required": ["token"]}}},
@@ -689,22 +731,22 @@ WALLET_SCOPED = {
     "compare_watchlist",
 }
 
-SYSTEM_PROMPT = """You are **EasyA Analysis Agent** on Solana — free research for **EasyA Kickstart tokens on EASY Screener**.
+SYSTEM_PROMPT = """You are **EasyA Analysis Agent** on Solana - free token research powered by **EASY Screener**.
 
 ## Data source
-- Live market, lock, and diligence data from **EASY Screener** (easyscreener.xyz).
-- Token bundles are cached server-side for 1 hour per mint — reuse tool results within a conversation.
-- **Attribute EASY Screener** when publishing derived analysis.
-- Numeric nulls mean missing upstream data — never treat null as zero.
+- All token data from **EASY Screener** (easyscreener.xyz) - lookup by symbol, mint, or search.
+- Token bundles are cached server-side for 1 hour per mint - reuse tool results within a conversation.
+- **Attribute EASY Screener** when publishing derived market analysis.
+- Numeric nulls mean missing upstream data - never treat null as zero.
 
 ## Pricing
 - **Free** for authenticated users (wallet sign-in required).
 - You do **not** execute on-chain transactions.
 
-## Scope (STRICT)
-- Only discuss tokens indexed by EASY Screener / EasyA Kickstart.
-- If a token is NOT_FOUND on EASY Screener, refuse and suggest list_verified_kickstart_tokens.
-- Never discuss JUP, BONK, or other non-Kickstart tokens.
+## Scope
+- Analyze any token indexed on EASY Screener (use get_token_overview, search_tokens, or list_verified_kickstart_tokens).
+- If a token is NOT_FOUND, use search_tokens to find the correct ticker or ask the user for the mint address.
+- Do not invent data for tokens not on EASY Screener.
 
 ## Capabilities
 - Discovery (list_verified_kickstart_tokens, search_tokens)
@@ -713,10 +755,222 @@ SYSTEM_PROMPT = """You are **EasyA Analysis Agent** on Solana — free research 
 - Watchlist helpers
 
 ## Rules
-- **Always call tools** — never invent prices, holder counts, or trust scores.
+- **Always call tools** - never invent prices, holder counts, or trust scores.
+- After tool results, write a **detailed human-readable analysis** (headings, bullets, numbers). Never reply with only the disclaimer.
 - Summarize trends in plain language.
 - End with: "Not financial advice. DYOR."
 """ + GOVERNANCE_PROMPT
+
+DISCLAIMER = "Not financial advice. DYOR."
+OVERVIEW_INTENT_RE = re.compile(
+    r"\b(overview|summarize|summary|tell me about|what is|what's|give me an overview of)\b",
+    re.I,
+)
+HEALTH_INTENT_RE = re.compile(
+    r"\b(health|health score|risk profile|token health|how healthy)\b",
+    re.I,
+)
+ANALYZE_INTENT_RE = re.compile(r"\b(analyze|analyse|check|review|assess)\b", re.I)
+
+
+def _fmt_usd(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    if amount >= 1_000_000:
+        return f"${amount:,.0f}"
+    if amount >= 1:
+        return f"${amount:,.2f}"
+    return f"${amount:.8g}"
+
+
+def _fmt_pct(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value):+.2f}%"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _format_token_overview_reply(data: dict[str, Any]) -> str:
+    if data.get("error"):
+        return str(data["error"])
+
+    lines = [
+        f"**{data.get('name')} ({data.get('symbol')})**",
+        "",
+        (data.get("description") or "No project description available.").strip(),
+        "",
+        "**Market snapshot**",
+        f"- Price: {_fmt_usd(data.get('price_usd'))}",
+        f"- Market cap: {_fmt_usd(data.get('market_cap_usd'))}",
+        f"- Liquidity: {_fmt_usd(data.get('liquidity_usd'))}",
+        f"- 24h volume: {_fmt_usd(data.get('volume_24h_usd'))}",
+        f"- Holders: {data.get('holder_count') if data.get('holder_count') is not None else 'n/a'}",
+        f"- DEX: {data.get('dex') or 'n/a'}",
+        f"- Mint: `{data.get('mint')}`",
+    ]
+
+    launch = data.get("launch_date") or data.get("created_at")
+    if launch:
+        lines.append(f"- Launch: {launch}")
+
+    links = data.get("links") or {}
+    link_bits = []
+    for key, label in (("website", "Website"), ("twitter", "Twitter"), ("telegram", "Telegram")):
+        if links.get(key):
+            link_bits.append(f"{label}: {links[key]}")
+    if link_bits:
+        lines.extend(["", "**Links**", *[f"- {bit}" for bit in link_bits]])
+
+    locked = data.get("locked_supply") or {}
+    pct = _locked_percent(locked)
+    if pct is not None:
+        lines.extend(["", f"**Locked supply:** {pct:.1f}% (Streamflow via EASY Screener)"])
+
+    summary = data.get("ai_summary") or {}
+    if isinstance(summary, dict) and summary:
+        trust = summary.get("trustScore") or summary.get("githubTrustScore")
+        if trust is not None:
+            lines.extend(["", f"**EASY Screener trust score:** {trust}/100"])
+
+    lines.extend(["", "_Live market data from EASY Screener (easyscreener.xyz)._", "", DISCLAIMER])
+    return "\n".join(lines)
+
+
+def _extract_token_query(user_input: str) -> Optional[str]:
+    patterns = [
+        r"\b(?:of|for|about)\s+\$?([A-Za-z][A-Za-z0-9]{1,24})\b",
+        r"\b(?:analyze|analyse|check|review|assess)\s+\$?([A-Za-z][A-Za-z0-9]{1,24})\b",
+        r"\b(?:analyze|analyse|check|review|assess)\s+\$?([A-Za-z][A-Za-z0-9]{1,24})\s+token\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, user_input, re.I)
+        if match:
+            return match.group(1).upper()
+
+    tickers = re.findall(r"\$([A-Za-z][A-Za-z0-9]{1,20})\b", user_input)
+    if tickers:
+        return tickers[-1].upper()
+    return None
+
+
+def _format_health_reply(data: dict[str, Any]) -> str:
+    if data.get("error"):
+        return str(data["error"])
+
+    lines = [
+        f"**{data.get('symbol')} token health: {data.get('overall_health_score')}/100**",
+        "",
+        "**Strengths**",
+        *[f"- {s}" for s in (data.get("strengths") or [])],
+        "",
+        "**Weaknesses**",
+        *[f"- {w}" for w in (data.get("weaknesses") or [])],
+    ]
+
+    risks = data.get("risks") or []
+    if risks:
+        lines.extend(["", "**Risks flagged**"])
+        for risk in risks:
+            lines.append(f"- ({risk.get('severity', 'info')}) {risk.get('title')}: {risk.get('detail')}")
+
+    snapshot = data.get("analytics_snapshot") or {}
+    if snapshot:
+        lines.extend([
+            "",
+            "**Market context**",
+            f"- Price: {_fmt_usd(snapshot.get('price_usd'))}",
+            f"- Market cap: {_fmt_usd(snapshot.get('market_cap_usd'))}",
+            f"- Liquidity: {_fmt_usd(snapshot.get('liquidity_usd'))}",
+            f"- 24h volume: {_fmt_usd(snapshot.get('volume_24h_usd'))}",
+            f"- Holders: {snapshot.get('holder_count') if snapshot.get('holder_count') is not None else 'n/a'}",
+            f"- 24h change: {_fmt_pct(snapshot.get('price_change_24h_pct'))}",
+        ])
+
+    if data.get("summary_unavailable"):
+        lines.extend(["", f"_Note: {data['summary_unavailable']}_"])
+
+    lines.extend(["", "_Analysis uses EASY Screener market + lock data (easyscreener.xyz)._", "", DISCLAIMER])
+    return "\n".join(lines)
+
+
+def _is_weak_reply(reply: str) -> bool:
+    text = (reply or "").strip()
+    if not text:
+        return True
+    without = re.sub(r"not financial advice\.?\s*dyor\.?", "", text, flags=re.I).strip()
+    return len(without) < 50
+
+
+def _synthesize_reply_from_actions(actions: list[dict[str, Any]]) -> Optional[str]:
+    if not actions:
+        return None
+    last = actions[-1]
+    tool = last.get("tool")
+    try:
+        data = json.loads(last.get("result") or "{}")
+    except json.JSONDecodeError:
+        return None
+    if tool == "get_token_overview":
+        return _format_token_overview_reply(data)
+    if tool == "analyze_token_health" and not data.get("error"):
+        return _format_health_reply(data)
+    if tool == "get_token_analytics" and not data.get("error"):
+        lines = [
+            f"**{data.get('symbol')} live analytics**",
+            "",
+            f"- Price: {_fmt_usd(data.get('price_usd'))}",
+            f"- Market cap: {_fmt_usd(data.get('market_cap_usd'))}",
+            f"- Liquidity: {_fmt_usd(data.get('liquidity_usd'))}",
+            f"- 24h volume: {_fmt_usd(data.get('volume_24h_usd'))}",
+            f"- Holders: {data.get('holder_count') if data.get('holder_count') is not None else 'n/a'}",
+            f"- 24h change: {_fmt_pct(data.get('price_change_24h_pct'))}",
+            "",
+            "_Live market data from EASY Screener (easyscreener.xyz)._",
+            "",
+            DISCLAIMER,
+        ]
+        return "\n".join(lines)
+    return None
+
+
+def _try_health_shortcut(user_input: str) -> Optional[tuple[str, list[dict[str, Any]]]]:
+    if not HEALTH_INTENT_RE.search(user_input) and not (
+        ANALYZE_INTENT_RE.search(user_input) and "health" in user_input.lower()
+    ):
+        return None
+    token = _extract_token_query(user_input)
+    if not token:
+        return None
+    result = analyze_token_health(token)
+    reply = _format_health_reply(result)
+    actions = [{
+        "tool": "analyze_token_health",
+        "args": {"token": token},
+        "result": json.dumps(result, indent=2),
+    }]
+    return reply, actions
+
+
+def _try_overview_shortcut(user_input: str) -> Optional[tuple[str, list[dict[str, Any]]]]:
+    if not OVERVIEW_INTENT_RE.search(user_input):
+        return None
+    token = _extract_token_query(user_input)
+    if not token:
+        return None
+    result = get_token_overview(token)
+    reply = _format_token_overview_reply(result)
+    actions = [{
+        "tool": "get_token_overview",
+        "args": {"token": token},
+        "result": json.dumps(result, indent=2),
+    }]
+    return reply, actions
 
 
 def build_system_prompt() -> str:
@@ -788,6 +1042,14 @@ def run_kickstart_agent(
 ) -> tuple[str, list, list[dict[str, Any]]]:
     actions: list[dict[str, Any]] = []
     prompt = user_input.strip()
+
+    shortcut = _try_health_shortcut(prompt) or _try_overview_shortcut(prompt)
+    if shortcut:
+        reply, actions = shortcut
+        conversation_history.append({"role": "user", "content": prompt})
+        conversation_history.append({"role": "assistant", "content": reply})
+        return reply, conversation_history, actions
+
     if user_wallet:
         prompt = f"[Connected user wallet: {user_wallet}]\n{prompt}"
     conversation_history.append({"role": "user", "content": prompt})
@@ -799,6 +1061,10 @@ def run_kickstart_agent(
         tool_calls = message.get("tool_calls") or []
         if not tool_calls:
             reply = message.get("content") or ""
+            if _is_weak_reply(reply) and actions:
+                synthesized = _synthesize_reply_from_actions(actions)
+                if synthesized:
+                    reply = synthesized
             conversation_history.append({"role": "assistant", "content": reply})
             return reply, conversation_history, actions
 

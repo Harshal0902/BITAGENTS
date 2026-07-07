@@ -67,7 +67,11 @@ export async function proxyAgentsAuthMe(authToken: string): Promise<Response> {
 }
 
 export async function proxyKickstartChat(
-  body: { message: string; session_id?: string },
+  body: {
+    message: string;
+    session_id?: string;
+    history?: { role: "user" | "assistant"; content: string }[];
+  },
   authToken: string
 ): Promise<Response> {
   return fetch(`${getAgentsBaseUrl()}/kickstart/chat`, {

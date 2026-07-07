@@ -27,7 +27,8 @@ export async function fetchKickstartHealth(): Promise<KickstartHealth | null> {
 export async function sendKickstartMessage(
   message: string,
   authToken: string,
-  sessionId?: string
+  sessionId?: string,
+  history?: { role: "user" | "assistant"; content: string }[]
 ): Promise<KickstartChatResponse> {
   const res = await fetch("/api/agents/kickstart-copilot/chat", {
     method: "POST",
@@ -35,7 +36,7 @@ export async function sendKickstartMessage(
       "Content-Type": "application/json",
       Authorization: `Bearer ${authToken}`,
     },
-    body: JSON.stringify({ message, session_id: sessionId }),
+    body: JSON.stringify({ message, session_id: sessionId, history }),
   });
 
   const data = await res.json();

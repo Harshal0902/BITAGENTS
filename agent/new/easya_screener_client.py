@@ -64,8 +64,10 @@ def _cache_set(key: str, value: Any, ttl: int = CACHE_TTL_SECONDS) -> None:
 
 
 def clear_screener_cache() -> None:
+    global _fatal_auth_error
     with _cache_lock:
         _cache.clear()
+    _fatal_auth_error = None
 
 
 def _headers() -> dict[str, str]:
@@ -113,10 +115,9 @@ def _parse_error(resp: requests.Response) -> EasyScreenerError:
 
     fatal = code in {
         "INVALID_KEY",
-        "SCOPE_MISSING",
         "TERMS_NOT_ACCEPTED",
         "KEY_DISABLED",
-    } or resp.status_code in (401, 403)
+    } or resp.status_code == 401
     return EasyScreenerError(code, message, fatal=fatal, retry_after=retry_after)
 
 
@@ -254,7 +255,7 @@ def lookup_by_symbol(symbol: str) -> dict[str, Any]:
             "symbol": data.get("symbol") or sym.upper(),
             "token": _normalize_token_row(best),
             "alternatives": tokens,
-            "note": "Multiple Kickstart tokens share this symbol — picked highest mcap. Disambiguate by mint if needed.",
+            "note": "Multiple Kickstart tokens share this symbol - picked highest mcap. Disambiguate by mint if needed.",
             "attribution": ATTRIBUTION,
         }
     else:
@@ -419,9 +420,14 @@ def resolve_token(token: str) -> dict[str, Any]:
     return result.get("token") or result
 
 
-def get_token_bundle(token: str, *, include_summary: bool = True, include_locked: bool = True) -> dict[str, Any]:
+def get_token_bundle(
+    token: str,
+    *,
+    include_summary: bool = False,
+    include_locked: bool = True,
+) -> dict[str, Any]:
     """
-    Full diligence bundle for a token — cached 1hr per mint.
+    Full diligence bundle for a token - cached 1hr per mint.
     Combines token row + optional AI summary + locked supply.
     """
     resolved = resolve_token(token)
@@ -449,6 +455,8 @@ def get_token_bundle(token: str, *, include_summary: bool = True, include_locked
         summary = get_token_summary(mint)
         if "error" not in summary:
             bundle["summary"] = summary
+        elif summary.get("code") == "SCOPE_MISSING":
+            bundle["summary_unavailable"] = summary.get("message") or "AI summary requires summary:read scope."
 
     if include_locked:
         locked = get_locked_supply(mint)
@@ -463,26 +471,29 @@ def get_allowlist_prompt_block() -> str:
     listed = list_tokens(page=0, limit=20, verified_only=True)
     if listed.get("error"):
         return (
-            "## EASY Screener allowlist\n"
-            f"Could not load verified Kickstart tokens: {listed['error']}\n"
-            "Use list_verified_kickstart_tokens after EZ_API_KEY is configured."
+            "## EASY Screener\n"
+            f"Could not load token sample: {listed['error']}\n"
+            "Use search_tokens or get_token_overview after EZ_API_KEY is configured."
         )
 
     tokens = listed.get("tokens") or []
-    if not tokens:
-        return "## EASY Screener allowlist\nNo verified Kickstart tokens returned by EASY Screener."
-
     lines = [
-        "## EASY Screener verified Kickstart tokens (ONLY discuss these)",
-        f"Loaded **{len(tokens)}** token(s) from EASY Screener. Attribute data to easyscreener.xyz.",
+        "## EASY Screener (easyscreener.xyz)",
+        "All token analysis uses live EASY Screener data (cached 1h per mint).",
+        "Use **get_token_overview** for any symbol/mint, or **search_tokens** to discover tokens.",
         "",
     ]
-    for t in tokens:
-        mcap = t.get("market_cap_usd")
-        mcap_label = f"${mcap:,.0f}" if isinstance(mcap, (int, float)) else "n/a"
-        lines.append(
-            f"- **{t.get('symbol')}** ({t.get('name')}) · mint `{t.get('mint')}` · mcap {mcap_label}"
-        )
+    if tokens:
+        lines.append(f"Sample verified Kickstart tokens ({len(tokens)}):")
+        lines.append("")
+        for t in tokens:
+            mcap = t.get("market_cap_usd")
+            mcap_label = f"${mcap:,.0f}" if isinstance(mcap, (int, float)) else "n/a"
+            lines.append(
+                f"- **{t.get('symbol')}** ({t.get('name')}) · mint `{t.get('mint')}` · mcap {mcap_label}"
+            )
+    else:
+        lines.append("No verified sample tokens returned - use search_tokens for discovery.")
     lines.append("")
-    lines.append("Refuse questions about tokens not listed on EASY Screener / EasyA Kickstart.")
+    lines.append("If NOT_FOUND by symbol, search or ask for mint to disambiguate.")
     return "\n".join(lines)
