@@ -86,7 +86,7 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     tagline: "Token analysis · powered by EASY Screener",
     rating: 4.9,
     iconId: "search",
-    available: true,
+    available: false,
     model: "meta-llama/llama-3.3-70b-instruct",
     cluster: "mainnet",
   },

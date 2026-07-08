@@ -10,6 +10,7 @@ import {
 } from "@/lib/kickstartCopilotClient";
 import { KICKSTART_COPILOT, KICKSTART_EXAMPLE_PROMPTS } from "@/lib/kickstartCopilotConfig";
 import { useKickstartWalletAuth } from "@/hooks/useKickstartWalletAuth";
+import { EasyaTradingDeposit } from "@/components/agents/EasyaTradingDeposit";
 import type { AgentAction } from "@/lib/dcaAgentClient";
 import { useWallet } from "@solana/wallet-adapter-react";
 
@@ -191,6 +192,10 @@ export function KickstartCopilotConsole() {
         <div className="border border-grid bg-surface/40 px-4 py-3 font-mono text-xs text-muted-foreground">
           Connect your wallet to sign in and chat with the copilot.
         </div>
+      )}
+
+      {publicKey && token && (
+        <EasyaTradingDeposit cluster={KICKSTART_COPILOT.cluster} authToken={token} />
       )}
 
       <div className="grid gap-6 lg:grid-cols-3">

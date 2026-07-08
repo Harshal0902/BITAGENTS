@@ -18,4 +18,6 @@ export const KICKSTART_EXAMPLE_PROMPTS = [
   "Analyze BITAGENTS token health",
   "Search tokens named cold",
   "Compare CPX and BITAGENTS",
+  "Show my EasyA trading wallet balance",
+  "Market buy 0.01 SOL of BITAGENTS",
 ] as const;
