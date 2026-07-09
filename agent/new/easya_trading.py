@@ -47,13 +47,16 @@ def _iso(value: Any) -> Optional[str]:
     return str(value)
 
 
-def _order_row(row: dict[str, Any]) -> dict[str, Any]:
+def _order_row(row: dict[str, Any], *, current_price_usd: Optional[float] = None) -> dict[str, Any]:
+    input_token = row["input_token"]
+    output_token = row["output_token"]
     return {
         "id": row["id"],
         "user_wallet": row["user_wallet"],
         "order_type": row["order_type"],
-        "input_token": row["input_token"],
-        "output_token": row["output_token"],
+        "input_token": input_token,
+        "output_token": output_token,
+        "pair": f"{input_token} → {output_token}",
         "input_mint": row["input_mint"],
         "output_mint": row["output_mint"],
         "amount_input": float(row["amount_input"]),
@@ -67,6 +70,7 @@ def _order_row(row: dict[str, Any]) -> dict[str, Any]:
         "created_at": _iso(row.get("created_at")),
         "filled_at": _iso(row.get("filled_at")),
         "cancelled_at": _iso(row.get("cancelled_at")),
+        "current_price_usd": current_price_usd,
     }
 
 
@@ -161,10 +165,16 @@ def list_easya_orders(
         with conn.cursor() as cur:
             cur.execute(query, params)
             rows = cur.fetchall()
+    orders = []
+    for row in rows:
+        current_price = None
+        if row.get("order_type") == "limit" and row.get("status") in ("active", "pending"):
+            current_price = _token_price_usd(row["output_token"])
+        orders.append(_order_row(row, current_price_usd=current_price))
     return {
         "user_wallet": user_wallet,
-        "count": len(rows),
-        "orders": [_order_row(r) for r in rows],
+        "count": len(orders),
+        "orders": orders,
     }
 
 
@@ -390,6 +400,75 @@ def place_limit_buy_order(
         ),
         "current_price_usd": current,
         "platform_fee_rate": 0.001,
+    }
+
+
+def update_easya_limit_order(
+    user_wallet: str,
+    order_id: str,
+    *,
+    amount_sol: Optional[float] = None,
+    limit_price_usd: Optional[float] = None,
+    slippage_bps: Optional[int] = None,
+) -> dict[str, Any]:
+    order = get_easya_order(order_id)
+    if not order:
+        return {"error": "Order not found."}
+    if order["user_wallet"] != user_wallet.strip():
+        return {"error": "This order belongs to another wallet."}
+    if order["order_type"] != "limit":
+        return {"error": "Only limit orders can be edited."}
+    if order["status"] != "active":
+        return {"error": f"Order is {order['status']} and cannot be edited."}
+
+    updates: dict[str, Any] = {}
+    if amount_sol is not None:
+        amount_sol = float(amount_sol)
+        if amount_sol <= 0:
+            return {"error": "amount_sol must be greater than zero."}
+        old_cost = easya_execution_total_cost(float(order["amount_input"]))
+        new_cost = easya_execution_total_cost(amount_sol)
+        delta = round(new_cost - old_cost, 12)
+        if delta > 0:
+            from easya_trading_ledger import get_easya_token_totals
+
+            totals = get_easya_token_totals(user_wallet.strip(), order["input_token"])
+            if totals["available_to_spend"] + 1e-12 < delta:
+                return {
+                    "error": (
+                        f"Insufficient {order['input_token']} to increase order size. "
+                        f"Need {delta} more SOL (incl. fee), available: {totals['available_to_spend']}."
+                    )
+                }
+        updates["amount_input"] = amount_sol
+
+    if limit_price_usd is not None:
+        limit_price_usd = float(limit_price_usd)
+        if limit_price_usd <= 0:
+            return {"error": "limit_price_usd must be greater than zero."}
+        updates["limit_price_usd"] = limit_price_usd
+
+    if slippage_bps is not None:
+        slippage_bps = int(slippage_bps)
+        if slippage_bps < 1 or slippage_bps > 5000:
+            return {"error": "slippage_bps must be between 1 and 5000."}
+        updates["slippage_bps"] = slippage_bps
+
+    if not updates:
+        return {"error": "No fields to update. Provide amount_sol, limit_price_usd, and/or slippage_bps."}
+
+    updated = _update_order(order_id, **updates)
+    if not updated:
+        return {"error": "Could not update order."}
+
+    current = _token_price_usd(updated["output_token"])
+    return {
+        "status": "updated",
+        "order": {**updated, "current_price_usd": current},
+        "message": (
+            f"Limit buy updated: spend {updated['amount_input']} {updated['input_token']} "
+            f"for {updated['output_token']} when price <= ${updated['limit_price_usd']}."
+        ),
     }
 
 

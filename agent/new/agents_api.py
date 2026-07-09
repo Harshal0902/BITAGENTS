@@ -72,6 +72,7 @@ from easya_trading import (
     place_limit_buy_order,
     place_market_buy_order,
     start_easya_order_scheduler,
+    update_easya_limit_order,
 )
 from easya_trading_ledger import (
     get_easya_agent_wallet_info,
@@ -604,6 +605,12 @@ class EasyaLimitOrderRequest(BaseModel):
     slippage_bps: int = Field(default=100, ge=1, le=5000)
 
 
+class EasyaUpdateLimitOrderRequest(BaseModel):
+    amount_sol: Optional[float] = Field(default=None, gt=0)
+    limit_price_usd: Optional[float] = Field(default=None, gt=0)
+    slippage_bps: Optional[int] = Field(default=None, ge=1, le=5000)
+
+
 @app.get("/kickstart/wallet/agent")
 def kickstart_wallet_agent(_: None = Depends(require_internal_key)) -> dict[str, Any]:
     return get_easya_agent_wallet_info()
@@ -685,6 +692,24 @@ def kickstart_cancel_order(
     auth_wallet: str = Depends(require_wallet_session),
 ) -> dict[str, Any]:
     result = cancel_easya_order(auth_wallet, order_id)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.patch("/kickstart/orders/{order_id}")
+def kickstart_update_order(
+    order_id: str,
+    body: EasyaUpdateLimitOrderRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = update_easya_limit_order(
+        auth_wallet,
+        order_id,
+        amount_sol=body.amount_sol,
+        limit_price_usd=body.limit_price_usd,
+        slippage_bps=body.slippage_bps,
+    )
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
     return result

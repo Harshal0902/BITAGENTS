@@ -117,6 +117,42 @@ export async function proxyKickstartWithdraw(
   });
 }
 
+export async function proxyKickstartOrders(
+  authToken: string,
+  params?: { active_only?: boolean; limit?: number }
+): Promise<Response> {
+  const search = new URLSearchParams();
+  if (params?.active_only) search.set("active_only", "true");
+  if (params?.limit) search.set("limit", String(params.limit));
+  const qs = search.toString();
+  return fetch(`${getAgentsBaseUrl()}/kickstart/orders${qs ? `?${qs}` : ""}`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyKickstartCancelOrder(
+  orderId: string,
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/kickstart/orders/${encodeURIComponent(orderId)}/cancel`, {
+    method: "POST",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyKickstartUpdateOrder(
+  orderId: string,
+  body: { amount_sol?: number; limit_price_usd?: number; slippage_bps?: number },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/kickstart/orders/${encodeURIComponent(orderId)}`, {
+    method: "PATCH",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
 export async function proxyDcaHealth(): Promise<Response> {
   return proxyAgentsHealth();
 }
