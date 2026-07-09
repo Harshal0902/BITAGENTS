@@ -10,6 +10,7 @@ import {
 } from "@/lib/kickstartCopilotClient";
 import { KICKSTART_COPILOT, KICKSTART_EXAMPLE_PROMPTS } from "@/lib/kickstartCopilotConfig";
 import { useKickstartWalletAuth } from "@/hooks/useKickstartWalletAuth";
+import { EasyaTradingDeposit } from "@/components/agents/EasyaTradingDeposit";
 import type { AgentAction } from "@/lib/dcaAgentClient";
 import { useWallet } from "@solana/wallet-adapter-react";
 
@@ -110,7 +111,8 @@ export function KickstartCopilotConsole() {
     setMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: "user", content: text.trim() }]);
 
     try {
-      const res = await sendKickstartMessage(text.trim(), token, sessionId);
+      const history = messages.map((m) => ({ role: m.role, content: m.content }));
+      const res = await sendKickstartMessage(text.trim(), token, sessionId, history);
       setSessionId(res.session_id);
       setMessages((prev) => [
         ...prev,
@@ -139,7 +141,14 @@ export function KickstartCopilotConsole() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+      <div className="border border-grid bg-surface/40 px-4 py-4">
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+          {KICKSTART_COPILOT.description} Connect your wallet (free) and ask about token overview,
+          analytics, health scores, risks, comparisons, and launch operations.
+        </p>
+      </div>
+
+      {/* <div className="flex flex-wrap items-center gap-3 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
         <span className={`inline-flex items-center gap-2 ${agentOnline ? "text-signal" : "text-warn"}`}>
           <span
             className={`h-1.5 w-1.5 rounded-full ${agentOnline ? "bg-signal animate-pulse-dot" : "bg-warn"}`}
@@ -150,7 +159,7 @@ export function KickstartCopilotConsole() {
         <span>{health?.model ?? KICKSTART_COPILOT.model}</span>
         <span>·</span>
         <span className="text-signal">Free · wallet sign-in required</span>
-      </div>
+      </div> */}
 
       {error && (
         <div className="border border-warn/40 bg-warn/10 px-4 py-3 font-mono text-xs text-warn">{error}</div>
@@ -164,7 +173,7 @@ export function KickstartCopilotConsole() {
 
       {publicKey && authBusy && (
         <div className="border border-grid bg-surface/40 px-4 py-3 font-mono text-xs text-muted-foreground">
-          Approve the wallet sign-in message to use the Kickstart Token Copilot (free).
+          Approve the wallet sign-in message to use the EasyA Analysis Agent (free).
         </div>
       )}
 
@@ -174,13 +183,17 @@ export function KickstartCopilotConsole() {
         </div>
       )}
 
+      {publicKey && token && (
+        <EasyaTradingDeposit cluster={KICKSTART_COPILOT.cluster} authToken={token} />
+      )}
+
       <div className="grid gap-6 lg:grid-cols-3">
         <Panel title="EasyA Analysis Agent" className="lg:col-span-2">
           <div className="flex max-h-[420px] flex-col gap-4 overflow-y-auto pr-1">
             {messages.length === 0 && (
               <p className="text-sm text-muted-foreground">
-                Ask about token discovery, analytics, health scores, comparisons, risks, launch operations,
-                and watchlists.
+                Ask for token overviews, live analytics, health scores, risk analysis, comparisons,
+                and launch guidance.
               </p>
             )}
             {messages.map((msg) => (
@@ -210,7 +223,7 @@ export function KickstartCopilotConsole() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 disabled={busy || !token}
-                placeholder={token ? "e.g. Analyze JUP token health" : "Sign in with wallet to chat"}
+                placeholder={token ? "e.g. Give me an overview of BITAGENTS" : "Sign in with wallet to chat"}
                 className="flex-1 border border-grid bg-background px-4 py-3 font-mono text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-signal disabled:opacity-50"
               />
               <button
@@ -238,7 +251,10 @@ export function KickstartCopilotConsole() {
           </div>
         </Panel>
 
-        <Panel title="Tool trace · live">
+        <Panel title="Tool trace">
+          <p className="mb-3 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+            Developer view
+          </p>
           <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1 font-mono text-xs">
             {actions.length === 0 && (
               <p className="text-muted-foreground">

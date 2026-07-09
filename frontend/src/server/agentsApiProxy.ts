@@ -67,10 +67,50 @@ export async function proxyAgentsAuthMe(authToken: string): Promise<Response> {
 }
 
 export async function proxyKickstartChat(
-  body: { message: string; session_id?: string },
+  body: {
+    message: string;
+    session_id?: string;
+    history?: { role: "user" | "assistant"; content: string }[];
+  },
   authToken: string
 ): Promise<Response> {
   return fetch(`${getAgentsBaseUrl()}/kickstart/chat`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyKickstartWalletAgent(): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/kickstart/wallet/agent`, {
+    cache: "no-store",
+    headers: buildHeaders(),
+  });
+}
+
+export async function proxyKickstartWalletBalance(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/kickstart/wallet/balance`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyKickstartDepositVerify(
+  body: { signature: string },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/kickstart/wallet/deposit/verify`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyKickstartWithdraw(
+  body: { token: string; amount: number },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/kickstart/wallet/withdraw`, {
     method: "POST",
     headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
     body: JSON.stringify(body),

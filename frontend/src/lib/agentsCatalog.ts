@@ -82,8 +82,8 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     name: "EasyA Analysis Agent",
     category: "Research",
     description:
-      "Free AI copilot for Solana token discovery, live analytics, health scores, comparisons, risk checks, and launch operations guidance.",
-    tagline: "Token research · health scores · launch ops",
+      "Solana token analysis - live price, liquidity, holders, health scores, risk checks, and comparisons.",
+    tagline: "Token analysis",
     rating: 4.9,
     iconId: "search",
     available: true,
