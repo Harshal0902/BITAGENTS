@@ -38,6 +38,21 @@ function formatUsd(value?: number | null) {
   return `$${value.toFixed(4)}`;
 }
 
+function formatMcap(value?: number | null) {
+  if (value == null || !Number.isFinite(value)) return "n/a";
+  return `$${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+function formatCheckSeconds(seconds?: number) {
+  const value = seconds ?? 900;
+  if (value < 60) return `every ${value}s`;
+  if (value % 60 === 0) {
+    const mins = value / 60;
+    return mins === 1 ? "every 1 min" : `every ${mins} min`;
+  }
+  return `every ${value}s`;
+}
+
 function statusClass(status: string) {
   if (status === "active") return "text-signal";
   if (status === "pending") return "text-warn";
@@ -130,6 +145,12 @@ function LimitOrderRow({
   const [limitPrice, setLimitPrice] = useState(
     order.limit_price_usd != null ? String(order.limit_price_usd) : ""
   );
+  const [limitMcap, setLimitMcap] = useState(
+    order.limit_market_cap_usd != null ? String(order.limit_market_cap_usd) : ""
+  );
+  const [stopMcap, setStopMcap] = useState(
+    order.stop_market_cap_usd != null ? String(order.stop_market_cap_usd) : ""
+  );
   const [slippageBps, setSlippageBps] = useState(String(order.slippage_bps ?? 100));
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
@@ -154,15 +175,29 @@ function LimitOrderRow({
 
   async function runSave() {
     const parsedAmount = Number(amountSol);
-    const parsedLimit = Number(limitPrice);
+    const parsedLimit = limitPrice.trim() ? Number(limitPrice) : null;
+    const parsedMcap = limitMcap.trim() ? Number(limitMcap) : null;
+    const parsedStopMcap = stopMcap.trim() ? Number(stopMcap) : null;
     const parsedSlippage = Number(slippageBps);
 
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
       setActionError("Enter a valid SOL amount.");
       return;
     }
-    if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
-      setActionError("Enter a valid limit price.");
+    if (parsedLimit != null && (!Number.isFinite(parsedLimit) || parsedLimit <= 0)) {
+      setActionError("Enter a valid limit price or leave blank.");
+      return;
+    }
+    if (parsedMcap != null && (!Number.isFinite(parsedMcap) || parsedMcap <= 0)) {
+      setActionError("Enter a valid market cap limit or leave blank.");
+      return;
+    }
+    if (parsedLimit == null && parsedMcap == null) {
+      setActionError("Set at least one buy trigger: limit price and/or market cap.");
+      return;
+    }
+    if (parsedStopMcap != null && (!Number.isFinite(parsedStopMcap) || parsedStopMcap <= 0)) {
+      setActionError("Enter a valid stop market cap or leave blank.");
       return;
     }
     if (!Number.isFinite(parsedSlippage) || parsedSlippage < 1 || parsedSlippage > 5000) {
@@ -177,6 +212,9 @@ function LimitOrderRow({
       {
         amount_sol: parsedAmount,
         limit_price_usd: parsedLimit,
+        limit_market_cap_usd: parsedMcap,
+        stop_market_cap_usd:
+          order.order_type === "threshold" ? parsedStopMcap : undefined,
         slippage_bps: Math.round(parsedSlippage),
       },
       authToken
@@ -191,10 +229,16 @@ function LimitOrderRow({
   }
 
   const priceDistance =
-    order.current_price_usd != null && order.limit_price_usd != null
+    order.limit_price_usd != null && order.current_price_usd != null
       ? order.current_price_usd <= order.limit_price_usd
-        ? "ready to fill"
-        : `${(((order.current_price_usd - order.limit_price_usd) / order.limit_price_usd) * 100).toFixed(1)}% above limit`
+        ? "price ready"
+        : `${(((order.current_price_usd - order.limit_price_usd) / order.limit_price_usd) * 100).toFixed(1)}% above price limit`
+      : null;
+  const mcapDistance =
+    order.limit_market_cap_usd != null && order.current_market_cap_usd != null
+      ? order.current_market_cap_usd <= order.limit_market_cap_usd
+        ? "mcap ready"
+        : `${(((order.current_market_cap_usd - order.limit_market_cap_usd) / order.limit_market_cap_usd) * 100).toFixed(1)}% above mcap limit`
       : null;
 
   return (
@@ -225,9 +269,9 @@ function LimitOrderRow({
           </div>
           {(order.order_type === "threshold" || order.recurring) && (
             <div>
-              <dt>Price check</dt>
+              <dt>Check interval</dt>
               <dd className="text-foreground">
-                every {Math.round((order.check_interval_seconds ?? 900) / 60)} min
+                {formatCheckSeconds(order.check_interval_seconds)}
               </dd>
             </div>
           )}
@@ -245,18 +289,46 @@ function LimitOrderRow({
             </dd>
           </div>
           <div>
+            <dt>Limit market cap</dt>
+            <dd className="text-foreground">
+              {order.limit_market_cap_usd != null ? formatMcap(order.limit_market_cap_usd) : "-"}
+            </dd>
+          </div>
+          <div>
             <dt>Current price</dt>
             <dd className="text-foreground">{formatUsd(order.current_price_usd)}</dd>
           </div>
           <div>
-            <dt>Trigger</dt>
-            <dd className="text-foreground">price ≤ limit</dd>
+            <dt>Current market cap</dt>
+            <dd className="text-foreground">{formatMcap(order.current_market_cap_usd)}</dd>
           </div>
-          {priceDistance && (
+          <div className="col-span-2">
+            <dt>Buy trigger</dt>
+            <dd className="text-foreground">
+              {order.trigger_summary ?? (order.limit_price_usd != null ? "price ≤ limit" : "market cap ≤ limit")}
+            </dd>
+          </div>
+          {(order.order_type === "threshold" || order.recurring) && order.stop_summary && (
+            <div className="col-span-2">
+              <dt>Stop rule</dt>
+              <dd className="text-foreground">{order.stop_summary}</dd>
+            </div>
+          )}
+          {(priceDistance || mcapDistance) && (
             <div className="col-span-2">
               <dt>Fill status</dt>
-              <dd className={priceDistance === "ready to fill" ? "text-signal" : "text-warn"}>
-                {priceDistance}
+              <dd>
+                {priceDistance && (
+                  <span className={priceDistance === "price ready" ? "text-signal" : "text-warn"}>
+                    {priceDistance}
+                  </span>
+                )}
+                {priceDistance && mcapDistance && " · "}
+                {mcapDistance && (
+                  <span className={mcapDistance === "mcap ready" ? "text-signal" : "text-warn"}>
+                    {mcapDistance}
+                  </span>
+                )}
               </dd>
             </div>
           )}
@@ -276,7 +348,7 @@ function LimitOrderRow({
           </div>
         </dl>
       ) : (
-        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           <label className="grid gap-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
             SOL amount
             <input
@@ -290,7 +362,7 @@ function LimitOrderRow({
             />
           </label>
           <label className="grid gap-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-            Limit USD
+            Limit price USD
             <input
               type="number"
               min="0"
@@ -298,9 +370,38 @@ function LimitOrderRow({
               value={limitPrice}
               onChange={(e) => setLimitPrice(e.target.value)}
               disabled={actionBusy}
+              placeholder="optional"
               className="border border-grid bg-background px-2 py-1.5 text-sm text-foreground outline-none focus:border-signal"
             />
           </label>
+          <label className="grid gap-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            Limit market cap USD
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={limitMcap}
+              onChange={(e) => setLimitMcap(e.target.value)}
+              disabled={actionBusy}
+              placeholder="optional"
+              className="border border-grid bg-background px-2 py-1.5 text-sm text-foreground outline-none focus:border-signal"
+            />
+          </label>
+          {(order.order_type === "threshold" || order.recurring) && (
+            <label className="grid gap-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              Stop market cap USD
+              <input
+                type="number"
+                min="0"
+                step="any"
+                value={stopMcap}
+                onChange={(e) => setStopMcap(e.target.value)}
+                disabled={actionBusy}
+                placeholder="optional"
+                className="border border-grid bg-background px-2 py-1.5 text-sm text-foreground outline-none focus:border-signal"
+              />
+            </label>
+          )}
           <label className="grid gap-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
             Slippage bps
             <input
@@ -350,6 +451,8 @@ function LimitOrderRow({
                 setEditing(false);
                 setAmountSol(String(order.amount_input));
                 setLimitPrice(order.limit_price_usd != null ? String(order.limit_price_usd) : "");
+                setLimitMcap(order.limit_market_cap_usd != null ? String(order.limit_market_cap_usd) : "");
+                setStopMcap(order.stop_market_cap_usd != null ? String(order.stop_market_cap_usd) : "");
                 setSlippageBps(String(order.slippage_bps ?? 100));
                 setActionError(null);
               }}
@@ -408,7 +511,8 @@ function HistoryOrderRow({ order, cluster }: { order: EasyaOrderSummary; cluster
         {formatTime(order.filled_at ?? order.cancelled_at ?? order.created_at)} · ID `{order.id}` ·{" "}
         {order.amount_input} {order.input_token}
         {(order.executions ?? 0) > 0 && ` · ${formatExecutions(order)} buys`}
-        {order.limit_price_usd != null && ` · limit ${formatUsd(order.limit_price_usd)}`}
+        {order.limit_price_usd != null && ` · price ≤ ${formatUsd(order.limit_price_usd)}`}
+        {order.limit_market_cap_usd != null && ` · mcap ≤ ${formatMcap(order.limit_market_cap_usd)}`}
         {order.platform_fee != null && order.platform_fee > 0 && (
           <> · fee {order.platform_fee} {order.input_token}</>
         )}

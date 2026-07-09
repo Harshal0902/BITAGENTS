@@ -36,6 +36,7 @@ from easya_trading_ledger import (
 
 EASYA_ORDER_POLL_SECONDS = int(os.environ.get("EASYA_ORDER_POLL_SECONDS", "30"))
 THRESHOLD_CHECK_INTERVAL_SECONDS = int(os.environ.get("EASYA_THRESHOLD_CHECK_SECONDS", "900"))
+MIN_CHECK_INTERVAL_SECONDS = int(os.environ.get("EASYA_MIN_CHECK_SECONDS", "60"))
 _order_lock = threading.Lock()
 _order_scheduler_running = False
 
@@ -48,18 +49,146 @@ def _iso(value: Any) -> Optional[str]:
     return str(value)
 
 
-def _order_row(row: dict[str, Any], *, current_price_usd: Optional[float] = None) -> dict[str, Any]:
+def _float_or_none(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _token_metrics(token: str) -> dict[str, Optional[float]]:
+    screener = screener_resolve_token(token)
+    if isinstance(screener, dict) and screener.get("error"):
+        return {"price_usd": None, "market_cap_usd": None}
+    return {
+        "price_usd": _float_or_none(screener.get("price_usd")),
+        "market_cap_usd": _float_or_none(screener.get("market_cap_usd")),
+    }
+
+
+def _token_price_usd(token: str) -> Optional[float]:
+    return _token_metrics(token).get("price_usd")
+
+
+def _infer_condition_mode(
+    *,
+    limit_price_usd: Optional[float],
+    limit_market_cap_usd: Optional[float],
+    condition_mode: Optional[str] = None,
+) -> str:
+    if condition_mode:
+        mode = str(condition_mode).strip().lower()
+        if mode in {"price", "market_cap", "both"}:
+            return mode
+    has_price = limit_price_usd is not None and limit_price_usd > 0
+    has_mcap = limit_market_cap_usd is not None and limit_market_cap_usd > 0
+    if has_price and has_mcap:
+        return "both"
+    if has_mcap:
+        return "market_cap"
+    return "price"
+
+
+def _validate_buy_triggers(
+    *,
+    limit_price_usd: Optional[float],
+    limit_market_cap_usd: Optional[float],
+) -> Optional[str]:
+    has_price = limit_price_usd is not None and limit_price_usd > 0
+    has_mcap = limit_market_cap_usd is not None and limit_market_cap_usd > 0
+    if not has_price and not has_mcap:
+        return "Set at least one buy trigger: limit_price_usd and/or limit_market_cap_usd."
+    if limit_price_usd is not None and limit_price_usd <= 0:
+        return "limit_price_usd must be greater than zero when set."
+    if limit_market_cap_usd is not None and limit_market_cap_usd <= 0:
+        return "limit_market_cap_usd must be greater than zero when set."
+    return None
+
+
+def _buy_trigger_met(order: dict[str, Any], metrics: dict[str, Optional[float]]) -> bool:
+    mode = str(order.get("condition_mode") or "price")
+    price = metrics.get("price_usd")
+    mcap = metrics.get("market_cap_usd")
+    limit_price = order.get("limit_price_usd")
+    limit_mcap = order.get("limit_market_cap_usd")
+
+    checks: list[bool] = []
+    if mode in {"price", "both"} and limit_price is not None:
+        checks.append(price is not None and price <= float(limit_price))
+    if mode in {"market_cap", "both"} and limit_mcap is not None:
+        checks.append(mcap is not None and mcap <= float(limit_mcap))
+
+    if not checks:
+        return False
+    return all(checks)
+
+
+def _stop_trigger_met(order: dict[str, Any], metrics: dict[str, Optional[float]]) -> tuple[bool, Optional[str]]:
+    price = metrics.get("price_usd")
+    mcap = metrics.get("market_cap_usd")
+    stop_price = order.get("stop_price_usd")
+    stop_mcap = order.get("stop_market_cap_usd")
+
+    if stop_mcap is not None and mcap is not None and mcap > float(stop_mcap):
+        return True, f"Market cap rose above ${stop_mcap:,.0f} (now ${mcap:,.0f})."
+    if stop_price is not None and price is not None and price > float(stop_price):
+        return True, f"Price rose above ${stop_price} (now ${price})."
+    return False, None
+
+
+def _format_trigger_summary(order: dict[str, Any]) -> str:
+    parts: list[str] = []
+    token = order.get("output_token") or "token"
+    if order.get("limit_price_usd") is not None:
+        parts.append(f"price <= ${order['limit_price_usd']}")
+    if order.get("limit_market_cap_usd") is not None:
+        parts.append(f"market cap <= ${order['limit_market_cap_usd']:,.0f}")
+    if not parts:
+        return f"No buy trigger configured for {token}"
+    mode = order.get("condition_mode") or "price"
+    joiner = " AND " if mode == "both" and len(parts) > 1 else " OR " if len(parts) > 1 else ""
+    return f"Buy when {token} {joiner.join(parts)}"
+
+
+def _format_stop_summary(order: dict[str, Any]) -> str:
+    parts: list[str] = []
+    if order.get("stop_market_cap_usd") is not None:
+        parts.append(f"market cap > ${order['stop_market_cap_usd']:,.0f}")
+    if order.get("stop_price_usd") is not None:
+        parts.append(f"price > ${order['stop_price_usd']}")
+    if not parts:
+        return "Stops when SOL runs out or max executions reached"
+    return "Stop when " + " OR ".join(parts)
+
+
+def _normalize_check_interval(seconds: Optional[int]) -> int:
+    if seconds is None:
+        return THRESHOLD_CHECK_INTERVAL_SECONDS
+    seconds = int(seconds)
+    return max(MIN_CHECK_INTERVAL_SECONDS, seconds)
+
+
+def _order_row(
+    row: dict[str, Any],
+    *,
+    current_price_usd: Optional[float] = None,
+    current_market_cap_usd: Optional[float] = None,
+) -> dict[str, Any]:
     input_token = row["input_token"]
     output_token = row["output_token"]
     order_type = row["order_type"]
     executions = int(row.get("executions") or 0)
     max_executions = row.get("max_executions")
     recurring = bool(row.get("recurring")) or order_type == "threshold"
-    return {
+    condition_mode = str(row.get("condition_mode") or "price")
+    order_dict = {
         "id": row["id"],
         "user_wallet": row["user_wallet"],
         "order_type": order_type,
         "recurring": recurring,
+        "condition_mode": condition_mode,
         "input_token": input_token,
         "output_token": output_token,
         "pair": f"{input_token} → {output_token}",
@@ -67,6 +196,13 @@ def _order_row(row: dict[str, Any], *, current_price_usd: Optional[float] = None
         "output_mint": row["output_mint"],
         "amount_input": float(row["amount_input"]),
         "limit_price_usd": float(row["limit_price_usd"]) if row.get("limit_price_usd") is not None else None,
+        "limit_market_cap_usd": (
+            float(row["limit_market_cap_usd"]) if row.get("limit_market_cap_usd") is not None else None
+        ),
+        "stop_price_usd": float(row["stop_price_usd"]) if row.get("stop_price_usd") is not None else None,
+        "stop_market_cap_usd": (
+            float(row["stop_market_cap_usd"]) if row.get("stop_market_cap_usd") is not None else None
+        ),
         "slippage_bps": int(row.get("slippage_bps") or 100),
         "status": row["status"],
         "executions": executions,
@@ -83,7 +219,11 @@ def _order_row(row: dict[str, Any], *, current_price_usd: Optional[float] = None
         "filled_at": _iso(row.get("filled_at")),
         "cancelled_at": _iso(row.get("cancelled_at")),
         "current_price_usd": current_price_usd,
+        "current_market_cap_usd": current_market_cap_usd,
     }
+    order_dict["trigger_summary"] = _format_trigger_summary(order_dict)
+    order_dict["stop_summary"] = _format_stop_summary(order_dict)
+    return order_dict
 
 
 def resolve_output_token(token: str) -> dict[str, Any]:
@@ -116,6 +256,11 @@ def _insert_order(record: dict[str, Any]) -> dict[str, Any]:
     record.setdefault("executions", 0)
     record.setdefault("total_spent", 0.0)
     record.setdefault("check_interval_seconds", THRESHOLD_CHECK_INTERVAL_SECONDS)
+    record.setdefault("condition_mode", _infer_condition_mode(
+        limit_price_usd=record.get("limit_price_usd"),
+        limit_market_cap_usd=record.get("limit_market_cap_usd"),
+        condition_mode=record.get("condition_mode"),
+    ))
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -123,13 +268,15 @@ def _insert_order(record: dict[str, Any]) -> dict[str, Any]:
                 INSERT INTO easya_orders (
                     id, user_wallet, order_type, input_token, output_token,
                     input_mint, output_mint, amount_input, limit_price_usd,
-                    slippage_bps, status, recurring, max_executions, executions,
-                    total_spent, check_interval_seconds, created_at
+                    limit_market_cap_usd, stop_price_usd, stop_market_cap_usd,
+                    condition_mode, slippage_bps, status, recurring, max_executions,
+                    executions, total_spent, check_interval_seconds, created_at
                 ) VALUES (
                     %(id)s, %(user_wallet)s, %(order_type)s, %(input_token)s, %(output_token)s,
                     %(input_mint)s, %(output_mint)s, %(amount_input)s, %(limit_price_usd)s,
-                    %(slippage_bps)s, %(status)s, %(recurring)s, %(max_executions)s, %(executions)s,
-                    %(total_spent)s, %(check_interval_seconds)s, NOW()
+                    %(limit_market_cap_usd)s, %(stop_price_usd)s, %(stop_market_cap_usd)s,
+                    %(condition_mode)s, %(slippage_bps)s, %(status)s, %(recurring)s, %(max_executions)s,
+                    %(executions)s, %(total_spent)s, %(check_interval_seconds)s, NOW()
                 )
                 RETURNING *
                 """,
@@ -263,28 +410,21 @@ def list_easya_orders(
             rows = cur.fetchall()
     orders = []
     for row in rows:
-        current_price = None
+        metrics = {"price_usd": None, "market_cap_usd": None}
         if row.get("order_type") in ("limit", "threshold") and row.get("status") in ("active", "pending"):
-            current_price = _token_price_usd(row["output_token"])
-        orders.append(_order_row(row, current_price_usd=current_price))
+            metrics = _token_metrics(row["output_token"])
+        orders.append(
+            _order_row(
+                row,
+                current_price_usd=metrics.get("price_usd"),
+                current_market_cap_usd=metrics.get("market_cap_usd"),
+            )
+        )
     return {
         "user_wallet": user_wallet,
         "count": len(orders),
         "orders": orders,
     }
-
-
-def _token_price_usd(token: str) -> Optional[float]:
-    screener = screener_resolve_token(token)
-    if isinstance(screener, dict) and screener.get("error"):
-        return None
-    price = screener.get("price_usd")
-    if price is None:
-        return None
-    try:
-        return float(price)
-    except (TypeError, ValueError):
-        return None
 
 
 def execute_easya_swap_buy(
@@ -451,13 +591,31 @@ def place_limit_buy_order(
     user_wallet: str,
     output_token: str,
     amount_sol: float,
-    limit_price_usd: float,
+    *,
+    limit_price_usd: Optional[float] = None,
+    limit_market_cap_usd: Optional[float] = None,
+    condition_mode: Optional[str] = None,
     slippage_bps: int = 100,
 ) -> dict[str, Any]:
     user_wallet = user_wallet.strip()
-    limit_price_usd = float(limit_price_usd)
-    if limit_price_usd <= 0:
-        return {"error": "limit_price_usd must be greater than zero."}
+    amount_sol = float(amount_sol)
+    if amount_sol <= 0:
+        return {"error": "amount_sol must be greater than zero."}
+
+    limit_price_usd = _float_or_none(limit_price_usd)
+    limit_market_cap_usd = _float_or_none(limit_market_cap_usd)
+    trigger_error = _validate_buy_triggers(
+        limit_price_usd=limit_price_usd,
+        limit_market_cap_usd=limit_market_cap_usd,
+    )
+    if trigger_error:
+        return {"error": trigger_error}
+
+    mode = _infer_condition_mode(
+        limit_price_usd=limit_price_usd,
+        limit_market_cap_usd=limit_market_cap_usd,
+        condition_mode=condition_mode,
+    )
 
     out = resolve_output_token(output_token)
     if "error" in out:
@@ -466,7 +624,7 @@ def place_limit_buy_order(
     if "error" in inp:
         return inp
 
-    check = check_easya_can_spend_order(user_wallet, "SOL", float(amount_sol))
+    check = check_easya_can_spend_order(user_wallet, "SOL", amount_sol)
     if check.get("error"):
         return check
 
@@ -480,23 +638,34 @@ def place_limit_buy_order(
             "output_token": out["symbol"],
             "input_mint": inp["mint"],
             "output_mint": out["mint"],
-            "amount_input": float(amount_sol),
+            "amount_input": amount_sol,
             "limit_price_usd": limit_price_usd,
+            "limit_market_cap_usd": limit_market_cap_usd,
+            "stop_price_usd": None,
+            "stop_market_cap_usd": None,
+            "condition_mode": mode,
             "slippage_bps": int(slippage_bps),
             "status": "active",
             "recurring": False,
             "max_executions": 1,
         }
     )
-    current = _token_price_usd(out["symbol"])
+    metrics = _token_metrics(out["symbol"])
+    mcap_str = (
+        f"${metrics['market_cap_usd']:,.0f}"
+        if metrics.get("market_cap_usd") is not None
+        else "n/a"
+    )
     return {
         **order,
         "message": (
             f"Limit buy placed: spend {amount_sol} SOL for {out['symbol']} "
-            f"when price <= ${limit_price_usd} (one-time, 1 execution). Current price: "
-            f"${current if current is not None else 'n/a'}."
+            f"when {_format_trigger_summary(order)} (one-time, 1 execution). "
+            f"Current price: ${metrics.get('price_usd') if metrics.get('price_usd') is not None else 'n/a'}, "
+            f"market cap: {mcap_str}"
         ),
-        "current_price_usd": current,
+        "current_price_usd": metrics.get("price_usd"),
+        "current_market_cap_usd": metrics.get("market_cap_usd"),
         "platform_fee_rate": 0.001,
     }
 
@@ -505,23 +674,44 @@ def place_threshold_buy_order(
     user_wallet: str,
     output_token: str,
     amount_sol: float,
-    limit_price_usd: float,
+    *,
+    limit_price_usd: Optional[float] = None,
+    limit_market_cap_usd: Optional[float] = None,
+    stop_price_usd: Optional[float] = None,
+    stop_market_cap_usd: Optional[float] = None,
+    condition_mode: Optional[str] = None,
     slippage_bps: int = 100,
     max_executions: Optional[int] = None,
+    check_interval_seconds: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Recurring threshold buy: spend amount_sol each time price <= limit until SOL runs out."""
+    """Recurring threshold buy until SOL runs out, max executions, or stop condition."""
     user_wallet = user_wallet.strip()
-    limit_price_usd = float(limit_price_usd)
     amount_sol = float(amount_sol)
-    if limit_price_usd <= 0:
-        return {"error": "limit_price_usd must be greater than zero."}
     if amount_sol <= 0:
         return {"error": "amount_sol must be greater than zero."}
+
+    limit_price_usd = _float_or_none(limit_price_usd)
+    limit_market_cap_usd = _float_or_none(limit_market_cap_usd)
+    stop_price_usd = _float_or_none(stop_price_usd)
+    stop_market_cap_usd = _float_or_none(stop_market_cap_usd)
+    trigger_error = _validate_buy_triggers(
+        limit_price_usd=limit_price_usd,
+        limit_market_cap_usd=limit_market_cap_usd,
+    )
+    if trigger_error:
+        return {"error": trigger_error}
 
     if max_executions is not None:
         max_executions = int(max_executions)
         if max_executions < 1:
             return {"error": "max_executions must be at least 1 when set."}
+
+    mode = _infer_condition_mode(
+        limit_price_usd=limit_price_usd,
+        limit_market_cap_usd=limit_market_cap_usd,
+        condition_mode=condition_mode,
+    )
+    interval = _normalize_check_interval(check_interval_seconds)
 
     out = resolve_output_token(output_token)
     if "error" in out:
@@ -546,24 +736,36 @@ def place_threshold_buy_order(
             "output_mint": out["mint"],
             "amount_input": amount_sol,
             "limit_price_usd": limit_price_usd,
+            "limit_market_cap_usd": limit_market_cap_usd,
+            "stop_price_usd": stop_price_usd,
+            "stop_market_cap_usd": stop_market_cap_usd,
+            "condition_mode": mode,
             "slippage_bps": int(slippage_bps),
             "status": "active",
             "recurring": True,
             "max_executions": max_executions,
-            "check_interval_seconds": THRESHOLD_CHECK_INTERVAL_SECONDS,
+            "check_interval_seconds": interval,
         }
     )
-    current = _token_price_usd(out["symbol"])
+    metrics = _token_metrics(out["symbol"])
     max_label = str(max_executions) if max_executions is not None else "until SOL runs out"
+    interval_label = f"{interval // 60} min" if interval % 60 == 0 else f"{interval}s"
+    mcap_str = (
+        f"${metrics['market_cap_usd']:,.0f}"
+        if metrics.get("market_cap_usd") is not None
+        else "n/a"
+    )
     return {
         **order,
         "message": (
             f"Threshold buy placed: spend {amount_sol} SOL for {out['symbol']} "
-            f"each time price <= ${limit_price_usd}. Checks every "
-            f"{THRESHOLD_CHECK_INTERVAL_SECONDS // 60} minutes. Max buys: {max_label}. "
-            f"Current price: ${current if current is not None else 'n/a'}."
+            f"each time {_format_trigger_summary(order)}. Checks every {interval_label}. "
+            f"Stops: {_format_stop_summary(order)}. Max buys: {max_label}. "
+            f"Current price: ${metrics.get('price_usd') if metrics.get('price_usd') is not None else 'n/a'}, "
+            f"market cap: {mcap_str}"
         ),
-        "current_price_usd": current,
+        "current_price_usd": metrics.get("price_usd"),
+        "current_market_cap_usd": metrics.get("market_cap_usd"),
         "platform_fee_rate": 0.001,
     }
 
@@ -574,6 +776,9 @@ def update_easya_limit_order(
     *,
     amount_sol: Optional[float] = None,
     limit_price_usd: Optional[float] = None,
+    limit_market_cap_usd: Optional[float] = None,
+    stop_price_usd: Optional[float] = None,
+    stop_market_cap_usd: Optional[float] = None,
     slippage_bps: Optional[int] = None,
 ) -> dict[str, Any]:
     order = get_easya_order(order_id)
@@ -608,10 +813,28 @@ def update_easya_limit_order(
         updates["amount_input"] = amount_sol
 
     if limit_price_usd is not None:
-        limit_price_usd = float(limit_price_usd)
-        if limit_price_usd <= 0:
+        limit_price_usd = _float_or_none(limit_price_usd)
+        if limit_price_usd is not None and limit_price_usd <= 0:
             return {"error": "limit_price_usd must be greater than zero."}
         updates["limit_price_usd"] = limit_price_usd
+
+    if limit_market_cap_usd is not None:
+        limit_market_cap_usd = _float_or_none(limit_market_cap_usd)
+        if limit_market_cap_usd is not None and limit_market_cap_usd <= 0:
+            return {"error": "limit_market_cap_usd must be greater than zero."}
+        updates["limit_market_cap_usd"] = limit_market_cap_usd
+
+    if stop_price_usd is not None:
+        stop_price_usd = _float_or_none(stop_price_usd)
+        if stop_price_usd is not None and stop_price_usd <= 0:
+            return {"error": "stop_price_usd must be greater than zero."}
+        updates["stop_price_usd"] = stop_price_usd
+
+    if stop_market_cap_usd is not None:
+        stop_market_cap_usd = _float_or_none(stop_market_cap_usd)
+        if stop_market_cap_usd is not None and stop_market_cap_usd <= 0:
+            return {"error": "stop_market_cap_usd must be greater than zero."}
+        updates["stop_market_cap_usd"] = stop_market_cap_usd
 
     if slippage_bps is not None:
         slippage_bps = int(slippage_bps)
@@ -620,19 +843,45 @@ def update_easya_limit_order(
         updates["slippage_bps"] = slippage_bps
 
     if not updates:
-        return {"error": "No fields to update. Provide amount_sol, limit_price_usd, and/or slippage_bps."}
+        return {
+            "error": (
+                "No fields to update. Provide amount_sol, limit_price_usd, limit_market_cap_usd, "
+                "stop_price_usd, stop_market_cap_usd, and/or slippage_bps."
+            )
+        }
+
+    next_price = updates.get("limit_price_usd", order.get("limit_price_usd"))
+    next_mcap = updates.get("limit_market_cap_usd", order.get("limit_market_cap_usd"))
+    trigger_err = _validate_buy_triggers(
+        limit_price_usd=_float_or_none(next_price),
+        limit_market_cap_usd=_float_or_none(next_mcap),
+    )
+    if trigger_err:
+        return {"error": trigger_err}
+
+    if "limit_price_usd" in updates or "limit_market_cap_usd" in updates:
+        updates["condition_mode"] = _infer_condition_mode(
+            limit_price_usd=_float_or_none(next_price),
+            limit_market_cap_usd=_float_or_none(next_mcap),
+            condition_mode=order.get("condition_mode"),
+        )
 
     updated = _update_order(order_id, **updates)
     if not updated:
         return {"error": "Could not update order."}
 
-    current = _token_price_usd(updated["output_token"])
+    metrics = _token_metrics(updated["output_token"])
+    order_view = _order_row(
+        updated,
+        current_price_usd=metrics.get("price_usd"),
+        current_market_cap_usd=metrics.get("market_cap_usd"),
+    )
     return {
         "status": "updated",
-        "order": {**updated, "current_price_usd": current},
+        "order": order_view,
         "message": (
-            f"Limit buy updated: spend {updated['amount_input']} {updated['input_token']} "
-            f"for {updated['output_token']} when price <= ${updated['limit_price_usd']}."
+            f"Order updated: spend {updated['amount_input']} {updated['input_token']} "
+            f"for {updated['output_token']} when {order_view['trigger_summary']}."
         ),
     }
 
@@ -712,12 +961,9 @@ def _apply_successful_fill(
 def _try_fill_limit_order(order: dict[str, Any]) -> None:
     if order.get("status") != "active" or order.get("order_type") != "limit":
         return
-    limit_price = order.get("limit_price_usd")
-    if limit_price is None:
-        return
 
-    current = _token_price_usd(order["output_token"])
-    if current is None or current > float(limit_price):
+    metrics = _token_metrics(order["output_token"])
+    if not _buy_trigger_met(order, metrics):
         return
 
     user_wallet = order["user_wallet"]
@@ -736,7 +982,7 @@ def _try_fill_limit_order(order: dict[str, Any]) -> None:
     )
 
     if swap.get("status") == "success":
-        _apply_successful_fill(fresh, swap, price_usd=current, complete_after_fill=True)
+        _apply_successful_fill(fresh, swap, price_usd=metrics.get("price_usd"), complete_after_fill=True)
     else:
         _record_order_execution(
             fresh["id"],
@@ -744,7 +990,7 @@ def _try_fill_limit_order(order: dict[str, Any]) -> None:
             amount_input=float(fresh["amount_input"]),
             platform_fee=None,
             output_amount=None,
-            price_usd=current,
+            price_usd=metrics.get("price_usd"),
             signature=swap.get("signature"),
             status="failed",
             error_message=str(swap.get("error") or "Fill attempt failed"),
@@ -778,15 +1024,21 @@ def _try_fill_threshold_order(order: dict[str, Any]) -> None:
     if not _threshold_due_for_check(order):
         return
 
-    limit_price = order.get("limit_price_usd")
-    if limit_price is None:
-        return
-
-    current = _token_price_usd(order["output_token"])
+    metrics = _token_metrics(order["output_token"])
     now = datetime.now(timezone.utc)
     _update_order(order["id"], last_checked_at=now)
 
-    if current is None or current > float(limit_price):
+    should_stop, stop_reason = _stop_trigger_met(order, metrics)
+    if should_stop:
+        _update_order(
+            order["id"],
+            status="completed",
+            filled_at=now,
+            error_message=stop_reason,
+        )
+        return
+
+    if not _buy_trigger_met(order, metrics):
         return
 
     user_wallet = order["user_wallet"]
@@ -816,7 +1068,19 @@ def _try_fill_threshold_order(order: dict[str, Any]) -> None:
     )
 
     if swap.get("status") == "success":
-        _apply_successful_fill(fresh, swap, price_usd=current, complete_after_fill=False)
+        _apply_successful_fill(fresh, swap, price_usd=metrics.get("price_usd"), complete_after_fill=False)
+        # Re-check stop condition immediately after a fill (e.g. mcap rose above threshold).
+        fresh_after = get_easya_order(fresh["id"])
+        if fresh_after and fresh_after.get("status") == "active":
+            metrics_after = _token_metrics(fresh_after["output_token"])
+            stop_after, stop_reason_after = _stop_trigger_met(fresh_after, metrics_after)
+            if stop_after:
+                _update_order(
+                    fresh_after["id"],
+                    status="completed",
+                    filled_at=datetime.now(timezone.utc),
+                    error_message=stop_reason_after,
+                )
     else:
         _record_order_execution(
             fresh["id"],
@@ -824,7 +1088,7 @@ def _try_fill_threshold_order(order: dict[str, Any]) -> None:
             amount_input=amount,
             platform_fee=None,
             output_amount=None,
-            price_usd=current,
+            price_usd=metrics.get("price_usd"),
             signature=swap.get("signature"),
             status="failed",
             error_message=str(swap.get("error") or "Fill attempt failed"),
