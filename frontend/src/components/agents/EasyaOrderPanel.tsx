@@ -5,14 +5,26 @@ import { ChevronDown } from "lucide-react";
 import { Panel } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   cancelEasyaOrder,
+  fetchEasyaOrderExecutions,
   fetchEasyaOrders,
   orderExplorerUrl,
   updateEasyaLimitOrder,
+  type EasyaOrderExecution,
   type EasyaOrderSummary,
 } from "@/lib/easyaOrderClient";
 
 const SECTION_MAX_HEIGHT = "max-h-[280px]";
+const MARKET_METRICS_REFRESH_MS = 15 * 60 * 1000;
 
 type OrderStatusFilter = "all" | "active" | "filled" | "completed" | "cancelled" | "failed";
 
@@ -80,6 +92,134 @@ function formatExecutions(order: EasyaOrderSummary) {
     return `${done} / until SOL out`;
   }
   return `${done} / 1`;
+}
+
+function hasOrderHistory(order: EasyaOrderSummary) {
+  return (
+    Boolean(order.signature) ||
+    (order.executions ?? 0) > 0 ||
+    order.status === "filled" ||
+    order.status === "completed"
+  );
+}
+
+function OrderExecutionsDialog({
+  open,
+  onOpenChange,
+  order,
+  authToken,
+  cluster,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  order: EasyaOrderSummary;
+  authToken: string;
+  cluster?: string;
+}) {
+  const [executions, setExecutions] = useState<EasyaOrderExecution[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    void fetchEasyaOrderExecutions(order.id, authToken)
+      .then((data) => {
+        if (cancelled) return;
+        setExecutions(data?.executions ?? []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setExecutions([]);
+        setError(err instanceof Error ? err.message : "Could not load transaction history.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, order.id, authToken]);
+
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent className="max-h-[85vh] max-w-lg overflow-hidden">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Transaction history</AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-1 font-mono text-[11px] text-muted-foreground">
+              <p>
+                {orderTitle(order)} · ID <code className="text-foreground">{order.id}</code>
+              </p>
+              <p>
+                {formatExecutions(order)} buys · {(order.total_spent ?? 0).toLocaleString()}{" "}
+                {order.input_token} spent
+              </p>
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+
+        <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+          {loading && (
+            <p className="font-mono text-[11px] text-muted-foreground">Loading transactions…</p>
+          )}
+          {error && <p className="font-mono text-[11px] text-warn">{error}</p>}
+          {!loading && !error && executions.length === 0 && (
+            <p className="font-mono text-[11px] text-muted-foreground">
+              No fills recorded yet for this order.
+            </p>
+          )}
+          {executions.map((row, index) => {
+            const href = orderExplorerUrl(row.signature, cluster);
+            const ok = row.status === "success";
+            return (
+              <div key={row.id ?? `${row.signature ?? "row"}-${index}`} className="border border-grid bg-background/60 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-mono text-[11px] text-foreground">
+                    Buy #{executions.length - index}
+                  </span>
+                  <span
+                    className={`font-mono text-[10px] uppercase ${ok ? "text-signal" : "text-warn"}`}
+                  >
+                    {row.error_message ? "failed" : row.status ?? "unknown"}
+                  </span>
+                </div>
+                <div className="mt-1 font-mono text-[10px] text-muted-foreground">
+                  {formatTime(row.executed_at)} · {row.amount_input} {order.input_token}
+                  {row.platform_fee != null && row.platform_fee > 0 && (
+                    <> · fee {row.platform_fee} {order.input_token}</>
+                  )}
+                  {row.price_usd != null && <> · price {formatUsd(row.price_usd)}</>}
+                  {row.output_amount != null && (
+                    <> → {row.output_amount} {order.output_token}</>
+                  )}
+                </div>
+                {row.error_message && (
+                  <p className="mt-1 font-mono text-[10px] text-warn">{row.error_message}</p>
+                )}
+                {href && row.signature && (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-block font-mono text-[10px] text-signal hover:underline"
+                  >
+                    {row.signature.slice(0, 8)}…{row.signature.slice(-8)} ↗ Explorer
+                  </a>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <AlertDialogFooter>
+          <AlertDialogCancel>Close</AlertDialogCancel>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
 }
 
 function CollapsibleSection({
@@ -153,6 +293,7 @@ function LimitOrderRow({
   );
   const [slippageBps, setSlippageBps] = useState(String(order.slippage_bps ?? 100));
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -472,7 +613,25 @@ function LimitOrderRow({
             Delete
           </button>
         )}
+        {hasOrderHistory(order) && (
+          <button
+            type="button"
+            disabled={busy || actionBusy}
+            onClick={() => setHistoryOpen(true)}
+            className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:border-signal hover:text-signal disabled:opacity-40"
+          >
+            Tx history
+          </button>
+        )}
       </div>
+
+      <OrderExecutionsDialog
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        order={order}
+        authToken={authToken}
+        cluster={cluster}
+      />
 
       <ConfirmDialog
         open={confirmCancel}
@@ -493,7 +652,118 @@ function LimitOrderRow({
   );
 }
 
-function HistoryOrderRow({ order, cluster }: { order: EasyaOrderSummary; cluster?: string }) {
+function MarketOrderRow({
+  order,
+  cluster,
+  authToken,
+}: {
+  order: EasyaOrderSummary;
+  cluster?: string;
+  authToken: string;
+}) {
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const href = orderExplorerUrl(order.signature, cluster);
+  const ok = order.status === "filled" && !order.error_message;
+
+  return (
+    <div className="border border-grid bg-background/40 px-3 py-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <div className="font-mono text-xs text-foreground">Market buy · {order.output_token}</div>
+          <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+            ID `{order.id}` · {order.pair}
+          </div>
+        </div>
+        <span className={`font-mono text-[10px] uppercase ${ok ? "text-signal" : statusClass(order.status)}`}>
+          {order.error_message ? "failed" : order.status}
+        </span>
+      </div>
+
+      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px] text-muted-foreground">
+        <div>
+          <dt>Spent</dt>
+          <dd className="text-foreground">
+            {order.amount_input} {order.input_token}
+            {order.platform_fee != null && order.platform_fee > 0 && (
+              <span className="block text-[9px] text-muted-foreground">
+                incl. {order.platform_fee} fee
+              </span>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>Received</dt>
+          <dd className="text-foreground">
+            {order.output_amount != null ? `${order.output_amount} ${order.output_token}` : "-"}
+          </dd>
+        </div>
+        <div>
+          <dt>Current price</dt>
+          <dd className="text-foreground">{formatUsd(order.current_price_usd)}</dd>
+        </div>
+        <div>
+          <dt>Current market cap</dt>
+          <dd className="text-foreground">{formatMcap(order.current_market_cap_usd)}</dd>
+        </div>
+        <div className="col-span-2">
+          <dt>Executed</dt>
+          <dd className="text-foreground">{formatTime(order.filled_at ?? order.created_at)}</dd>
+        </div>
+        {order.metrics_cached_at && (
+          <div className="col-span-2">
+            <dt>Token prices cached</dt>
+            <dd className="text-foreground">{formatTime(order.metrics_cached_at)}</dd>
+          </div>
+        )}
+      </dl>
+
+      {order.error_message && (
+        <p className="mt-2 font-mono text-[10px] text-warn">{order.error_message}</p>
+      )}
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        {href && order.signature && (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-signal transition hover:bg-signal/10"
+          >
+            Explorer ↗
+          </a>
+        )}
+        {hasOrderHistory(order) && (
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(true)}
+            className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:border-signal hover:text-signal"
+          >
+            Tx history
+          </button>
+        )}
+      </div>
+
+      <OrderExecutionsDialog
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        order={order}
+        authToken={authToken}
+        cluster={cluster}
+      />
+    </div>
+  );
+}
+
+function HistoryOrderRow({
+  order,
+  cluster,
+  authToken,
+}: {
+  order: EasyaOrderSummary;
+  cluster?: string;
+  authToken: string;
+}) {
+  const [historyOpen, setHistoryOpen] = useState(false);
   const href = orderExplorerUrl(order.signature, cluster);
   const ok = order.status === "filled" && !order.error_message;
 
@@ -501,7 +771,7 @@ function HistoryOrderRow({ order, cluster }: { order: EasyaOrderSummary; cluster
     <div className="border border-grid bg-background/40 px-3 py-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-mono text-[11px] text-foreground">
-          {order.order_type === "limit" ? "Limit" : "Market"} · {order.pair}
+          {order.order_type === "threshold" ? "Threshold" : "Limit"} · {order.pair}
         </span>
         <span className={`font-mono text-[10px] uppercase ${ok ? "text-signal" : statusClass(order.status)}`}>
           {order.error_message ? "failed" : order.status}
@@ -521,16 +791,35 @@ function HistoryOrderRow({ order, cluster }: { order: EasyaOrderSummary; cluster
       {order.error_message && (
         <p className="mt-1 font-mono text-[10px] text-warn">{order.error_message}</p>
       )}
-      {href && order.signature && (
-        <a
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-2 inline-block font-mono text-[10px] text-signal hover:underline"
-        >
-          {order.signature.slice(0, 8)}…{order.signature.slice(-8)} ↗
-        </a>
-      )}
+      <div className="mt-2 flex flex-wrap gap-2">
+        {href && order.signature && (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono text-[10px] text-signal hover:underline"
+          >
+            {order.signature.slice(0, 8)}…{order.signature.slice(-8)} ↗
+          </a>
+        )}
+        {hasOrderHistory(order) && (
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(true)}
+            className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:border-signal hover:text-signal"
+          >
+            Tx history
+          </button>
+        )}
+      </div>
+
+      <OrderExecutionsDialog
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        order={order}
+        authToken={authToken}
+        cluster={cluster}
+      />
     </div>
   );
 }
@@ -546,7 +835,9 @@ export function EasyaOrderPanel({
 }) {
   const [orders, setOrders] = useState<EasyaOrderSummary[]>([]);
   const [loading, setLoading] = useState(false);
+  const [marketLoading, setMarketLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [marketMetricsNote, setMarketMetricsNote] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<OrderStatusFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -560,6 +851,10 @@ export function EasyaOrderPanel({
     try {
       const data = await fetchEasyaOrders(authToken);
       setOrders(data?.orders ?? []);
+      const firstMarket = data?.orders?.find((order) => order.order_type === "market");
+      if (firstMarket?.metrics_cached_at) {
+        setMarketMetricsNote(`Token prices cached at ${formatTime(firstMarket.metrics_cached_at)}`);
+      }
     } catch (err) {
       setOrders([]);
       setError(err instanceof Error ? err.message : "Could not load trading orders.");
@@ -567,6 +862,33 @@ export function EasyaOrderPanel({
       setLoading(false);
     }
   }, [authToken]);
+
+  const reloadMarket = useCallback(
+    async (forceRefresh = false) => {
+      if (!authToken) return;
+      setMarketLoading(true);
+      try {
+        const data = await fetchEasyaOrders(authToken, { refreshMetrics: forceRefresh });
+        setOrders(data?.orders ?? []);
+        const ttlMins = Math.round((data?.metrics_cache_ttl_seconds ?? 900) / 60);
+        const firstMarket = data?.orders?.find((order) => order.order_type === "market");
+        if (firstMarket?.metrics_cached_at) {
+          setMarketMetricsNote(
+            forceRefresh
+              ? `Token prices refreshed at ${formatTime(firstMarket.metrics_cached_at)}`
+              : `Token prices cached at ${formatTime(firstMarket.metrics_cached_at)} (auto-refresh every ${ttlMins} min)`
+          );
+        } else if (forceRefresh) {
+          setMarketMetricsNote("Orders refreshed.");
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not refresh market orders.");
+      } finally {
+        setMarketLoading(false);
+      }
+    },
+    [authToken]
+  );
 
   useEffect(() => {
     void reload();
@@ -579,6 +901,14 @@ export function EasyaOrderPanel({
     }, 30_000);
     return () => window.clearInterval(interval);
   }, [authToken, reload]);
+
+  useEffect(() => {
+    if (!authToken) return;
+    const interval = window.setInterval(() => {
+      void reloadMarket(false);
+    }, MARKET_METRICS_REFRESH_MS);
+    return () => window.clearInterval(interval);
+  }, [authToken, reloadMarket]);
 
   const limitOrders = useMemo(
     () => orders.filter((order) => order.order_type === "limit" || order.order_type === "threshold"),
@@ -685,21 +1015,52 @@ export function EasyaOrderPanel({
                 cluster={cluster}
               />
             ) : (
-              <HistoryOrderRow key={order.id} order={order} cluster={cluster} />
+              <HistoryOrderRow
+                key={order.id}
+                order={order}
+                authToken={authToken}
+                cluster={cluster}
+              />
             )
           )}
         </div>
       </CollapsibleSection>
 
-      <CollapsibleSection title="Market orders" count={marketOrders.length} defaultOpen={false}>
-        {marketOrders.length === 0 && !loading && (
+      <CollapsibleSection
+        title="Market orders"
+        count={marketOrders.length}
+        defaultOpen={false}
+        headerExtra={
+          <button
+            type="button"
+            onClick={() => void reloadMarket(true)}
+            disabled={marketLoading || loading}
+            className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground transition hover:text-signal disabled:opacity-40"
+          >
+            {marketLoading ? "…" : "Refresh"}
+          </button>
+        }
+      >
+        <p className="mb-3 text-sm text-muted-foreground">
+          Immediate market buys with current token price and market cap (cached every 15 minutes).
+          Use Refresh to fetch the latest EASY Screener data and recent transactions.
+        </p>
+        {marketMetricsNote && (
+          <p className="mb-3 font-mono text-[10px] text-muted-foreground">{marketMetricsNote}</p>
+        )}
+        {marketOrders.length === 0 && !loading && !marketLoading && (
           <p className="font-mono text-xs text-muted-foreground">
             Immediate market buys appear here after execution.
           </p>
         )}
         <div className="space-y-2">
           {marketOrders.map((order) => (
-            <HistoryOrderRow key={order.id} order={order} cluster={cluster} />
+            <MarketOrderRow
+              key={order.id}
+              order={order}
+              authToken={authToken}
+              cluster={cluster}
+            />
           ))}
         </div>
       </CollapsibleSection>

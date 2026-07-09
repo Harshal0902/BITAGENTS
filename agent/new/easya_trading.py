@@ -37,8 +37,10 @@ from easya_trading_ledger import (
 EASYA_ORDER_POLL_SECONDS = int(os.environ.get("EASYA_ORDER_POLL_SECONDS", "30"))
 THRESHOLD_CHECK_INTERVAL_SECONDS = int(os.environ.get("EASYA_THRESHOLD_CHECK_SECONDS", "900"))
 MIN_CHECK_INTERVAL_SECONDS = int(os.environ.get("EASYA_MIN_CHECK_SECONDS", "60"))
+METRICS_CACHE_SECONDS = int(os.environ.get("EASYA_METRICS_CACHE_SECONDS", "900"))
 _order_lock = threading.Lock()
 _order_scheduler_running = False
+_token_metrics_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 def _iso(value: Any) -> Optional[str]:
@@ -66,6 +68,26 @@ def _token_metrics(token: str) -> dict[str, Optional[float]]:
         "price_usd": _float_or_none(screener.get("price_usd")),
         "market_cap_usd": _float_or_none(screener.get("market_cap_usd")),
     }
+
+
+def _cached_token_metrics(token: str, *, force_refresh: bool = False) -> dict[str, Any]:
+    key = (token or "").strip().upper()
+    now = time.time()
+    if not force_refresh and key in _token_metrics_cache:
+        expires_at, payload = _token_metrics_cache[key]
+        if expires_at > now:
+            return payload
+
+    raw = _token_metrics(token)
+    cached_at = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "price_usd": raw.get("price_usd"),
+        "market_cap_usd": raw.get("market_cap_usd"),
+        "cached_at": cached_at,
+        "cache_ttl_seconds": METRICS_CACHE_SECONDS,
+    }
+    _token_metrics_cache[key] = (now + METRICS_CACHE_SECONDS, payload)
+    return payload
 
 
 def _token_price_usd(token: str) -> Optional[float]:
@@ -175,6 +197,7 @@ def _order_row(
     *,
     current_price_usd: Optional[float] = None,
     current_market_cap_usd: Optional[float] = None,
+    metrics_cached_at: Optional[str] = None,
 ) -> dict[str, Any]:
     input_token = row["input_token"]
     output_token = row["output_token"]
@@ -220,6 +243,7 @@ def _order_row(
         "cancelled_at": _iso(row.get("cancelled_at")),
         "current_price_usd": current_price_usd,
         "current_market_cap_usd": current_market_cap_usd,
+        "metrics_cached_at": metrics_cached_at,
     }
     order_dict["trigger_summary"] = _format_trigger_summary(order_dict)
     order_dict["stop_summary"] = _format_stop_summary(order_dict)
@@ -364,6 +388,45 @@ def list_easya_order_executions(
     return {"user_wallet": user_wallet, "count": len(executions), "executions": executions}
 
 
+def get_easya_order_executions(user_wallet: str, order_id: str, *, limit: int = 50) -> dict[str, Any]:
+    order = get_easya_order(order_id)
+    if not order:
+        return {"error": "Order not found."}
+    if order["user_wallet"] != user_wallet.strip():
+        return {"error": "This order belongs to another wallet."}
+
+    result = list_easya_order_executions(user_wallet, order_id=order_id, limit=limit)
+    executions = result.get("executions") or []
+
+    if not executions and order.get("signature"):
+        fill_price = None
+        if order.get("output_amount") and float(order["output_amount"]) > 0:
+            fill_price = round(float(order["amount_input"]) / float(order["output_amount"]), 12)
+        executions = [
+            {
+                "id": None,
+                "order_id": order_id,
+                "amount_input": float(order.get("amount_input") or 0),
+                "platform_fee": float(order["platform_fee"]) if order.get("platform_fee") is not None else None,
+                "output_amount": float(order["output_amount"]) if order.get("output_amount") is not None else None,
+                "price_usd": fill_price,
+                "signature": order.get("signature"),
+                "status": "success" if order.get("status") in ("filled", "completed") else order.get("status"),
+                "error_message": order.get("error_message"),
+                "executed_at": _iso(order.get("filled_at") or order.get("last_filled_at") or order.get("created_at")),
+            }
+        ]
+
+    return {
+        "user_wallet": user_wallet.strip(),
+        "order_id": order_id,
+        "order_type": order.get("order_type"),
+        "output_token": order.get("output_token"),
+        "count": len(executions),
+        "executions": executions,
+    }
+
+
 def _update_order(order_id: str, **fields: Any) -> Optional[dict[str, Any]]:
     if not fields:
         return get_easya_order(order_id)
@@ -394,6 +457,7 @@ def list_easya_orders(
     *,
     active_only: bool = False,
     limit: int = 50,
+    refresh_metrics: bool = False,
 ) -> dict[str, Any]:
     init_db()
     user_wallet = user_wallet.strip()
@@ -411,19 +475,35 @@ def list_easya_orders(
     orders = []
     for row in rows:
         metrics = {"price_usd": None, "market_cap_usd": None}
-        if row.get("order_type") in ("limit", "threshold") and row.get("status") in ("active", "pending"):
-            metrics = _token_metrics(row["output_token"])
+        metrics_cached_at = None
+        order_type = row.get("order_type")
+        status = row.get("status")
+        if order_type == "market":
+            cached = _cached_token_metrics(row["output_token"], force_refresh=refresh_metrics)
+            metrics = {
+                "price_usd": cached.get("price_usd"),
+                "market_cap_usd": cached.get("market_cap_usd"),
+            }
+            metrics_cached_at = cached.get("cached_at")
+        elif order_type in ("limit", "threshold") and status in ("active", "pending"):
+            live = _token_metrics(row["output_token"])
+            metrics = {
+                "price_usd": live.get("price_usd"),
+                "market_cap_usd": live.get("market_cap_usd"),
+            }
         orders.append(
             _order_row(
                 row,
                 current_price_usd=metrics.get("price_usd"),
                 current_market_cap_usd=metrics.get("market_cap_usd"),
+                metrics_cached_at=metrics_cached_at,
             )
         )
     return {
         "user_wallet": user_wallet,
         "count": len(orders),
         "orders": orders,
+        "metrics_cache_ttl_seconds": METRICS_CACHE_SECONDS,
     }
 
 
@@ -570,14 +650,28 @@ def place_market_buy_order(
     )
 
     if swap.get("status") == "success":
-        return _update_order(
+        fill_metrics = _token_metrics(out["symbol"])
+        _record_order_execution(
+            order_id,
+            user_wallet,
+            amount_input=float(amount_sol),
+            platform_fee=float(swap.get("platform_fee") or easya_platform_fee(amount_sol)),
+            output_amount=float(swap.get("output_amount") or 0) if swap.get("output_amount") is not None else None,
+            price_usd=fill_metrics.get("price_usd"),
+            signature=swap.get("signature"),
+            status="success",
+        )
+        updated = _update_order(
             order_id,
             status="filled",
             platform_fee=swap.get("platform_fee"),
             output_amount=swap.get("output_amount"),
             signature=swap.get("signature"),
             filled_at=datetime.now(timezone.utc),
-        ) or {**order, **swap}
+            executions=1,
+            total_spent=float(amount_sol),
+        )
+        return updated or {**order, **swap}
 
     _update_order(
         order_id,

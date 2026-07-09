@@ -8,9 +8,13 @@ export async function GET(request: NextRequest) {
   }
 
   const activeOnly = request.nextUrl.searchParams.get("active_only") === "true";
+  const refreshMetrics = request.nextUrl.searchParams.get("refresh_metrics") === "true";
 
   try {
-    const res = await proxyKickstartOrders(authToken, { active_only: activeOnly });
+    const res = await proxyKickstartOrders(authToken, {
+      active_only: activeOnly,
+      refresh_metrics: refreshMetrics,
+    });
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch {

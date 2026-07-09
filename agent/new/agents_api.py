@@ -68,6 +68,7 @@ from easya_screener_client import CACHE_TTL_SECONDS, screener_configured
 from easya_trading import (
     EASYA_ORDER_POLL_SECONDS,
     cancel_easya_order,
+    get_easya_order_executions,
     list_easya_orders,
     place_limit_buy_order,
     place_market_buy_order,
@@ -669,8 +670,21 @@ def kickstart_wallet_withdraw(
 def kickstart_list_orders(
     auth_wallet: str = Depends(require_wallet_session),
     active_only: bool = Query(False),
+    refresh_metrics: bool = Query(False),
 ) -> dict[str, Any]:
-    return list_easya_orders(auth_wallet, active_only=active_only)
+    return list_easya_orders(auth_wallet, active_only=active_only, refresh_metrics=refresh_metrics)
+
+
+@app.get("/kickstart/orders/{order_id}/executions")
+def kickstart_order_executions(
+    order_id: str,
+    auth_wallet: str = Depends(require_wallet_session),
+    limit: int = Query(50, ge=1, le=100),
+) -> dict[str, Any]:
+    result = get_easya_order_executions(auth_wallet, order_id, limit=limit)
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
 
 
 @app.post("/kickstart/orders/market")
