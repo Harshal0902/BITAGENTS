@@ -103,11 +103,13 @@ function hasOrderHistory(order: EasyaOrderSummary) {
   );
 }
 
-function isManageableLimitOrder(order: EasyaOrderSummary) {
-  return (
-    (order.order_type === "limit" || order.order_type === "threshold") &&
-    (order.status === "active" || order.status === "pending")
-  );
+function normalizedOrderStatus(order: EasyaOrderSummary) {
+  return (order.status || "").trim().toLowerCase();
+}
+
+function isLimitOrThreshold(order: EasyaOrderSummary) {
+  const type = (order.order_type || "").trim().toLowerCase();
+  return type === "limit" || type === "threshold" || Boolean(order.recurring);
 }
 
 function OrderExecutionsDialog({
@@ -234,12 +236,14 @@ function CollapsibleSection({
   count,
   defaultOpen = true,
   headerExtra,
+  maxHeight = SECTION_MAX_HEIGHT,
   children,
 }: {
   title: string;
   count?: number;
   defaultOpen?: boolean;
   headerExtra?: ReactNode;
+  maxHeight?: string;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -266,7 +270,7 @@ function CollapsibleSection({
       }
     >
       {open ? (
-        <div className={`${SECTION_MAX_HEIGHT} overflow-y-auto pr-1`}>{children}</div>
+        <div className={`${maxHeight} overflow-y-auto pr-1`}>{children}</div>
       ) : (
         <p className="font-mono text-[10px] text-muted-foreground">Section collapsed.</p>
       )}
@@ -304,10 +308,77 @@ function LimitOrderRow({
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const canEdit =
-    (order.order_type === "limit" || order.order_type === "threshold") && order.status === "active";
-  const canCancel = order.status === "active" || order.status === "pending";
-  const stopLabel = order.order_type === "threshold" || order.recurring ? "Stop order" : "Cancel order";
+  const status = normalizedOrderStatus(order);
+  const canEdit = isLimitOrThreshold(order) && status === "active";
+  const canCancel = status === "active" || status === "pending";
+  const removeLabel =
+    order.order_type === "threshold" || order.recurring ? "Remove order" : "Remove limit order";
+
+  const actionButtons = (
+    <div className="flex flex-wrap gap-2">
+      {canEdit && !editing && (
+        <button
+          type="button"
+          disabled={busy || actionBusy}
+          onClick={() => {
+            setEditing(true);
+            setActionError(null);
+          }}
+          className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:border-signal hover:text-signal disabled:opacity-40"
+        >
+          Edit
+        </button>
+      )}
+      {editing && (
+        <>
+          <button
+            type="button"
+            disabled={busy || actionBusy}
+            onClick={() => void runSave()}
+            className="border border-signal px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-signal transition hover:bg-signal/10 disabled:opacity-40"
+          >
+            {actionBusy ? "Saving…" : "Save"}
+          </button>
+          <button
+            type="button"
+            disabled={actionBusy}
+            onClick={() => {
+              setEditing(false);
+              setAmountSol(String(order.amount_input));
+              setLimitPrice(order.limit_price_usd != null ? String(order.limit_price_usd) : "");
+              setLimitMcap(order.limit_market_cap_usd != null ? String(order.limit_market_cap_usd) : "");
+              setStopMcap(order.stop_market_cap_usd != null ? String(order.stop_market_cap_usd) : "");
+              setSlippageBps(String(order.slippage_bps ?? 100));
+              setActionError(null);
+            }}
+            className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:text-foreground disabled:opacity-40"
+          >
+            Cancel edit
+          </button>
+        </>
+      )}
+      {canCancel && !editing && (
+        <button
+          type="button"
+          disabled={busy || actionBusy}
+          onClick={() => setConfirmCancel(true)}
+          className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:border-warn hover:text-warn disabled:opacity-40"
+        >
+          {removeLabel}
+        </button>
+      )}
+      {hasOrderHistory(order) && !editing && (
+        <button
+          type="button"
+          disabled={busy || actionBusy}
+          onClick={() => setHistoryOpen(true)}
+          className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:border-signal hover:text-signal disabled:opacity-40"
+        >
+          Tx history
+        </button>
+      )}
+    </div>
+  );
 
   async function runCancel() {
     setActionBusy(true);
@@ -403,6 +474,10 @@ function LimitOrderRow({
           {order.status}
         </span>
       </div>
+
+      {(canEdit || canCancel || hasOrderHistory(order)) && (
+        <div className="mt-3 border-b border-grid pb-3">{actionButtons}</div>
+      )}
 
       {!editing ? (
         <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px] text-muted-foreground">
@@ -569,70 +644,6 @@ function LimitOrderRow({
 
       {actionError && <p className="mt-2 font-mono text-[10px] text-warn">{actionError}</p>}
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        {canEdit && !editing && (
-          <button
-            type="button"
-            disabled={busy || actionBusy}
-            onClick={() => {
-              setEditing(true);
-              setActionError(null);
-            }}
-            className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:border-signal hover:text-signal disabled:opacity-40"
-          >
-            Edit
-          </button>
-        )}
-        {editing && (
-          <>
-            <button
-              type="button"
-              disabled={busy || actionBusy}
-              onClick={() => void runSave()}
-              className="border border-signal px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-signal transition hover:bg-signal/10 disabled:opacity-40"
-            >
-              {actionBusy ? "Saving…" : "Save"}
-            </button>
-            <button
-              type="button"
-              disabled={actionBusy}
-              onClick={() => {
-                setEditing(false);
-                setAmountSol(String(order.amount_input));
-                setLimitPrice(order.limit_price_usd != null ? String(order.limit_price_usd) : "");
-                setLimitMcap(order.limit_market_cap_usd != null ? String(order.limit_market_cap_usd) : "");
-                setStopMcap(order.stop_market_cap_usd != null ? String(order.stop_market_cap_usd) : "");
-                setSlippageBps(String(order.slippage_bps ?? 100));
-                setActionError(null);
-              }}
-              className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:text-foreground disabled:opacity-40"
-            >
-              Cancel edit
-            </button>
-          </>
-        )}
-        {canCancel && (
-          <button
-            type="button"
-            disabled={busy || actionBusy}
-            onClick={() => setConfirmCancel(true)}
-            className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:border-warn hover:text-warn disabled:opacity-40"
-          >
-            {stopLabel}
-          </button>
-        )}
-        {hasOrderHistory(order) && (
-          <button
-            type="button"
-            disabled={busy || actionBusy}
-            onClick={() => setHistoryOpen(true)}
-            className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:border-signal hover:text-signal disabled:opacity-40"
-          >
-            Tx history
-          </button>
-        )}
-      </div>
-
       <OrderExecutionsDialog
         open={historyOpen}
         onOpenChange={setHistoryOpen}
@@ -644,15 +655,15 @@ function LimitOrderRow({
       <ConfirmDialog
         open={confirmCancel}
         onOpenChange={setConfirmCancel}
-        title={stopLabel}
+        title={removeLabel}
         description={
           <p>
-            Stop {order.order_type === "threshold" ? "threshold" : "limit"} buy for{" "}
+            {removeLabel} for{" "}
             <strong className="text-foreground">{order.output_token}</strong> (ID `{order.id}`)?
             No further buys will run and reserved SOL will be released. This cannot be undone.
           </p>
         }
-        confirmLabel={stopLabel}
+        confirmLabel={removeLabel}
         cancelLabel="Keep order"
         busy={actionBusy}
         onConfirm={() => void runCancel()}
@@ -739,76 +750,6 @@ function MarketOrderRow({
             className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-signal transition hover:bg-signal/10"
           >
             Explorer ↗
-          </a>
-        )}
-        {hasOrderHistory(order) && (
-          <button
-            type="button"
-            onClick={() => setHistoryOpen(true)}
-            className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:border-signal hover:text-signal"
-          >
-            Tx history
-          </button>
-        )}
-      </div>
-
-      <OrderExecutionsDialog
-        open={historyOpen}
-        onOpenChange={setHistoryOpen}
-        order={order}
-        authToken={authToken}
-        cluster={cluster}
-      />
-    </div>
-  );
-}
-
-function HistoryOrderRow({
-  order,
-  cluster,
-  authToken,
-}: {
-  order: EasyaOrderSummary;
-  cluster?: string;
-  authToken: string;
-}) {
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const href = orderExplorerUrl(order.signature, cluster);
-  const ok = order.status === "filled" && !order.error_message;
-
-  return (
-    <div className="border border-grid bg-background/40 px-3 py-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-mono text-[11px] text-foreground">
-          {order.order_type === "threshold" ? "Threshold" : "Limit"} · {order.pair}
-        </span>
-        <span className={`font-mono text-[10px] uppercase ${ok ? "text-signal" : statusClass(order.status)}`}>
-          {order.error_message ? "failed" : order.status}
-        </span>
-      </div>
-      <div className="mt-1 font-mono text-[10px] text-muted-foreground">
-        {formatTime(order.filled_at ?? order.cancelled_at ?? order.created_at)} · ID `{order.id}` ·{" "}
-        {order.amount_input} {order.input_token}
-        {(order.executions ?? 0) > 0 && ` · ${formatExecutions(order)} buys`}
-        {order.limit_price_usd != null && ` · price ≤ ${formatUsd(order.limit_price_usd)}`}
-        {order.limit_market_cap_usd != null && ` · mcap ≤ ${formatMcap(order.limit_market_cap_usd)}`}
-        {order.platform_fee != null && order.platform_fee > 0 && (
-          <> · fee {order.platform_fee} {order.input_token}</>
-        )}
-        {order.output_amount != null && ` → ${order.output_amount} ${order.output_token}`}
-      </div>
-      {order.error_message && (
-        <p className="mt-1 font-mono text-[10px] text-warn">{order.error_message}</p>
-      )}
-      <div className="mt-2 flex flex-wrap gap-2">
-        {href && order.signature && (
-          <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-mono text-[10px] text-signal hover:underline"
-          >
-            {order.signature.slice(0, 8)}…{order.signature.slice(-8)} ↗
           </a>
         )}
         {hasOrderHistory(order) && (
@@ -947,16 +888,6 @@ export function EasyaOrderPanel({
     });
   }, [limitOrders, statusFilter, searchQuery]);
 
-  const activeLimitOrders = useMemo(
-    () => filteredLimitOrders.filter(isManageableLimitOrder),
-    [filteredLimitOrders]
-  );
-
-  const pastLimitOrders = useMemo(
-    () => filteredLimitOrders.filter((order) => !isManageableLimitOrder(order)),
-    [filteredLimitOrders]
-  );
-
   if (!authToken) {
     return (
       <CollapsibleSection title="Your limit orders" defaultOpen>
@@ -974,6 +905,7 @@ export function EasyaOrderPanel({
         title="Your limit orders"
         count={filteredLimitOrders.length}
         defaultOpen
+        maxHeight="max-h-[420px]"
         headerExtra={
           <button
             type="button"
@@ -1023,45 +955,18 @@ export function EasyaOrderPanel({
           </p>
         )}
 
-        {activeLimitOrders.length > 0 && (
-          <div className="mb-4">
-            <h3 className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-signal">
-              Active orders ({activeLimitOrders.length})
-            </h3>
-            <div className="grid gap-3 lg:grid-cols-2">
-              {activeLimitOrders.map((order) => (
-                <LimitOrderRow
-                  key={order.id}
-                  order={order}
-                  authToken={authToken}
-                  busy={loading}
-                  onUpdated={() => void reload()}
-                  cluster={cluster}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {pastLimitOrders.length > 0 && (
-          <div>
-            {activeLimitOrders.length > 0 && (
-              <h3 className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-                Past orders ({pastLimitOrders.length})
-              </h3>
-            )}
-            <div className="grid gap-3 lg:grid-cols-2">
-              {pastLimitOrders.map((order) => (
-                <HistoryOrderRow
-                  key={order.id}
-                  order={order}
-                  authToken={authToken}
-                  cluster={cluster}
-                />
-              ))}
-            </div>
-          </div>
-        )}
+        <div className="grid gap-3 lg:grid-cols-2">
+          {filteredLimitOrders.map((order) => (
+            <LimitOrderRow
+              key={order.id}
+              order={order}
+              authToken={authToken}
+              busy={loading}
+              onUpdated={() => void reload()}
+              cluster={cluster}
+            />
+          ))}
+        </div>
       </CollapsibleSection>
 
       <CollapsibleSection
