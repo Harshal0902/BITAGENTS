@@ -119,16 +119,32 @@ export async function proxyKickstartWithdraw(
 
 export async function proxyKickstartOrders(
   authToken: string,
-  params?: { active_only?: boolean; limit?: number }
+  params?: { active_only?: boolean; limit?: number; refresh_metrics?: boolean }
 ): Promise<Response> {
   const search = new URLSearchParams();
   if (params?.active_only) search.set("active_only", "true");
   if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.refresh_metrics) search.set("refresh_metrics", "true");
   const qs = search.toString();
   return fetch(`${getAgentsBaseUrl()}/kickstart/orders${qs ? `?${qs}` : ""}`, {
     cache: "no-store",
     headers: buildHeaders(authToken),
   });
+}
+
+export async function proxyKickstartOrderExecutions(
+  orderId: string,
+  authToken: string,
+  limit = 50
+): Promise<Response> {
+  const search = new URLSearchParams({ limit: String(limit) });
+  return fetch(
+    `${getAgentsBaseUrl()}/kickstart/orders/${encodeURIComponent(orderId)}/executions?${search}`,
+    {
+      cache: "no-store",
+      headers: buildHeaders(authToken),
+    }
+  );
 }
 
 export async function proxyKickstartCancelOrder(

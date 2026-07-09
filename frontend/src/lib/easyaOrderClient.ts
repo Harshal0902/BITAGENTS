@@ -32,14 +32,38 @@ export type EasyaOrderSummary = {
   cancelled_at?: string | null;
   current_price_usd?: number | null;
   current_market_cap_usd?: number | null;
+  metrics_cached_at?: string | null;
   trigger_summary?: string | null;
   stop_summary?: string | null;
+};
+
+export type EasyaOrderExecution = {
+  id?: number | null;
+  order_id: string;
+  amount_input: number;
+  platform_fee?: number | null;
+  output_amount?: number | null;
+  price_usd?: number | null;
+  signature?: string | null;
+  status?: string | null;
+  error_message?: string | null;
+  executed_at?: string | null;
+};
+
+export type EasyaOrderExecutionsResponse = {
+  user_wallet: string;
+  order_id: string;
+  order_type?: string;
+  output_token?: string;
+  count: number;
+  executions: EasyaOrderExecution[];
 };
 
 export type EasyaOrdersResponse = {
   user_wallet: string;
   count: number;
   orders: EasyaOrderSummary[];
+  metrics_cache_ttl_seconds?: number;
 };
 
 function authHeaders(authToken: string): HeadersInit {
@@ -48,11 +72,14 @@ function authHeaders(authToken: string): HeadersInit {
 
 export async function fetchEasyaOrders(
   authToken: string,
-  activeOnly = false
+  options?: { activeOnly?: boolean; refreshMetrics?: boolean }
 ): Promise<EasyaOrdersResponse | null> {
   try {
-    const params = activeOnly ? "?active_only=true" : "";
-    const res = await fetch(`/api/agents/kickstart-copilot/orders${params}`, {
+    const params = new URLSearchParams();
+    if (options?.activeOnly) params.set("active_only", "true");
+    if (options?.refreshMetrics) params.set("refresh_metrics", "true");
+    const qs = params.toString();
+    const res = await fetch(`/api/agents/kickstart-copilot/orders${qs ? `?${qs}` : ""}`, {
       cache: "no-store",
       headers: authHeaders(authToken),
     });
@@ -113,6 +140,37 @@ export async function updateEasyaLimitOrder(
     return { error: typeof data.detail === "string" ? data.detail : data.error ?? "Update failed" };
   }
   return data;
+}
+
+export async function fetchEasyaOrderExecutions(
+  orderId: string,
+  authToken: string,
+  limit = 50
+): Promise<EasyaOrderExecutionsResponse | null> {
+  try {
+    const params = new URLSearchParams({ limit: String(limit) });
+    const res = await fetch(
+      `/api/agents/kickstart-copilot/orders/${encodeURIComponent(orderId)}/executions?${params}`,
+      {
+        cache: "no-store",
+        headers: authHeaders(authToken),
+      }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail =
+        typeof data.error === "string"
+          ? data.error
+          : typeof data.detail === "string"
+            ? data.detail
+            : "Failed to load order history";
+      throw new Error(detail);
+    }
+    return data as EasyaOrderExecutionsResponse;
+  } catch (err) {
+    console.error("fetchEasyaOrderExecutions failed:", err);
+    throw err instanceof Error ? err : new Error("Failed to load order history");
+  }
 }
 
 export function orderExplorerUrl(signature?: string | null, cluster?: string) {
