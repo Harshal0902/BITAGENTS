@@ -116,6 +116,16 @@ export type ConfirmationDetails = {
   mint?: string;
   plan_id?: string;
   status_action?: string;
+  order_type?: string;
+  amount_sol?: number;
+  limit_price_usd?: number;
+  current_price_usd?: number;
+  trigger_condition?: string;
+  executions?: number;
+  slippage_bps?: number;
+  platform_fee?: number;
+  total_cost?: number;
+  order_id?: string;
 };
 
 export function parseConfirmationRequired(result: string): {

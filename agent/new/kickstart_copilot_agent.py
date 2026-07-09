@@ -7,8 +7,10 @@ Free for users (wallet sign-in required). Token data from EASY Screener (cached 
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
+import threading
 import time
 from typing import Any, Optional
 
@@ -756,10 +758,10 @@ TOOLS = [
     {"type": "function", "function": {"name": "compare_watchlist", "description": "Compare all tokens on user watchlist.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}}, "required": []}}},
     {"type": "function", "function": {"name": "get_easya_trading_wallet", "description": "Deposit address and SOL balance for Jupiter trading (0.1% fee per fill).", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}}, "required": []}}},
     {"type": "function", "function": {"name": "get_easya_trading_balance", "description": "User SOL balance deposited for EasyA trading.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}}, "required": []}}},
-    {"type": "function", "function": {"name": "place_market_buy", "description": "Market buy token with deposited SOL via Jupiter (one-time, 0.1% platform fee).", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "token": {"type": "string"}, "amount_sol": {"type": "number"}, "slippage_bps": {"type": "integer"}}, "required": ["token", "amount_sol"]}}},
-    {"type": "function", "function": {"name": "place_limit_buy", "description": "Limit buy: spend amount_sol when token price_usd <= limit_price_usd.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "token": {"type": "string"}, "amount_sol": {"type": "number"}, "limit_price_usd": {"type": "number"}, "slippage_bps": {"type": "integer"}}, "required": ["token", "amount_sol", "limit_price_usd"]}}},
+    {"type": "function", "function": {"name": "place_market_buy", "description": "Market buy token with deposited SOL via Jupiter (one-time, 0.1% fee). REQUIRES explicit user confirmation in their latest message before calling.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "token": {"type": "string"}, "amount_sol": {"type": "number"}, "slippage_bps": {"type": "integer"}}, "required": ["token", "amount_sol"]}}},
+    {"type": "function", "function": {"name": "place_limit_buy", "description": "Limit buy: spend amount_sol when price_usd <= limit_price_usd (one-time, 1 execution). REQUIRES explicit user confirmation before calling.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "token": {"type": "string"}, "amount_sol": {"type": "number"}, "limit_price_usd": {"type": "number"}, "slippage_bps": {"type": "integer"}}, "required": ["token", "amount_sol", "limit_price_usd"]}}},
     {"type": "function", "function": {"name": "list_trading_orders", "description": "List user's market/limit buy orders.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "active_only": {"type": "boolean"}}, "required": []}}},
-    {"type": "function", "function": {"name": "cancel_trading_order", "description": "Cancel a pending/active limit order.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "order_id": {"type": "string"}}, "required": ["order_id"]}}},
+    {"type": "function", "function": {"name": "cancel_trading_order", "description": "Cancel a pending/active limit order. REQUIRES explicit user confirmation before calling.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "order_id": {"type": "string"}}, "required": ["order_id"]}}},
 ]
 
 TOOL_MAP = {
@@ -815,10 +817,17 @@ SYSTEM_PROMPT = """You are **EasyA Analysis Agent** on Solana - free token resea
 
 ## Trading (Jupiter)
 - Users must deposit SOL first (`get_easya_trading_wallet` shows the address).
-- **Market buy:** `place_market_buy(token, amount_sol)` — executes immediately.
-- **Limit buy:** `place_limit_buy(token, amount_sol, limit_price_usd)` — fills when EASY Screener price <= limit.
+- **Market buy:** `place_market_buy(token, amount_sol)` — executes immediately (one-time).
+- **Limit buy:** `place_limit_buy(token, amount_sol, limit_price_usd)` — fills when EASY Screener price <= limit (one-time, **1 execution**).
 - One-time orders only (not recurring DCA). Use `list_trading_orders` / `cancel_trading_order` for limit orders.
+- **Confirmation required:** before `place_market_buy`, `place_limit_buy`, or `cancel_trading_order`, summarize the order (from/to tokens, SOL amount, limit price, trigger condition, **1 buy execution**, 0.1% fee) and ask the user to confirm. Only call the tool after they reply yes/confirm in their **next message**.
 - Always confirm deposit balance before placing orders. Never invent tx signatures.
+
+## Order confirmation flow
+Mutating trading actions **cannot run** until the user explicitly confirms in their **latest message** (e.g. "yes", "confirm", "proceed").
+When proposing a limit or market buy, say:
+"Please confirm before I proceed: [exact order details including SOL → token, amount, limit/trigger, **1 execution**, 0.1% fee]. Reply **yes** to proceed or **no** to cancel."
+If the tool returns `confirmation_required`, show that message and wait — do not retry in the same turn.
 
 ## Scope
 - Analyze any token indexed on EASY Screener (use get_token_overview, search_tokens, or list_verified_kickstart_tokens).
@@ -1091,10 +1100,277 @@ def call_openrouter(messages: list) -> dict[str, Any]:
     raise RuntimeError(last_error)
 
 
+CONFIRMATION_REQUIRED_TOOLS = frozenset({
+    "place_market_buy",
+    "place_limit_buy",
+    "cancel_trading_order",
+})
+
+_CONFIRMATION_LOCK = threading.Lock()
+_pending_confirmations: dict[str, dict[str, Any]] = {}
+
+_CONFIRM_PHRASES = (
+    r"\byes\b",
+    r"\byep\b",
+    r"\byeah\b",
+    r"\bconfirm\b",
+    r"\bproceed\b",
+    r"\bgo ahead\b",
+    r"\bdo it\b",
+    r"\bapproved?\b",
+    r"\bsure\b",
+    r"\bok(?:ay)?\b",
+    r"\bi confirm\b",
+    r"\bplease proceed\b",
+    r"\bthat(?:'s| is) correct\b",
+    r"\blooks good\b",
+)
+
+_DECLINE_PHRASES = (
+    r"\bno\b",
+    r"\bcancel\b",
+    r"\bstop\b",
+    r"\babort\b",
+    r"\bdon't\b",
+    r"\bdont\b",
+    r"\bnevermind\b",
+    r"\bnever mind\b",
+)
+
+
+def _confirmation_key(user_wallet: Optional[str], session_id: Optional[str]) -> str:
+    wallet = (user_wallet or "").strip() or "anonymous"
+    session = (session_id or "").strip() or "default"
+    return f"{wallet}:{session}"
+
+
+def _user_confirmed(user_input: Optional[str]) -> bool:
+    text = (user_input or "").strip().lower()
+    if not text:
+        return False
+    return any(re.search(pattern, text) for pattern in _CONFIRM_PHRASES)
+
+
+def _user_declined(user_input: Optional[str]) -> bool:
+    text = (user_input or "").strip().lower()
+    if not text:
+        return False
+    return any(re.search(pattern, text) for pattern in _DECLINE_PHRASES)
+
+
+def _resolve_trading_token(token: str) -> dict[str, Any]:
+    from easya_trading import resolve_output_token
+
+    resolved = resolve_output_token(token)
+    if "error" in resolved:
+        return {"symbol": str(token).strip().upper(), "mint": None}
+    return {"symbol": resolved.get("symbol"), "mint": resolved.get("mint")}
+
+
+def _token_with_mint(symbol: Optional[str], mint: Optional[str]) -> str:
+    if symbol and mint:
+        return f"**{symbol}** (`{mint}`)"
+    if symbol:
+        return f"**{symbol}**"
+    return "**?**"
+
+
+def _pending_action_details(tool_name: str, args: dict) -> dict[str, Any]:
+    from easya_trading_ledger import easya_execution_total_cost, easya_platform_fee
+
+    if tool_name == "place_limit_buy":
+        out = _resolve_trading_token(str(args.get("token") or ""))
+        amount = float(args.get("amount_sol") or 0)
+        limit_price = float(args.get("limit_price_usd") or 0)
+        current_price = None
+        try:
+            from easya_trading import _token_price_usd
+
+            current_price = _token_price_usd(out.get("symbol") or "")
+        except Exception:
+            pass
+        fee = easya_platform_fee(amount) if amount > 0 else 0
+        return {
+            "action": tool_name,
+            "order_type": "limit",
+            "input_token": "SOL",
+            "output_token": out.get("symbol"),
+            "output_mint": out.get("mint"),
+            "amount_sol": amount,
+            "limit_price_usd": limit_price,
+            "current_price_usd": current_price,
+            "trigger_condition": f"fills when {out.get('symbol')} price <= ${limit_price}",
+            "executions": 1,
+            "slippage_bps": args.get("slippage_bps", 100),
+            "platform_fee": fee,
+            "total_cost": easya_execution_total_cost(amount) if amount > 0 else None,
+            "fee_rate": 0.001,
+        }
+
+    if tool_name == "place_market_buy":
+        out = _resolve_trading_token(str(args.get("token") or ""))
+        amount = float(args.get("amount_sol") or 0)
+        fee = easya_platform_fee(amount) if amount > 0 else 0
+        return {
+            "action": tool_name,
+            "order_type": "market",
+            "input_token": "SOL",
+            "output_token": out.get("symbol"),
+            "output_mint": out.get("mint"),
+            "amount_sol": amount,
+            "trigger_condition": "executes immediately at market price",
+            "executions": 1,
+            "slippage_bps": args.get("slippage_bps", 100),
+            "platform_fee": fee,
+            "total_cost": easya_execution_total_cost(amount) if amount > 0 else None,
+            "fee_rate": 0.001,
+        }
+
+    if tool_name == "cancel_trading_order":
+        return {
+            "action": tool_name,
+            "order_id": args.get("order_id"),
+            "order_type": "cancel",
+        }
+
+    return {"action": tool_name, "args": args}
+
+
+def _summarize_pending_action(tool_name: str, args: dict) -> str:
+    if tool_name == "place_limit_buy":
+        out = _resolve_trading_token(str(args.get("token") or ""))
+        return (
+            f"Place **limit buy**: spend **{args.get('amount_sol')} SOL** "
+            f"→ {_token_with_mint(out.get('symbol'), out.get('mint'))} "
+            f"when price ≤ **${args.get('limit_price_usd')}** "
+            f"(**1 execution**, 0.1% platform fee)"
+        )
+
+    if tool_name == "place_market_buy":
+        out = _resolve_trading_token(str(args.get("token") or ""))
+        return (
+            f"Place **market buy**: spend **{args.get('amount_sol')} SOL** "
+            f"→ {_token_with_mint(out.get('symbol'), out.get('mint'))} "
+            f"immediately (**1 execution**, 0.1% platform fee)"
+        )
+
+    if tool_name == "cancel_trading_order":
+        return f"**Cancel** limit order `{args.get('order_id')}`"
+
+    return f"{tool_name}({args})"
+
+
+def _action_fingerprint(tool_name: str, args: dict) -> str:
+    payload = json.dumps({"tool": tool_name, "args": args}, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _merge_tool_args(stored: dict, current: dict) -> dict:
+    merged = dict(stored or {})
+    for key, value in (current or {}).items():
+        if key == "user_wallet":
+            continue
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if key not in merged or merged[key] is None:
+            merged[key] = value
+    return merged
+
+
+def _check_action_confirmation(
+    tool_name: str,
+    args: dict,
+    user_input: Optional[str],
+    user_wallet: Optional[str],
+    session_id: Optional[str],
+    skip_confirmation: bool = False,
+) -> tuple[Optional[str], dict]:
+    if skip_confirmation or tool_name not in CONFIRMATION_REQUIRED_TOOLS:
+        return None, args
+
+    key = _confirmation_key(user_wallet, session_id)
+    summary = _summarize_pending_action(tool_name, args)
+
+    if _user_declined(user_input):
+        with _CONFIRMATION_LOCK:
+            pending = _pending_confirmations.pop(key, None)
+        if pending:
+            return json.dumps(
+                {
+                    "status": "cancelled",
+                    "message": "Order cancelled. No changes were made.",
+                    "cancelled_action": pending.get("summary") or summary,
+                },
+                indent=2,
+            ), args
+
+    if _user_confirmed(user_input):
+        with _CONFIRMATION_LOCK:
+            pending = _pending_confirmations.pop(key, None)
+        if pending and pending.get("tool") == tool_name:
+            args = _merge_tool_args(pending.get("args") or {}, args)
+        return None, args
+
+    with _CONFIRMATION_LOCK:
+        _pending_confirmations[key] = {
+            "tool": tool_name,
+            "args": args,
+            "summary": summary,
+            "details": _pending_action_details(tool_name, args),
+        }
+
+    details = _pending_action_details(tool_name, args)
+    return json.dumps(
+        {
+            "status": "confirmation_required",
+            "message": (
+                f"Please confirm before I proceed: {summary}. "
+                "Reply **yes** or **confirm** to proceed, or **no** to cancel."
+            ),
+            "pending_action": summary,
+            "confirmation_details": details,
+            "tool": tool_name,
+        },
+        indent=2,
+    ), args
+
+
+def _try_execute_pending_confirmation(
+    user_wallet: Optional[str],
+    session_id: Optional[str],
+    user_input: Optional[str],
+) -> Optional[tuple[str, dict, str]]:
+    if not user_wallet or not _user_confirmed(user_input) or _user_declined(user_input):
+        return None
+
+    key = _confirmation_key(user_wallet, session_id)
+    with _CONFIRMATION_LOCK:
+        pending = _pending_confirmations.pop(key, None)
+    if not pending:
+        return None
+
+    tool_name = pending["tool"]
+    args = dict(pending.get("args") or {})
+    result = execute_tool(
+        tool_name,
+        args,
+        user_wallet=user_wallet,
+        user_input=user_input,
+        session_id=session_id,
+        skip_confirmation=True,
+    )
+    return tool_name, args, result
+
+
 def execute_tool(
     tool_name: str,
     tool_args: dict,
     user_wallet: Optional[str] = None,
+    user_input: Optional[str] = None,
+    session_id: Optional[str] = None,
+    skip_confirmation: bool = False,
 ) -> str:
     func = TOOL_MAP.get(tool_name)
     if not func:
@@ -1105,6 +1381,18 @@ def execute_tool(
             if not user_wallet:
                 return json.dumps({"error": "Wallet authentication required for watchlist actions."})
             args["user_wallet"] = user_wallet
+
+        blocked, args = _check_action_confirmation(
+            tool_name,
+            args,
+            user_input=user_input,
+            user_wallet=user_wallet,
+            session_id=session_id,
+            skip_confirmation=skip_confirmation,
+        )
+        if blocked:
+            return blocked
+
         return json.dumps(func(**args), indent=2)
     except TypeError as exc:
         return json.dumps({"error": str(exc), "received_args": tool_args})
@@ -1116,9 +1404,23 @@ def run_kickstart_agent(
     user_input: str,
     conversation_history: list,
     user_wallet: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> tuple[str, list, list[dict[str, Any]]]:
     actions: list[dict[str, Any]] = []
     prompt = user_input.strip()
+
+    pending = _try_execute_pending_confirmation(user_wallet, session_id, prompt)
+    if pending:
+        tool_name, args, result = pending
+        actions.append({"tool": tool_name, "args": args, "result": result})
+        try:
+            data = json.loads(result)
+            reply = data.get("message") or result
+        except json.JSONDecodeError:
+            reply = result
+        conversation_history.append({"role": "user", "content": prompt})
+        conversation_history.append({"role": "assistant", "content": reply})
+        return reply, conversation_history, actions
 
     shortcut = _try_health_shortcut(prompt) or _try_overview_shortcut(prompt)
     if shortcut:
@@ -1158,7 +1460,13 @@ def run_kickstart_agent(
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
             except json.JSONDecodeError:
                 args = {}
-            result = execute_tool(name, args, user_wallet=user_wallet)
+            result = execute_tool(
+                name,
+                args,
+                user_wallet=user_wallet,
+                user_input=prompt,
+                session_id=session_id,
+            )
             actions.append({"tool": name, "args": args, "result": result})
             messages.append({
                 "role": "tool",
