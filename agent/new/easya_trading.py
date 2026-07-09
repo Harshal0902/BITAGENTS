@@ -35,6 +35,7 @@ from easya_trading_ledger import (
 )
 
 EASYA_ORDER_POLL_SECONDS = int(os.environ.get("EASYA_ORDER_POLL_SECONDS", "30"))
+THRESHOLD_CHECK_INTERVAL_SECONDS = int(os.environ.get("EASYA_THRESHOLD_CHECK_SECONDS", "900"))
 _order_lock = threading.Lock()
 _order_scheduler_running = False
 
@@ -50,10 +51,15 @@ def _iso(value: Any) -> Optional[str]:
 def _order_row(row: dict[str, Any], *, current_price_usd: Optional[float] = None) -> dict[str, Any]:
     input_token = row["input_token"]
     output_token = row["output_token"]
+    order_type = row["order_type"]
+    executions = int(row.get("executions") or 0)
+    max_executions = row.get("max_executions")
+    recurring = bool(row.get("recurring")) or order_type == "threshold"
     return {
         "id": row["id"],
         "user_wallet": row["user_wallet"],
-        "order_type": row["order_type"],
+        "order_type": order_type,
+        "recurring": recurring,
         "input_token": input_token,
         "output_token": output_token,
         "pair": f"{input_token} → {output_token}",
@@ -63,6 +69,12 @@ def _order_row(row: dict[str, Any], *, current_price_usd: Optional[float] = None
         "limit_price_usd": float(row["limit_price_usd"]) if row.get("limit_price_usd") is not None else None,
         "slippage_bps": int(row.get("slippage_bps") or 100),
         "status": row["status"],
+        "executions": executions,
+        "max_executions": int(max_executions) if max_executions is not None else None,
+        "total_spent": float(row.get("total_spent") or 0),
+        "check_interval_seconds": int(row.get("check_interval_seconds") or THRESHOLD_CHECK_INTERVAL_SECONDS),
+        "last_checked_at": _iso(row.get("last_checked_at")),
+        "last_filled_at": _iso(row.get("last_filled_at")),
         "platform_fee": float(row["platform_fee"]) if row.get("platform_fee") is not None else None,
         "output_amount": float(row["output_amount"]) if row.get("output_amount") is not None else None,
         "signature": row.get("signature"),
@@ -100,6 +112,10 @@ def resolve_output_token(token: str) -> dict[str, Any]:
 
 def _insert_order(record: dict[str, Any]) -> dict[str, Any]:
     init_db()
+    record.setdefault("recurring", record.get("order_type") == "threshold")
+    record.setdefault("executions", 0)
+    record.setdefault("total_spent", 0.0)
+    record.setdefault("check_interval_seconds", THRESHOLD_CHECK_INTERVAL_SECONDS)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -107,11 +123,13 @@ def _insert_order(record: dict[str, Any]) -> dict[str, Any]:
                 INSERT INTO easya_orders (
                     id, user_wallet, order_type, input_token, output_token,
                     input_mint, output_mint, amount_input, limit_price_usd,
-                    slippage_bps, status, created_at
+                    slippage_bps, status, recurring, max_executions, executions,
+                    total_spent, check_interval_seconds, created_at
                 ) VALUES (
                     %(id)s, %(user_wallet)s, %(order_type)s, %(input_token)s, %(output_token)s,
                     %(input_mint)s, %(output_mint)s, %(amount_input)s, %(limit_price_usd)s,
-                    %(slippage_bps)s, %(status)s, NOW()
+                    %(slippage_bps)s, %(status)s, %(recurring)s, %(max_executions)s, %(executions)s,
+                    %(total_spent)s, %(check_interval_seconds)s, NOW()
                 )
                 RETURNING *
                 """,
@@ -119,6 +137,84 @@ def _insert_order(record: dict[str, Any]) -> dict[str, Any]:
             )
             row = cur.fetchone()
     return _order_row(row)
+
+
+def _record_order_execution(
+    order_id: str,
+    user_wallet: str,
+    *,
+    amount_input: float,
+    platform_fee: Optional[float],
+    output_amount: Optional[float],
+    price_usd: Optional[float],
+    signature: Optional[str],
+    status: str = "success",
+    error_message: Optional[str] = None,
+) -> None:
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO easya_order_executions (
+                    order_id, user_wallet, amount_input, platform_fee, output_amount,
+                    price_usd, signature, status, error_message, executed_at
+                ) VALUES (
+                    %(order_id)s, %(user_wallet)s, %(amount_input)s, %(platform_fee)s,
+                    %(output_amount)s, %(price_usd)s, %(signature)s, %(status)s,
+                    %(error_message)s, NOW()
+                )
+                """,
+                {
+                    "order_id": order_id,
+                    "user_wallet": user_wallet.strip(),
+                    "amount_input": amount_input,
+                    "platform_fee": platform_fee,
+                    "output_amount": output_amount,
+                    "price_usd": price_usd,
+                    "signature": signature,
+                    "status": status,
+                    "error_message": error_message,
+                },
+            )
+
+
+def list_easya_order_executions(
+    user_wallet: str,
+    order_id: Optional[str] = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    init_db()
+    user_wallet = user_wallet.strip()
+    limit = max(1, min(int(limit), 100))
+    query = "SELECT * FROM easya_order_executions WHERE user_wallet = %s"
+    params: list[Any] = [user_wallet]
+    if order_id:
+        query += " AND order_id = %s"
+        params.append(order_id.strip())
+    query += " ORDER BY executed_at DESC LIMIT %s"
+    params.append(limit)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+    executions = []
+    for row in rows:
+        executions.append(
+            {
+                "id": row["id"],
+                "order_id": row["order_id"],
+                "amount_input": float(row["amount_input"] or 0),
+                "platform_fee": float(row["platform_fee"]) if row.get("platform_fee") is not None else None,
+                "output_amount": float(row["output_amount"]) if row.get("output_amount") is not None else None,
+                "price_usd": float(row["price_usd"]) if row.get("price_usd") is not None else None,
+                "signature": row.get("signature"),
+                "status": row.get("status"),
+                "error_message": row.get("error_message"),
+                "executed_at": _iso(row.get("executed_at")),
+            }
+        )
+    return {"user_wallet": user_wallet, "count": len(executions), "executions": executions}
 
 
 def _update_order(order_id: str, **fields: Any) -> Optional[dict[str, Any]]:
@@ -168,7 +264,7 @@ def list_easya_orders(
     orders = []
     for row in rows:
         current_price = None
-        if row.get("order_type") == "limit" and row.get("status") in ("active", "pending"):
+        if row.get("order_type") in ("limit", "threshold") and row.get("status") in ("active", "pending"):
             current_price = _token_price_usd(row["output_token"])
         orders.append(_order_row(row, current_price_usd=current_price))
     return {
@@ -388,6 +484,8 @@ def place_limit_buy_order(
             "limit_price_usd": limit_price_usd,
             "slippage_bps": int(slippage_bps),
             "status": "active",
+            "recurring": False,
+            "max_executions": 1,
         }
     )
     current = _token_price_usd(out["symbol"])
@@ -395,8 +493,75 @@ def place_limit_buy_order(
         **order,
         "message": (
             f"Limit buy placed: spend {amount_sol} SOL for {out['symbol']} "
-            f"when price <= ${limit_price_usd}. Current price: "
+            f"when price <= ${limit_price_usd} (one-time, 1 execution). Current price: "
             f"${current if current is not None else 'n/a'}."
+        ),
+        "current_price_usd": current,
+        "platform_fee_rate": 0.001,
+    }
+
+
+def place_threshold_buy_order(
+    user_wallet: str,
+    output_token: str,
+    amount_sol: float,
+    limit_price_usd: float,
+    slippage_bps: int = 100,
+    max_executions: Optional[int] = None,
+) -> dict[str, Any]:
+    """Recurring threshold buy: spend amount_sol each time price <= limit until SOL runs out."""
+    user_wallet = user_wallet.strip()
+    limit_price_usd = float(limit_price_usd)
+    amount_sol = float(amount_sol)
+    if limit_price_usd <= 0:
+        return {"error": "limit_price_usd must be greater than zero."}
+    if amount_sol <= 0:
+        return {"error": "amount_sol must be greater than zero."}
+
+    if max_executions is not None:
+        max_executions = int(max_executions)
+        if max_executions < 1:
+            return {"error": "max_executions must be at least 1 when set."}
+
+    out = resolve_output_token(output_token)
+    if "error" in out:
+        return out
+    inp = resolve_token("SOL")
+    if "error" in inp:
+        return inp
+
+    check = check_easya_can_spend_order(user_wallet, "SOL", amount_sol)
+    if check.get("error"):
+        return check
+
+    order_id = uuid.uuid4().hex[:12]
+    order = _insert_order(
+        {
+            "id": order_id,
+            "user_wallet": user_wallet,
+            "order_type": "threshold",
+            "input_token": inp["symbol"],
+            "output_token": out["symbol"],
+            "input_mint": inp["mint"],
+            "output_mint": out["mint"],
+            "amount_input": amount_sol,
+            "limit_price_usd": limit_price_usd,
+            "slippage_bps": int(slippage_bps),
+            "status": "active",
+            "recurring": True,
+            "max_executions": max_executions,
+            "check_interval_seconds": THRESHOLD_CHECK_INTERVAL_SECONDS,
+        }
+    )
+    current = _token_price_usd(out["symbol"])
+    max_label = str(max_executions) if max_executions is not None else "until SOL runs out"
+    return {
+        **order,
+        "message": (
+            f"Threshold buy placed: spend {amount_sol} SOL for {out['symbol']} "
+            f"each time price <= ${limit_price_usd}. Checks every "
+            f"{THRESHOLD_CHECK_INTERVAL_SECONDS // 60} minutes. Max buys: {max_label}. "
+            f"Current price: ${current if current is not None else 'n/a'}."
         ),
         "current_price_usd": current,
         "platform_fee_rate": 0.001,
@@ -416,8 +581,8 @@ def update_easya_limit_order(
         return {"error": "Order not found."}
     if order["user_wallet"] != user_wallet.strip():
         return {"error": "This order belongs to another wallet."}
-    if order["order_type"] != "limit":
-        return {"error": "Only limit orders can be edited."}
+    if order["order_type"] not in ("limit", "threshold"):
+        return {"error": "Only limit and threshold orders can be edited."}
     if order["status"] != "active":
         return {"error": f"Order is {order['status']} and cannot be edited."}
 
@@ -488,6 +653,62 @@ def cancel_easya_order(user_wallet: str, order_id: str) -> dict[str, Any]:
     return {"status": "cancelled", "order": updated}
 
 
+def _apply_successful_fill(
+    order: dict[str, Any],
+    swap: dict[str, Any],
+    *,
+    price_usd: Optional[float],
+    complete_after_fill: bool,
+) -> None:
+    order_id = order["id"]
+    user_wallet = order["user_wallet"]
+    amount = float(order["amount_input"])
+    fee = float(swap.get("platform_fee") or easya_platform_fee(amount))
+    spent = round(float(order.get("total_spent") or 0) + amount, 12)
+    executions = int(order.get("executions") or 0) + 1
+    now = datetime.now(timezone.utc)
+
+    _record_order_execution(
+        order_id,
+        user_wallet,
+        amount_input=amount,
+        platform_fee=fee,
+        output_amount=float(swap.get("output_amount") or 0) if swap.get("output_amount") is not None else None,
+        price_usd=price_usd,
+        signature=swap.get("signature"),
+        status="success",
+    )
+
+    updates: dict[str, Any] = {
+        "executions": executions,
+        "total_spent": spent,
+        "platform_fee": fee,
+        "output_amount": swap.get("output_amount"),
+        "signature": swap.get("signature"),
+        "last_filled_at": now,
+        "error_message": None,
+    }
+
+    max_exec = order.get("max_executions")
+    if complete_after_fill:
+        updates["status"] = "filled"
+        updates["filled_at"] = now
+    elif max_exec is not None and executions >= int(max_exec):
+        updates["status"] = "completed"
+        updates["filled_at"] = now
+        updates["error_message"] = f"Reached max executions ({max_exec})."
+    else:
+        check = check_easya_can_spend_order(user_wallet, order["input_token"], amount)
+        if check.get("error"):
+            updates["status"] = "completed"
+            updates["filled_at"] = now
+            updates["error_message"] = "Insufficient SOL remaining for another buy."
+        else:
+            updates["status"] = "active"
+
+    _update_order(order_id, **updates)
+
+
 def _try_fill_limit_order(order: dict[str, Any]) -> None:
     if order.get("status") != "active" or order.get("order_type") != "limit":
         return
@@ -515,15 +736,99 @@ def _try_fill_limit_order(order: dict[str, Any]) -> None:
     )
 
     if swap.get("status") == "success":
+        _apply_successful_fill(fresh, swap, price_usd=current, complete_after_fill=True)
+    else:
+        _record_order_execution(
+            fresh["id"],
+            user_wallet,
+            amount_input=float(fresh["amount_input"]),
+            platform_fee=None,
+            output_amount=None,
+            price_usd=current,
+            signature=swap.get("signature"),
+            status="failed",
+            error_message=str(swap.get("error") or "Fill attempt failed"),
+        )
         _update_order(
             fresh["id"],
-            status="filled",
-            platform_fee=swap.get("platform_fee"),
-            output_amount=swap.get("output_amount"),
-            signature=swap.get("signature"),
-            filled_at=datetime.now(timezone.utc),
+            status="active",
+            error_message=str(swap.get("error") or "Fill attempt failed"),
         )
+
+
+def _threshold_due_for_check(order: dict[str, Any]) -> bool:
+    last_checked = order.get("last_checked_at")
+    interval = int(order.get("check_interval_seconds") or THRESHOLD_CHECK_INTERVAL_SECONDS)
+    if not last_checked:
+        return True
+    if isinstance(last_checked, str):
+        try:
+            last_checked = datetime.fromisoformat(last_checked.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+    if last_checked.tzinfo is None:
+        last_checked = last_checked.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - last_checked).total_seconds()
+    return elapsed >= interval
+
+
+def _try_fill_threshold_order(order: dict[str, Any]) -> None:
+    if order.get("status") != "active" or order.get("order_type") != "threshold":
+        return
+    if not _threshold_due_for_check(order):
+        return
+
+    limit_price = order.get("limit_price_usd")
+    if limit_price is None:
+        return
+
+    current = _token_price_usd(order["output_token"])
+    now = datetime.now(timezone.utc)
+    _update_order(order["id"], last_checked_at=now)
+
+    if current is None or current > float(limit_price):
+        return
+
+    user_wallet = order["user_wallet"]
+    amount = float(order["amount_input"])
+    can_spend = check_easya_can_spend_order(user_wallet, order["input_token"], amount)
+    if can_spend.get("error"):
+        _update_order(
+            order["id"],
+            status="completed",
+            filled_at=now,
+            error_message=str(can_spend["error"]),
+        )
+        return
+
+    with _order_lock:
+        fresh = get_easya_order(order["id"])
+        if not fresh or fresh["status"] != "active":
+            return
+        _update_order(fresh["id"], status="pending")
+
+    swap = execute_easya_swap_buy(
+        user_wallet,
+        fresh["output_token"],
+        amount,
+        slippage_bps=int(fresh.get("slippage_bps") or 100),
+        order_id=fresh["id"],
+    )
+
+    if swap.get("status") == "success":
+        _apply_successful_fill(fresh, swap, price_usd=current, complete_after_fill=False)
     else:
+        _record_order_execution(
+            fresh["id"],
+            user_wallet,
+            amount_input=amount,
+            platform_fee=None,
+            output_amount=None,
+            price_usd=current,
+            signature=swap.get("signature"),
+            status="failed",
+            error_message=str(swap.get("error") or "Fill attempt failed"),
+        )
         _update_order(
             fresh["id"],
             status="active",
@@ -541,14 +846,18 @@ def _order_scheduler_loop() -> None:
                     cur.execute(
                         """
                         SELECT * FROM easya_orders
-                        WHERE status = 'active' AND order_type = 'limit'
+                        WHERE status = 'active' AND order_type IN ('limit', 'threshold')
                         ORDER BY created_at ASC
                         LIMIT 25
                         """
                     )
                     rows = cur.fetchall()
             for row in rows:
-                _try_fill_limit_order(_order_row(row))
+                parsed = _order_row(row)
+                if parsed.get("order_type") == "threshold":
+                    _try_fill_threshold_order(parsed)
+                else:
+                    _try_fill_limit_order(parsed)
         except Exception as exc:
             print(f"  ΓÜá∩╕Å  EasyA order scheduler error: {exc}")
         time.sleep(max(5, EASYA_ORDER_POLL_SECONDS))

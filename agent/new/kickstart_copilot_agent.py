@@ -727,6 +727,26 @@ def place_limit_buy(
     )
 
 
+def place_threshold_buy(
+    user_wallet: str,
+    token: str,
+    amount_sol: float,
+    limit_price_usd: float,
+    slippage_bps: int = 100,
+    max_executions: Optional[int] = None,
+) -> dict[str, Any]:
+    from easya_trading import place_threshold_buy_order
+
+    return place_threshold_buy_order(
+        user_wallet,
+        token,
+        float(amount_sol),
+        float(limit_price_usd),
+        int(slippage_bps),
+        max_executions,
+    )
+
+
 def list_trading_orders(user_wallet: str, active_only: bool = False) -> dict[str, Any]:
     from easya_trading import list_easya_orders
 
@@ -759,7 +779,8 @@ TOOLS = [
     {"type": "function", "function": {"name": "get_easya_trading_wallet", "description": "Deposit address and SOL balance for Jupiter trading (0.1% fee per fill).", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}}, "required": []}}},
     {"type": "function", "function": {"name": "get_easya_trading_balance", "description": "User SOL balance deposited for EasyA trading.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}}, "required": []}}},
     {"type": "function", "function": {"name": "place_market_buy", "description": "Market buy token with deposited SOL via Jupiter (one-time, 0.1% fee). REQUIRES explicit user confirmation in their latest message before calling.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "token": {"type": "string"}, "amount_sol": {"type": "number"}, "slippage_bps": {"type": "integer"}}, "required": ["token", "amount_sol"]}}},
-    {"type": "function", "function": {"name": "place_limit_buy", "description": "Limit buy: spend amount_sol when price_usd <= limit_price_usd (one-time, 1 execution). REQUIRES explicit user confirmation before calling.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "token": {"type": "string"}, "amount_sol": {"type": "number"}, "limit_price_usd": {"type": "number"}, "slippage_bps": {"type": "integer"}}, "required": ["token", "amount_sol", "limit_price_usd"]}}},
+    {"type": "function", "function": {"name": "place_limit_buy", "description": "One-time limit buy: spend amount_sol when price_usd <= limit_price_usd (1 execution). REQUIRES explicit user confirmation before calling.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "token": {"type": "string"}, "amount_sol": {"type": "number"}, "limit_price_usd": {"type": "number"}, "slippage_bps": {"type": "integer"}}, "required": ["token", "amount_sol", "limit_price_usd"]}}},
+    {"type": "function", "function": {"name": "place_threshold_buy", "description": "Recurring threshold buy: spend amount_sol each time price <= limit_price_usd. Checks price every 15 minutes. Continues until SOL runs out or max_executions reached. REQUIRES explicit user confirmation before calling.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "token": {"type": "string"}, "amount_sol": {"type": "number"}, "limit_price_usd": {"type": "number"}, "slippage_bps": {"type": "integer"}, "max_executions": {"type": "integer"}}, "required": ["token", "amount_sol", "limit_price_usd"]}}},
     {"type": "function", "function": {"name": "list_trading_orders", "description": "List user's market/limit buy orders.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "active_only": {"type": "boolean"}}, "required": []}}},
     {"type": "function", "function": {"name": "cancel_trading_order", "description": "Cancel a pending/active limit order. REQUIRES explicit user confirmation before calling.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "order_id": {"type": "string"}}, "required": ["order_id"]}}},
 ]
@@ -785,6 +806,7 @@ TOOL_MAP = {
     "get_easya_trading_balance": get_easya_trading_balance,
     "place_market_buy": place_market_buy,
     "place_limit_buy": place_limit_buy,
+    "place_threshold_buy": place_threshold_buy,
     "list_trading_orders": list_trading_orders,
     "cancel_trading_order": cancel_trading_order,
 }
@@ -798,6 +820,7 @@ WALLET_SCOPED = {
     "get_easya_trading_balance",
     "place_market_buy",
     "place_limit_buy",
+    "place_threshold_buy",
     "list_trading_orders",
     "cancel_trading_order",
 }
@@ -818,9 +841,10 @@ SYSTEM_PROMPT = """You are **EasyA Analysis Agent** on Solana - free token resea
 ## Trading (Jupiter)
 - Users must deposit SOL first (`get_easya_trading_wallet` shows the address).
 - **Market buy:** `place_market_buy(token, amount_sol)` — executes immediately (one-time).
-- **Limit buy:** `place_limit_buy(token, amount_sol, limit_price_usd)` — fills when EASY Screener price <= limit (one-time, **1 execution**).
-- One-time orders only (not recurring DCA). Use `list_trading_orders` / `cancel_trading_order` for limit orders.
-- **Confirmation required:** before `place_market_buy`, `place_limit_buy`, or `cancel_trading_order`, summarize the order (from/to tokens, SOL amount, limit price, trigger condition, **1 buy execution**, 0.1% fee) and ask the user to confirm. Only call the tool after they reply yes/confirm in their **next message**.
+- **Limit buy (one-time):** `place_limit_buy(token, amount_sol, limit_price_usd)` — fills once when EASY Screener price <= limit (**1 execution**).
+- **Threshold buy (recurring):** `place_threshold_buy(token, amount_sol, limit_price_usd)` — buys `amount_sol` each time price <= limit; checks every **15 minutes**; continues until SOL runs out (or optional `max_executions`).
+- Use `list_trading_orders` / `cancel_trading_order` for active orders. Orders show execution counts like DCA plans.
+- **Confirmation required:** before `place_market_buy`, `place_limit_buy`, `place_threshold_buy`, or `cancel_trading_order`, summarize the order (from/to tokens, SOL per buy, limit/trigger, executions, check interval, 0.1% fee) and ask the user to confirm.
 - Always confirm deposit balance before placing orders. Never invent tx signatures.
 
 ## Order confirmation flow
@@ -1103,6 +1127,7 @@ def call_openrouter(messages: list) -> dict[str, Any]:
 CONFIRMATION_REQUIRED_TOOLS = frozenset({
     "place_market_buy",
     "place_limit_buy",
+    "place_threshold_buy",
     "cancel_trading_order",
 })
 
@@ -1199,11 +1224,49 @@ def _pending_action_details(tool_name: str, args: dict) -> dict[str, Any]:
             "amount_sol": amount,
             "limit_price_usd": limit_price,
             "current_price_usd": current_price,
-            "trigger_condition": f"fills when {out.get('symbol')} price <= ${limit_price}",
+            "trigger_condition": f"fills once when {out.get('symbol')} price <= ${limit_price}",
             "executions": 1,
+            "max_executions": 1,
+            "check_interval_minutes": None,
             "slippage_bps": args.get("slippage_bps", 100),
             "platform_fee": fee,
             "total_cost": easya_execution_total_cost(amount) if amount > 0 else None,
+            "fee_rate": 0.001,
+        }
+
+    if tool_name == "place_threshold_buy":
+        out = _resolve_trading_token(str(args.get("token") or ""))
+        amount = float(args.get("amount_sol") or 0)
+        limit_price = float(args.get("limit_price_usd") or 0)
+        max_exec = args.get("max_executions")
+        current_price = None
+        try:
+            from easya_trading import THRESHOLD_CHECK_INTERVAL_SECONDS, _token_price_usd
+
+            current_price = _token_price_usd(out.get("symbol") or "")
+            check_mins = THRESHOLD_CHECK_INTERVAL_SECONDS // 60
+        except Exception:
+            check_mins = 15
+        fee = easya_platform_fee(amount) if amount > 0 else 0
+        return {
+            "action": tool_name,
+            "order_type": "threshold",
+            "input_token": "SOL",
+            "output_token": out.get("symbol"),
+            "output_mint": out.get("mint"),
+            "amount_sol": amount,
+            "limit_price_usd": limit_price,
+            "current_price_usd": current_price,
+            "trigger_condition": (
+                f"buys {amount} SOL each time {out.get('symbol')} price <= ${limit_price}"
+            ),
+            "executions": None,
+            "max_executions": int(max_exec) if max_exec is not None else None,
+            "until_balance_depleted": max_exec is None,
+            "check_interval_minutes": check_mins,
+            "slippage_bps": args.get("slippage_bps", 100),
+            "platform_fee": fee,
+            "total_cost_per_buy": easya_execution_total_cost(amount) if amount > 0 else None,
             "fee_rate": 0.001,
         }
 
@@ -1240,10 +1303,24 @@ def _summarize_pending_action(tool_name: str, args: dict) -> str:
     if tool_name == "place_limit_buy":
         out = _resolve_trading_token(str(args.get("token") or ""))
         return (
-            f"Place **limit buy**: spend **{args.get('amount_sol')} SOL** "
+            f"Place **one-time limit buy**: spend **{args.get('amount_sol')} SOL** "
             f"→ {_token_with_mint(out.get('symbol'), out.get('mint'))} "
             f"when price ≤ **${args.get('limit_price_usd')}** "
             f"(**1 execution**, 0.1% platform fee)"
+        )
+
+    if tool_name == "place_threshold_buy":
+        out = _resolve_trading_token(str(args.get("token") or ""))
+        max_label = (
+            f"max **{args.get('max_executions')}** buys"
+            if args.get("max_executions") is not None
+            else "until **SOL runs out**"
+        )
+        return (
+            f"Place **threshold buy**: spend **{args.get('amount_sol')} SOL** "
+            f"→ {_token_with_mint(out.get('symbol'), out.get('mint'))} "
+            f"each time price ≤ **${args.get('limit_price_usd')}** "
+            f"(checks every **15 min**, {max_label}, 0.1% fee per buy)"
         )
 
     if tool_name == "place_market_buy":

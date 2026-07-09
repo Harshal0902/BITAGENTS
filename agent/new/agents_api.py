@@ -71,6 +71,7 @@ from easya_trading import (
     list_easya_orders,
     place_limit_buy_order,
     place_market_buy_order,
+    place_threshold_buy_order,
     start_easya_order_scheduler,
     update_easya_limit_order,
 )
@@ -606,6 +607,14 @@ class EasyaLimitOrderRequest(BaseModel):
     slippage_bps: int = Field(default=100, ge=1, le=5000)
 
 
+class EasyaThresholdOrderRequest(BaseModel):
+    token: str = Field(min_length=1)
+    amount_sol: float = Field(gt=0)
+    limit_price_usd: float = Field(gt=0)
+    slippage_bps: int = Field(default=100, ge=1, le=5000)
+    max_executions: Optional[int] = Field(default=None, ge=1)
+
+
 class EasyaUpdateLimitOrderRequest(BaseModel):
     amount_sol: Optional[float] = Field(default=None, gt=0)
     limit_price_usd: Optional[float] = Field(default=None, gt=0)
@@ -681,6 +690,24 @@ def kickstart_limit_order(
         body.amount_sol,
         body.limit_price_usd,
         body.slippage_bps,
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/kickstart/orders/threshold")
+def kickstart_threshold_order(
+    body: EasyaThresholdOrderRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = place_threshold_buy_order(
+        auth_wallet,
+        body.token.strip(),
+        body.amount_sol,
+        body.limit_price_usd,
+        body.slippage_bps,
+        body.max_executions,
     )
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])

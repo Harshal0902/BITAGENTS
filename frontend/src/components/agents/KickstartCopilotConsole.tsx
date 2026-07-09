@@ -28,6 +28,7 @@ function TradingConfirmDetailsView({ details }: { details?: ConfirmationDetails 
 
   if (
     details.action === "place_limit_buy" ||
+    details.action === "place_threshold_buy" ||
     details.action === "place_market_buy" ||
     details.action === "cancel_trading_order"
   ) {
@@ -84,7 +85,25 @@ function TradingConfirmDetailsView({ details }: { details?: ConfirmationDetails 
           {details.executions != null && (
             <>
               <dt className="text-muted-foreground">Executions</dt>
-              <dd>{details.executions} (one-time buy)</dd>
+              <dd>
+                {details.action === "place_threshold_buy"
+                  ? details.max_executions != null
+                    ? `Up to ${details.max_executions} buys`
+                    : "Until SOL runs out"
+                  : `${details.executions} (one-time buy)`}
+              </dd>
+            </>
+          )}
+          {details.check_interval_minutes != null && (
+            <>
+              <dt className="text-muted-foreground">Price check</dt>
+              <dd>Every {details.check_interval_minutes} minutes</dd>
+            </>
+          )}
+          {details.max_executions != null && details.action === "place_threshold_buy" && (
+            <>
+              <dt className="text-muted-foreground">Max buys</dt>
+              <dd>{details.max_executions}</dd>
             </>
           )}
           {details.slippage_bps != null && (
@@ -105,6 +124,12 @@ function TradingConfirmDetailsView({ details }: { details?: ConfirmationDetails 
             <>
               <dt className="text-muted-foreground">Total cost</dt>
               <dd>{details.total_cost} SOL (swap + fee)</dd>
+            </>
+          )}
+          {details.total_cost_per_buy != null && (
+            <>
+              <dt className="text-muted-foreground">Cost per buy</dt>
+              <dd>{details.total_cost_per_buy} SOL (swap + fee)</dd>
             </>
           )}
           {details.order_id && (

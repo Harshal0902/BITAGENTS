@@ -2,7 +2,8 @@ import { explorerUrlForSignature } from "@/lib/dcaActionResults";
 
 export type EasyaOrderSummary = {
   id: string;
-  order_type: "limit" | "market" | string;
+  order_type: "limit" | "threshold" | "market" | string;
+  recurring?: boolean;
   pair: string;
   input_token: string;
   output_token: string;
@@ -12,6 +13,12 @@ export type EasyaOrderSummary = {
   limit_price_usd?: number | null;
   slippage_bps?: number;
   status: string;
+  executions?: number;
+  max_executions?: number | null;
+  total_spent?: number;
+  check_interval_seconds?: number;
+  last_checked_at?: string | null;
+  last_filled_at?: string | null;
   platform_fee?: number | null;
   output_amount?: number | null;
   signature?: string | null;
