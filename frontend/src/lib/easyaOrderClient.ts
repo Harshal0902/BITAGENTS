@@ -11,6 +11,10 @@ export type EasyaOrderSummary = {
   output_mint?: string;
   amount_input: number;
   limit_price_usd?: number | null;
+  limit_market_cap_usd?: number | null;
+  stop_price_usd?: number | null;
+  stop_market_cap_usd?: number | null;
+  condition_mode?: string | null;
   slippage_bps?: number;
   status: string;
   executions?: number;
@@ -27,6 +31,9 @@ export type EasyaOrderSummary = {
   filled_at?: string | null;
   cancelled_at?: string | null;
   current_price_usd?: number | null;
+  current_market_cap_usd?: number | null;
+  trigger_summary?: string | null;
+  stop_summary?: string | null;
 };
 
 export type EasyaOrdersResponse = {
@@ -83,7 +90,14 @@ export async function cancelEasyaOrder(
 
 export async function updateEasyaLimitOrder(
   orderId: string,
-  body: { amount_sol?: number; limit_price_usd?: number; slippage_bps?: number },
+  body: {
+    amount_sol?: number;
+    limit_price_usd?: number | null;
+    limit_market_cap_usd?: number | null;
+    stop_price_usd?: number | null;
+    stop_market_cap_usd?: number | null;
+    slippage_bps?: number;
+  },
   authToken: string
 ): Promise<{ error?: string; status?: string; order?: EasyaOrderSummary }> {
   const res = await fetch(`/api/agents/kickstart-copilot/orders/${encodeURIComponent(orderId)}`, {

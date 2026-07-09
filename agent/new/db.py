@@ -196,6 +196,10 @@ SCHEMA_STATEMENTS = [
         output_mint     VARCHAR(64) NOT NULL,
         amount_input    DOUBLE PRECISION NOT NULL,
         limit_price_usd DOUBLE PRECISION,
+        limit_market_cap_usd DOUBLE PRECISION,
+        stop_price_usd DOUBLE PRECISION,
+        stop_market_cap_usd DOUBLE PRECISION,
+        condition_mode    VARCHAR(16) NOT NULL DEFAULT 'price',
         slippage_bps    INTEGER NOT NULL DEFAULT 100,
         status          VARCHAR(20) NOT NULL DEFAULT 'pending',
         platform_fee    DOUBLE PRECISION,
@@ -250,6 +254,10 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE easya_orders ADD COLUMN IF NOT EXISTS check_interval_seconds INTEGER NOT NULL DEFAULT 900",
     "ALTER TABLE easya_orders ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ",
     "ALTER TABLE easya_orders ADD COLUMN IF NOT EXISTS last_filled_at TIMESTAMPTZ",
+    "ALTER TABLE easya_orders ADD COLUMN IF NOT EXISTS limit_market_cap_usd DOUBLE PRECISION",
+    "ALTER TABLE easya_orders ADD COLUMN IF NOT EXISTS stop_price_usd DOUBLE PRECISION",
+    "ALTER TABLE easya_orders ADD COLUMN IF NOT EXISTS stop_market_cap_usd DOUBLE PRECISION",
+    "ALTER TABLE easya_orders ADD COLUMN IF NOT EXISTS condition_mode VARCHAR(16) NOT NULL DEFAULT 'price'",
     """
     CREATE TABLE IF NOT EXISTS easya_order_executions (
         id              BIGSERIAL PRIMARY KEY,

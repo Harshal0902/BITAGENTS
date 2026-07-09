@@ -713,7 +713,9 @@ def place_limit_buy(
     user_wallet: str,
     token: str,
     amount_sol: float,
-    limit_price_usd: float,
+    limit_price_usd: Optional[float] = None,
+    limit_market_cap_usd: Optional[float] = None,
+    condition_mode: Optional[str] = None,
     slippage_bps: int = 100,
 ) -> dict[str, Any]:
     from easya_trading import place_limit_buy_order
@@ -722,8 +724,10 @@ def place_limit_buy(
         user_wallet,
         token,
         float(amount_sol),
-        float(limit_price_usd),
-        int(slippage_bps),
+        limit_price_usd=limit_price_usd,
+        limit_market_cap_usd=limit_market_cap_usd,
+        condition_mode=condition_mode,
+        slippage_bps=int(slippage_bps),
     )
 
 
@@ -731,9 +735,14 @@ def place_threshold_buy(
     user_wallet: str,
     token: str,
     amount_sol: float,
-    limit_price_usd: float,
+    limit_price_usd: Optional[float] = None,
+    limit_market_cap_usd: Optional[float] = None,
+    stop_price_usd: Optional[float] = None,
+    stop_market_cap_usd: Optional[float] = None,
+    condition_mode: Optional[str] = None,
     slippage_bps: int = 100,
     max_executions: Optional[int] = None,
+    check_interval_seconds: Optional[int] = None,
 ) -> dict[str, Any]:
     from easya_trading import place_threshold_buy_order
 
@@ -741,9 +750,14 @@ def place_threshold_buy(
         user_wallet,
         token,
         float(amount_sol),
-        float(limit_price_usd),
-        int(slippage_bps),
-        max_executions,
+        limit_price_usd=limit_price_usd,
+        limit_market_cap_usd=limit_market_cap_usd,
+        stop_price_usd=stop_price_usd,
+        stop_market_cap_usd=stop_market_cap_usd,
+        condition_mode=condition_mode,
+        slippage_bps=int(slippage_bps),
+        max_executions=max_executions,
+        check_interval_seconds=check_interval_seconds,
     )
 
 
@@ -779,8 +793,8 @@ TOOLS = [
     {"type": "function", "function": {"name": "get_easya_trading_wallet", "description": "Deposit address and SOL balance for Jupiter trading (0.1% fee per fill).", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}}, "required": []}}},
     {"type": "function", "function": {"name": "get_easya_trading_balance", "description": "User SOL balance deposited for EasyA trading.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}}, "required": []}}},
     {"type": "function", "function": {"name": "place_market_buy", "description": "Market buy token with deposited SOL via Jupiter (one-time, 0.1% fee). REQUIRES explicit user confirmation in their latest message before calling.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "token": {"type": "string"}, "amount_sol": {"type": "number"}, "slippage_bps": {"type": "integer"}}, "required": ["token", "amount_sol"]}}},
-    {"type": "function", "function": {"name": "place_limit_buy", "description": "One-time limit buy: spend amount_sol when price_usd <= limit_price_usd (1 execution). REQUIRES explicit user confirmation before calling.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "token": {"type": "string"}, "amount_sol": {"type": "number"}, "limit_price_usd": {"type": "number"}, "slippage_bps": {"type": "integer"}}, "required": ["token", "amount_sol", "limit_price_usd"]}}},
-    {"type": "function", "function": {"name": "place_threshold_buy", "description": "Recurring threshold buy: spend amount_sol each time price <= limit_price_usd. Checks price every 15 minutes. Continues until SOL runs out or max_executions reached. REQUIRES explicit user confirmation before calling.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "token": {"type": "string"}, "amount_sol": {"type": "number"}, "limit_price_usd": {"type": "number"}, "slippage_bps": {"type": "integer"}, "max_executions": {"type": "integer"}}, "required": ["token", "amount_sol", "limit_price_usd"]}}},
+    {"type": "function", "function": {"name": "place_limit_buy", "description": "One-time buy when custom conditions met. Use limit_price_usd for TOKEN PRICE (e.g. $0.02), limit_market_cap_usd for MARKET CAP (e.g. 46000). Set one or both (condition_mode: price|market_cap|both). REQUIRES confirmation.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "token": {"type": "string"}, "amount_sol": {"type": "number"}, "limit_price_usd": {"type": "number"}, "limit_market_cap_usd": {"type": "number"}, "condition_mode": {"type": "string"}, "slippage_bps": {"type": "integer"}}, "required": ["token", "amount_sol"]}}},
+    {"type": "function", "function": {"name": "place_threshold_buy", "description": "Recurring threshold buy. Use limit_market_cap_usd for market cap triggers (NOT limit_price_usd). Optional stop_market_cap_usd/stop_price_usd to end when metric rises above threshold. check_interval_seconds min 60 (use 60 for every minute). Continues until SOL runs out. REQUIRES confirmation.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "token": {"type": "string"}, "amount_sol": {"type": "number"}, "limit_price_usd": {"type": "number"}, "limit_market_cap_usd": {"type": "number"}, "stop_price_usd": {"type": "number"}, "stop_market_cap_usd": {"type": "number"}, "condition_mode": {"type": "string"}, "slippage_bps": {"type": "integer"}, "max_executions": {"type": "integer"}, "check_interval_seconds": {"type": "integer"}}, "required": ["token", "amount_sol"]}}},
     {"type": "function", "function": {"name": "list_trading_orders", "description": "List user's market/limit buy orders.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "active_only": {"type": "boolean"}}, "required": []}}},
     {"type": "function", "function": {"name": "cancel_trading_order", "description": "Cancel a pending/active limit order. REQUIRES explicit user confirmation before calling.", "parameters": {"type": "object", "properties": {"user_wallet": {"type": "string"}, "order_id": {"type": "string"}}, "required": ["order_id"]}}},
 ]
@@ -841,8 +855,11 @@ SYSTEM_PROMPT = """You are **EasyA Analysis Agent** on Solana - free token resea
 ## Trading (Jupiter)
 - Users must deposit SOL first (`get_easya_trading_wallet` shows the address).
 - **Market buy:** `place_market_buy(token, amount_sol)` — executes immediately (one-time).
-- **Limit buy (one-time):** `place_limit_buy(token, amount_sol, limit_price_usd)` — fills once when EASY Screener price <= limit (**1 execution**).
-- **Threshold buy (recurring):** `place_threshold_buy(token, amount_sol, limit_price_usd)` — buys `amount_sol` each time price <= limit; checks every **15 minutes**; continues until SOL runs out (or optional `max_executions`).
+- **Limit buy (one-time):** `place_limit_buy(token, amount_sol, limit_price_usd?, limit_market_cap_usd?)` — fills once when conditions met.
+- **Threshold buy (recurring):** `place_threshold_buy(...)` — repeats while conditions hold. Use **limit_market_cap_usd** for market cap (e.g. 46000), **limit_price_usd** for token price (e.g. 0.02). Never put market cap in limit_price_usd.
+- **Stop conditions:** `stop_market_cap_usd` / `stop_price_usd` end the order when metric rises above that level (e.g. stop_market_cap_usd=46000 when user says stop if mcap goes above 46000).
+- **Check interval:** `check_interval_seconds` (min 60). Use 60 when user says every minute; default 900 (15 min).
+- **Both conditions:** set limit_price_usd AND limit_market_cap_usd with condition_mode `both` (buy only when price AND market cap triggers pass).
 - Use `list_trading_orders` / `cancel_trading_order` for active orders. Orders show execution counts like DCA plans.
 - **Confirmation required:** before `place_market_buy`, `place_limit_buy`, `place_threshold_buy`, or `cancel_trading_order`, summarize the order (from/to tokens, SOL per buy, limit/trigger, executions, check interval, 0.1% fee) and ask the user to confirm.
 - Always confirm deposit balance before placing orders. Never invent tx signatures.
@@ -1200,20 +1217,76 @@ def _token_with_mint(symbol: Optional[str], mint: Optional[str]) -> str:
     return "**?**"
 
 
+def _float_arg(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_check_interval(seconds: int) -> str:
+    if seconds < 60:
+        return f"every **{seconds}s**"
+    if seconds % 60 == 0:
+        mins = seconds // 60
+        return f"every **{mins} min**" if mins > 1 else "every **1 min**"
+    return f"every **{seconds}s**"
+
+
+def _build_trigger_preview(out: dict[str, Any], args: dict) -> dict[str, Any]:
+    from easya_trading import (
+        MIN_CHECK_INTERVAL_SECONDS,
+        THRESHOLD_CHECK_INTERVAL_SECONDS,
+        _format_stop_summary,
+        _format_trigger_summary,
+        _infer_condition_mode,
+        _token_metrics,
+    )
+
+    limit_price = _float_arg(args.get("limit_price_usd"))
+    limit_mcap = _float_arg(args.get("limit_market_cap_usd"))
+    stop_price = _float_arg(args.get("stop_price_usd"))
+    stop_mcap = _float_arg(args.get("stop_market_cap_usd"))
+    mode = _infer_condition_mode(
+        limit_price_usd=limit_price,
+        limit_market_cap_usd=limit_mcap,
+        condition_mode=args.get("condition_mode"),
+    )
+    metrics = _token_metrics(out.get("symbol") or "")
+    interval = int(args.get("check_interval_seconds") or THRESHOLD_CHECK_INTERVAL_SECONDS)
+    interval = max(MIN_CHECK_INTERVAL_SECONDS, interval)
+    preview = {
+        "output_token": out.get("symbol"),
+        "limit_price_usd": limit_price,
+        "limit_market_cap_usd": limit_mcap,
+        "stop_price_usd": stop_price,
+        "stop_market_cap_usd": stop_mcap,
+        "condition_mode": mode,
+    }
+    return {
+        "limit_price_usd": limit_price,
+        "limit_market_cap_usd": limit_mcap,
+        "stop_price_usd": stop_price,
+        "stop_market_cap_usd": stop_mcap,
+        "condition_mode": mode,
+        "current_price_usd": metrics.get("price_usd"),
+        "current_market_cap_usd": metrics.get("market_cap_usd"),
+        "trigger_condition": _format_trigger_summary(preview),
+        "stop_condition": _format_stop_summary(preview),
+        "check_interval_seconds": interval,
+        "check_interval_minutes": interval / 60,
+    }
+
+
 def _pending_action_details(tool_name: str, args: dict) -> dict[str, Any]:
     from easya_trading_ledger import easya_execution_total_cost, easya_platform_fee
 
     if tool_name == "place_limit_buy":
         out = _resolve_trading_token(str(args.get("token") or ""))
         amount = float(args.get("amount_sol") or 0)
-        limit_price = float(args.get("limit_price_usd") or 0)
-        current_price = None
-        try:
-            from easya_trading import _token_price_usd
-
-            current_price = _token_price_usd(out.get("symbol") or "")
-        except Exception:
-            pass
+        preview = _build_trigger_preview(out, args)
         fee = easya_platform_fee(amount) if amount > 0 else 0
         return {
             "action": tool_name,
@@ -1222,12 +1295,9 @@ def _pending_action_details(tool_name: str, args: dict) -> dict[str, Any]:
             "output_token": out.get("symbol"),
             "output_mint": out.get("mint"),
             "amount_sol": amount,
-            "limit_price_usd": limit_price,
-            "current_price_usd": current_price,
-            "trigger_condition": f"fills once when {out.get('symbol')} price <= ${limit_price}",
+            **preview,
             "executions": 1,
             "max_executions": 1,
-            "check_interval_minutes": None,
             "slippage_bps": args.get("slippage_bps", 100),
             "platform_fee": fee,
             "total_cost": easya_execution_total_cost(amount) if amount > 0 else None,
@@ -1237,16 +1307,8 @@ def _pending_action_details(tool_name: str, args: dict) -> dict[str, Any]:
     if tool_name == "place_threshold_buy":
         out = _resolve_trading_token(str(args.get("token") or ""))
         amount = float(args.get("amount_sol") or 0)
-        limit_price = float(args.get("limit_price_usd") or 0)
         max_exec = args.get("max_executions")
-        current_price = None
-        try:
-            from easya_trading import THRESHOLD_CHECK_INTERVAL_SECONDS, _token_price_usd
-
-            current_price = _token_price_usd(out.get("symbol") or "")
-            check_mins = THRESHOLD_CHECK_INTERVAL_SECONDS // 60
-        except Exception:
-            check_mins = 15
+        preview = _build_trigger_preview(out, args)
         fee = easya_platform_fee(amount) if amount > 0 else 0
         return {
             "action": tool_name,
@@ -1255,15 +1317,10 @@ def _pending_action_details(tool_name: str, args: dict) -> dict[str, Any]:
             "output_token": out.get("symbol"),
             "output_mint": out.get("mint"),
             "amount_sol": amount,
-            "limit_price_usd": limit_price,
-            "current_price_usd": current_price,
-            "trigger_condition": (
-                f"buys {amount} SOL each time {out.get('symbol')} price <= ${limit_price}"
-            ),
+            **preview,
             "executions": None,
             "max_executions": int(max_exec) if max_exec is not None else None,
             "until_balance_depleted": max_exec is None,
-            "check_interval_minutes": check_mins,
             "slippage_bps": args.get("slippage_bps", 100),
             "platform_fee": fee,
             "total_cost_per_buy": easya_execution_total_cost(amount) if amount > 0 else None,
@@ -1302,25 +1359,31 @@ def _pending_action_details(tool_name: str, args: dict) -> dict[str, Any]:
 def _summarize_pending_action(tool_name: str, args: dict) -> str:
     if tool_name == "place_limit_buy":
         out = _resolve_trading_token(str(args.get("token") or ""))
+        preview = _build_trigger_preview(out, args)
         return (
             f"Place **one-time limit buy**: spend **{args.get('amount_sol')} SOL** "
             f"→ {_token_with_mint(out.get('symbol'), out.get('mint'))} "
-            f"when price ≤ **${args.get('limit_price_usd')}** "
+            f"when {preview['trigger_condition'].replace('Buy when ', '')} "
             f"(**1 execution**, 0.1% platform fee)"
         )
 
     if tool_name == "place_threshold_buy":
         out = _resolve_trading_token(str(args.get("token") or ""))
+        preview = _build_trigger_preview(out, args)
         max_label = (
             f"max **{args.get('max_executions')}** buys"
             if args.get("max_executions") is not None
             else "until **SOL runs out**"
         )
+        interval_label = _format_check_interval(int(preview["check_interval_seconds"]))
+        stop_note = ""
+        if preview.get("stop_condition") and "Stop when" in preview["stop_condition"]:
+            stop_note = f", stops when {preview['stop_condition'].replace('Stop when ', '')}"
         return (
             f"Place **threshold buy**: spend **{args.get('amount_sol')} SOL** "
             f"→ {_token_with_mint(out.get('symbol'), out.get('mint'))} "
-            f"each time price ≤ **${args.get('limit_price_usd')}** "
-            f"(checks every **15 min**, {max_label}, 0.1% fee per buy)"
+            f"each time {preview['trigger_condition'].replace('Buy when ', '')} "
+            f"(checks {interval_label}, {max_label}{stop_note}, 0.1% fee per buy)"
         )
 
     if tool_name == "place_market_buy":

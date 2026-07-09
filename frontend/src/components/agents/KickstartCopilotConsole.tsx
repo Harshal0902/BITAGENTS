@@ -70,16 +70,34 @@ function TradingConfirmDetailsView({ details }: { details?: ConfirmationDetails 
               <dd>${details.limit_price_usd}</dd>
             </>
           )}
+          {details.limit_market_cap_usd != null && (
+            <>
+              <dt className="text-muted-foreground">Limit market cap</dt>
+              <dd>${details.limit_market_cap_usd.toLocaleString()}</dd>
+            </>
+          )}
           {details.current_price_usd != null && (
             <>
               <dt className="text-muted-foreground">Current price</dt>
               <dd>${details.current_price_usd}</dd>
             </>
           )}
+          {details.current_market_cap_usd != null && (
+            <>
+              <dt className="text-muted-foreground">Current market cap</dt>
+              <dd>${details.current_market_cap_usd.toLocaleString()}</dd>
+            </>
+          )}
           {details.trigger_condition && (
             <>
-              <dt className="text-muted-foreground">Condition</dt>
+              <dt className="text-muted-foreground">Buy when</dt>
               <dd>{details.trigger_condition}</dd>
+            </>
+          )}
+          {details.stop_condition && details.stop_condition !== "Stops when SOL runs out or max executions reached" && (
+            <>
+              <dt className="text-muted-foreground">Stop when</dt>
+              <dd>{details.stop_condition}</dd>
             </>
           )}
           {details.executions != null && (
@@ -94,10 +112,10 @@ function TradingConfirmDetailsView({ details }: { details?: ConfirmationDetails 
               </dd>
             </>
           )}
-          {details.check_interval_minutes != null && (
+          {(details.check_interval_seconds != null || details.check_interval_minutes != null) && (
             <>
-              <dt className="text-muted-foreground">Price check</dt>
-              <dd>Every {details.check_interval_minutes} minutes</dd>
+              <dt className="text-muted-foreground">Check interval</dt>
+              <dd>{formatCheckInterval(details)}</dd>
             </>
           )}
           {details.max_executions != null && details.action === "place_threshold_buy" && (
@@ -143,6 +161,24 @@ function TradingConfirmDetailsView({ details }: { details?: ConfirmationDetails 
     );
   }
 
+  return null;
+}
+
+function formatCheckInterval(details: ConfirmationDetails) {
+  if (details.check_interval_seconds != null) {
+    const seconds = details.check_interval_seconds;
+    if (seconds < 60) return `Every ${seconds}s`;
+    if (seconds % 60 === 0) {
+      const mins = seconds / 60;
+      return mins === 1 ? "Every 1 min" : `Every ${mins} min`;
+    }
+    return `Every ${seconds}s`;
+  }
+  if (details.check_interval_minutes != null) {
+    return details.check_interval_minutes === 1
+      ? "Every 1 min"
+      : `Every ${details.check_interval_minutes} min`;
+  }
   return null;
 }
 

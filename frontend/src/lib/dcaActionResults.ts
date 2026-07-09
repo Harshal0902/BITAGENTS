@@ -119,14 +119,21 @@ export type ConfirmationDetails = {
   order_type?: string;
   amount_sol?: number;
   limit_price_usd?: number;
+  limit_market_cap_usd?: number;
+  stop_price_usd?: number;
+  stop_market_cap_usd?: number;
+  condition_mode?: string;
   current_price_usd?: number;
+  current_market_cap_usd?: number;
   trigger_condition?: string;
+  stop_condition?: string;
   executions?: number;
   slippage_bps?: number;
   platform_fee?: number;
   total_cost?: number;
   order_id?: string;
   check_interval_minutes?: number;
+  check_interval_seconds?: number;
   until_balance_depleted?: boolean;
 };
 

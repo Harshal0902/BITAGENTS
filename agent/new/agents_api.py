@@ -603,21 +603,31 @@ class EasyaMarketOrderRequest(BaseModel):
 class EasyaLimitOrderRequest(BaseModel):
     token: str = Field(min_length=1)
     amount_sol: float = Field(gt=0)
-    limit_price_usd: float = Field(gt=0)
+    limit_price_usd: Optional[float] = Field(default=None, gt=0)
+    limit_market_cap_usd: Optional[float] = Field(default=None, gt=0)
+    condition_mode: Optional[str] = Field(default=None)
     slippage_bps: int = Field(default=100, ge=1, le=5000)
 
 
 class EasyaThresholdOrderRequest(BaseModel):
     token: str = Field(min_length=1)
     amount_sol: float = Field(gt=0)
-    limit_price_usd: float = Field(gt=0)
+    limit_price_usd: Optional[float] = Field(default=None, gt=0)
+    limit_market_cap_usd: Optional[float] = Field(default=None, gt=0)
+    stop_price_usd: Optional[float] = Field(default=None, gt=0)
+    stop_market_cap_usd: Optional[float] = Field(default=None, gt=0)
+    condition_mode: Optional[str] = Field(default=None)
     slippage_bps: int = Field(default=100, ge=1, le=5000)
     max_executions: Optional[int] = Field(default=None, ge=1)
+    check_interval_seconds: Optional[int] = Field(default=None, ge=60)
 
 
 class EasyaUpdateLimitOrderRequest(BaseModel):
     amount_sol: Optional[float] = Field(default=None, gt=0)
     limit_price_usd: Optional[float] = Field(default=None, gt=0)
+    limit_market_cap_usd: Optional[float] = Field(default=None, gt=0)
+    stop_price_usd: Optional[float] = Field(default=None, gt=0)
+    stop_market_cap_usd: Optional[float] = Field(default=None, gt=0)
     slippage_bps: Optional[int] = Field(default=None, ge=1, le=5000)
 
 
@@ -688,8 +698,10 @@ def kickstart_limit_order(
         auth_wallet,
         body.token.strip(),
         body.amount_sol,
-        body.limit_price_usd,
-        body.slippage_bps,
+        limit_price_usd=body.limit_price_usd,
+        limit_market_cap_usd=body.limit_market_cap_usd,
+        condition_mode=body.condition_mode,
+        slippage_bps=body.slippage_bps,
     )
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
@@ -705,9 +717,14 @@ def kickstart_threshold_order(
         auth_wallet,
         body.token.strip(),
         body.amount_sol,
-        body.limit_price_usd,
-        body.slippage_bps,
-        body.max_executions,
+        limit_price_usd=body.limit_price_usd,
+        limit_market_cap_usd=body.limit_market_cap_usd,
+        stop_price_usd=body.stop_price_usd,
+        stop_market_cap_usd=body.stop_market_cap_usd,
+        condition_mode=body.condition_mode,
+        slippage_bps=body.slippage_bps,
+        max_executions=body.max_executions,
+        check_interval_seconds=body.check_interval_seconds,
     )
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
@@ -736,6 +753,9 @@ def kickstart_update_order(
         order_id,
         amount_sol=body.amount_sol,
         limit_price_usd=body.limit_price_usd,
+        limit_market_cap_usd=body.limit_market_cap_usd,
+        stop_price_usd=body.stop_price_usd,
+        stop_market_cap_usd=body.stop_market_cap_usd,
         slippage_bps=body.slippage_bps,
     )
     if result.get("error"):
