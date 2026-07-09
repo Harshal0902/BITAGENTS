@@ -325,7 +325,7 @@ export function EasyaTradingDeposit({
   }
 
   return (
-    <Panel title="Trading wallet · Jupiter buys">
+    <Panel>
       <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
