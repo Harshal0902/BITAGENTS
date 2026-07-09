@@ -189,7 +189,7 @@ SCHEMA_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS easya_orders (
         id              VARCHAR(16) PRIMARY KEY,
         user_wallet     VARCHAR(64) NOT NULL,
-        order_type      VARCHAR(10) NOT NULL,
+        order_type      VARCHAR(12) NOT NULL,
         input_token     VARCHAR(32) NOT NULL DEFAULT 'SOL',
         output_token    VARCHAR(32) NOT NULL,
         input_mint      VARCHAR(64) NOT NULL,
@@ -202,22 +202,71 @@ SCHEMA_STATEMENTS = [
         output_amount   DOUBLE PRECISION,
         signature       VARCHAR(128),
         error_message   TEXT,
+        recurring       BOOLEAN NOT NULL DEFAULT FALSE,
+        max_executions  INTEGER,
+        executions      INTEGER NOT NULL DEFAULT 0,
+        total_spent     DOUBLE PRECISION NOT NULL DEFAULT 0,
+        check_interval_seconds INTEGER NOT NULL DEFAULT 900,
+        last_checked_at TIMESTAMPTZ,
+        last_filled_at  TIMESTAMPTZ,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         filled_at       TIMESTAMPTZ,
         cancelled_at    TIMESTAMPTZ
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS easya_order_executions (
+        id              BIGSERIAL PRIMARY KEY,
+        order_id        VARCHAR(16) NOT NULL,
+        user_wallet     VARCHAR(64) NOT NULL,
+        amount_input    DOUBLE PRECISION,
+        platform_fee    DOUBLE PRECISION,
+        output_amount   DOUBLE PRECISION,
+        price_usd       DOUBLE PRECISION,
+        signature       VARCHAR(128),
+        status          VARCHAR(20) NOT NULL DEFAULT 'success',
+        error_message   TEXT,
+        executed_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_easya_order_exec_order ON easya_order_executions (order_id)",
+    "CREATE INDEX IF NOT EXISTS idx_easya_order_exec_wallet ON easya_order_executions (user_wallet)",
     "CREATE INDEX IF NOT EXISTS idx_easya_orders_user ON easya_orders (user_wallet)",
     "CREATE INDEX IF NOT EXISTS idx_easya_orders_status ON easya_orders (status)",
     """
     CREATE INDEX IF NOT EXISTS idx_easya_orders_active_limit ON easya_orders (created_at)
-        WHERE status = 'active' AND order_type = 'limit'
+        WHERE status = 'active' AND order_type IN ('limit', 'threshold')
     """,
 ]
 
 MIGRATION_STATEMENTS = [
     "ALTER TABLE user_ledger ALTER COLUMN reference_id TYPE VARCHAR(128)",
     "ALTER TABLE user_ledger ALTER COLUMN signature TYPE VARCHAR(128)",
+    "ALTER TABLE easya_orders ALTER COLUMN order_type TYPE VARCHAR(12)",
+    "ALTER TABLE easya_orders ADD COLUMN IF NOT EXISTS recurring BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE easya_orders ADD COLUMN IF NOT EXISTS max_executions INTEGER",
+    "ALTER TABLE easya_orders ADD COLUMN IF NOT EXISTS executions INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE easya_orders ADD COLUMN IF NOT EXISTS total_spent DOUBLE PRECISION NOT NULL DEFAULT 0",
+    "ALTER TABLE easya_orders ADD COLUMN IF NOT EXISTS check_interval_seconds INTEGER NOT NULL DEFAULT 900",
+    "ALTER TABLE easya_orders ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ",
+    "ALTER TABLE easya_orders ADD COLUMN IF NOT EXISTS last_filled_at TIMESTAMPTZ",
+    """
+    CREATE TABLE IF NOT EXISTS easya_order_executions (
+        id              BIGSERIAL PRIMARY KEY,
+        order_id        VARCHAR(16) NOT NULL,
+        user_wallet     VARCHAR(64) NOT NULL,
+        amount_input    DOUBLE PRECISION,
+        platform_fee    DOUBLE PRECISION,
+        output_amount   DOUBLE PRECISION,
+        price_usd       DOUBLE PRECISION,
+        signature       VARCHAR(128),
+        status          VARCHAR(20) NOT NULL DEFAULT 'success',
+        error_message   TEXT,
+        executed_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_easya_order_exec_order ON easya_order_executions (order_id)",
+    "CREATE INDEX IF NOT EXISTS idx_easya_order_exec_wallet ON easya_order_executions (user_wallet)",
 ]
 
 

@@ -14,7 +14,7 @@ import {
 
 const SECTION_MAX_HEIGHT = "max-h-[280px]";
 
-type OrderStatusFilter = "all" | "active" | "filled" | "cancelled" | "failed";
+type OrderStatusFilter = "all" | "active" | "filled" | "completed" | "cancelled" | "failed";
 
 function shortMint(mint?: string | null) {
   if (!mint) return "-";
@@ -41,17 +41,30 @@ function formatUsd(value?: number | null) {
 function statusClass(status: string) {
   if (status === "active") return "text-signal";
   if (status === "pending") return "text-warn";
-  if (status === "filled") return "text-signal";
+  if (status === "filled" || status === "completed") return "text-signal";
   if (status === "failed") return "text-warn";
   if (status === "cancelled") return "text-muted-foreground";
   return "text-foreground";
 }
 
 function orderTitle(order: EasyaOrderSummary) {
+  if (order.order_type === "threshold" || order.recurring) {
+    return `Threshold buy · ${order.output_token}`;
+  }
   if (order.order_type === "limit") {
     return `Limit buy · ${order.output_token}`;
   }
   return `Market buy · ${order.output_token}`;
+}
+
+function formatExecutions(order: EasyaOrderSummary) {
+  const done = order.executions ?? 0;
+  const max = order.max_executions;
+  if (order.order_type === "threshold" || order.recurring) {
+    if (max != null) return `${done} / ${max}`;
+    return `${done} / until SOL out`;
+  }
+  return `${done} / 1`;
 }
 
 function CollapsibleSection({
@@ -122,7 +135,8 @@ function LimitOrderRow({
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const canEdit = order.order_type === "limit" && order.status === "active";
+  const canEdit =
+    (order.order_type === "limit" || order.order_type === "threshold") && order.status === "active";
   const canCancel = order.status === "active" || order.status === "pending";
 
   async function runCancel() {
@@ -200,7 +214,25 @@ function LimitOrderRow({
       {!editing ? (
         <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px] text-muted-foreground">
           <div>
-            <dt>Spend</dt>
+            <dt>Executions</dt>
+            <dd className="text-foreground">{formatExecutions(order)}</dd>
+          </div>
+          <div>
+            <dt>Total spent</dt>
+            <dd className="text-foreground">
+              {(order.total_spent ?? 0).toLocaleString()} {order.input_token}
+            </dd>
+          </div>
+          {(order.order_type === "threshold" || order.recurring) && (
+            <div>
+              <dt>Price check</dt>
+              <dd className="text-foreground">
+                every {Math.round((order.check_interval_seconds ?? 900) / 60)} min
+              </dd>
+            </div>
+          )}
+          <div>
+            <dt>Spend per buy</dt>
             <dd className="text-foreground">
               {order.amount_input} {order.input_token}
               <span className="block text-[9px] text-muted-foreground">+ 0.1% fee on fill</span>
@@ -375,6 +407,7 @@ function HistoryOrderRow({ order, cluster }: { order: EasyaOrderSummary; cluster
       <div className="mt-1 font-mono text-[10px] text-muted-foreground">
         {formatTime(order.filled_at ?? order.cancelled_at ?? order.created_at)} · ID `{order.id}` ·{" "}
         {order.amount_input} {order.input_token}
+        {(order.executions ?? 0) > 0 && ` · ${formatExecutions(order)} buys`}
         {order.limit_price_usd != null && ` · limit ${formatUsd(order.limit_price_usd)}`}
         {order.platform_fee != null && order.platform_fee > 0 && (
           <> · fee {order.platform_fee} {order.input_token}</>
@@ -444,7 +477,7 @@ export function EasyaOrderPanel({
   }, [authToken, reload]);
 
   const limitOrders = useMemo(
-    () => orders.filter((order) => order.order_type === "limit"),
+    () => orders.filter((order) => order.order_type === "limit" || order.order_type === "threshold"),
     [orders]
   );
 
@@ -502,8 +535,9 @@ export function EasyaOrderPanel({
         {error && <p className="mb-3 font-mono text-[11px] text-warn">{error}</p>}
 
         <p className="mb-3 text-sm text-muted-foreground">
-          Limit buys are monitored every ~30s. When EASY Screener price is at or below your limit,
-          the agent executes one Jupiter swap (0.1% platform fee). Each order runs once.
+          Limit and threshold buys are monitored automatically. One-time limits check frequently;
+          threshold orders check EASY Screener price every ~15 minutes and buy when price is at or
+          below your limit until SOL runs out (0.1% platform fee per successful buy).
         </p>
 
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -521,6 +555,7 @@ export function EasyaOrderPanel({
             <option value="all">All limit orders</option>
             <option value="active">Active only</option>
             <option value="filled">Filled</option>
+            <option value="completed">Completed</option>
             <option value="cancelled">Cancelled</option>
             <option value="failed">Failed</option>
           </select>

@@ -126,6 +126,8 @@ export type ConfirmationDetails = {
   platform_fee?: number;
   total_cost?: number;
   order_id?: string;
+  check_interval_minutes?: number;
+  until_balance_depleted?: boolean;
 };
 
 export function parseConfirmationRequired(result: string): {
