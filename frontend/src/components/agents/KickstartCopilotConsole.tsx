@@ -11,6 +11,7 @@ import {
 import { KICKSTART_COPILOT, KICKSTART_EXAMPLE_PROMPTS } from "@/lib/kickstartCopilotConfig";
 import { useKickstartWalletAuth } from "@/hooks/useKickstartWalletAuth";
 import { EasyaTradingDeposit } from "@/components/agents/EasyaTradingDeposit";
+import { EasyaOrderPanel } from "@/components/agents/EasyaOrderPanel";
 import type { AgentAction } from "@/lib/dcaAgentClient";
 import { useWallet } from "@solana/wallet-adapter-react";
 
@@ -86,6 +87,7 @@ export function KickstartCopilotConsole() {
   const [error, setError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [actions, setActions] = useState<AgentAction[]>([]);
+  const [dataRefreshTick, setDataRefreshTick] = useState(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const actionsEndRef = useRef<HTMLDivElement>(null);
 
@@ -119,6 +121,7 @@ export function KickstartCopilotConsole() {
         { id: `a-${Date.now()}`, role: "assistant", content: res.reply },
       ]);
       setActions(mapKickstartActions(res.actions));
+      setDataRefreshTick((tick) => tick + 1);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Request failed";
       setError(msg);
@@ -184,7 +187,11 @@ export function KickstartCopilotConsole() {
       )}
 
       {publicKey && token && (
-        <EasyaTradingDeposit cluster={KICKSTART_COPILOT.cluster} authToken={token} />
+        <EasyaTradingDeposit
+          cluster={KICKSTART_COPILOT.cluster}
+          authToken={token}
+          refreshTick={dataRefreshTick}
+        />
       )}
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -268,6 +275,14 @@ export function KickstartCopilotConsole() {
           </div>
         </Panel>
       </div>
+
+      {token && (
+        <EasyaOrderPanel
+          authToken={token}
+          cluster={KICKSTART_COPILOT.cluster}
+          refreshTick={dataRefreshTick}
+        />
+      )}
 
       {publicKey && !isAuthenticated && !authBusy && (
         <div className="border border-grid bg-surface/40 px-4 py-3 font-mono text-xs text-muted-foreground">
