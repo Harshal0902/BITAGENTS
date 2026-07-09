@@ -42,10 +42,20 @@ export async function fetchEasyaOrders(
       cache: "no-store",
       headers: authHeaders(authToken),
     });
-    if (!res.ok) return null;
-    return (await res.json()) as EasyaOrdersResponse;
-  } catch {
-    return null;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail =
+        typeof data.error === "string"
+          ? data.error
+          : typeof data.detail === "string"
+            ? data.detail
+            : "Failed to load orders";
+      throw new Error(detail);
+    }
+    return data as EasyaOrdersResponse;
+  } catch (err) {
+    console.error("fetchEasyaOrders failed:", err);
+    throw err instanceof Error ? err : new Error("Failed to load orders");
   }
 }
 

@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Panel } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   fetchKickstartHealth,
   mapKickstartActions,
@@ -13,6 +14,7 @@ import { useKickstartWalletAuth } from "@/hooks/useKickstartWalletAuth";
 import { EasyaTradingDeposit } from "@/components/agents/EasyaTradingDeposit";
 import { EasyaOrderPanel } from "@/components/agents/EasyaOrderPanel";
 import type { AgentAction } from "@/lib/dcaAgentClient";
+import { findLatestConfirmationRequired, type ConfirmationDetails } from "@/lib/dcaActionResults";
 import { useWallet } from "@solana/wallet-adapter-react";
 
 type ChatMessage = {
@@ -20,6 +22,104 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
 };
+
+function TradingConfirmDetailsView({ details }: { details?: ConfirmationDetails }) {
+  if (!details) return null;
+
+  if (
+    details.action === "place_limit_buy" ||
+    details.action === "place_market_buy" ||
+    details.action === "cancel_trading_order"
+  ) {
+    return (
+      <dl className="mt-3 space-y-2 border-t border-grid pt-3 font-mono text-[11px]">
+        <div className="grid grid-cols-[110px_1fr] gap-1">
+          {details.order_type && (
+            <>
+              <dt className="text-muted-foreground">Type</dt>
+              <dd className="uppercase text-foreground">{details.order_type}</dd>
+            </>
+          )}
+          {details.input_token && (
+            <>
+              <dt className="text-muted-foreground">From</dt>
+              <dd>{details.input_token}</dd>
+            </>
+          )}
+          {details.output_token && (
+            <>
+              <dt className="text-muted-foreground">To</dt>
+              <dd>
+                {details.output_token}{" "}
+                {details.output_mint && (
+                  <code className="block break-all text-[10px] text-foreground">{details.output_mint}</code>
+                )}
+              </dd>
+            </>
+          )}
+          {details.amount_sol != null && (
+            <>
+              <dt className="text-muted-foreground">SOL amount</dt>
+              <dd>{details.amount_sol}</dd>
+            </>
+          )}
+          {details.limit_price_usd != null && (
+            <>
+              <dt className="text-muted-foreground">Limit price</dt>
+              <dd>${details.limit_price_usd}</dd>
+            </>
+          )}
+          {details.current_price_usd != null && (
+            <>
+              <dt className="text-muted-foreground">Current price</dt>
+              <dd>${details.current_price_usd}</dd>
+            </>
+          )}
+          {details.trigger_condition && (
+            <>
+              <dt className="text-muted-foreground">Condition</dt>
+              <dd>{details.trigger_condition}</dd>
+            </>
+          )}
+          {details.executions != null && (
+            <>
+              <dt className="text-muted-foreground">Executions</dt>
+              <dd>{details.executions} (one-time buy)</dd>
+            </>
+          )}
+          {details.slippage_bps != null && (
+            <>
+              <dt className="text-muted-foreground">Slippage</dt>
+              <dd>{details.slippage_bps} bps</dd>
+            </>
+          )}
+          {details.platform_fee != null && (
+            <>
+              <dt className="text-muted-foreground">Platform fee</dt>
+              <dd>
+                {details.platform_fee} SOL (0.1%)
+              </dd>
+            </>
+          )}
+          {details.total_cost != null && (
+            <>
+              <dt className="text-muted-foreground">Total cost</dt>
+              <dd>{details.total_cost} SOL (swap + fee)</dd>
+            </>
+          )}
+          {details.order_id && (
+            <>
+              <dt className="text-muted-foreground">Order ID</dt>
+              <dd>{details.order_id}</dd>
+            </>
+          )}
+        </div>
+      </dl>
+    );
+  }
+
+  return null;
+}
 
 function formatReply(text: string) {
   return text.split("\n").map((line, i) => {
@@ -88,6 +188,9 @@ export function KickstartCopilotConsole() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [actions, setActions] = useState<AgentAction[]>([]);
   const [dataRefreshTick, setDataRefreshTick] = useState(0);
+  const [agentConfirmOpen, setAgentConfirmOpen] = useState(false);
+  const [agentConfirmMessage, setAgentConfirmMessage] = useState<string | null>(null);
+  const [agentConfirmDetails, setAgentConfirmDetails] = useState<ConfirmationDetails | undefined>();
   const chatEndRef = useRef<HTMLDivElement>(null);
   const actionsEndRef = useRef<HTMLDivElement>(null);
 
@@ -120,8 +223,16 @@ export function KickstartCopilotConsole() {
         ...prev,
         { id: `a-${Date.now()}`, role: "assistant", content: res.reply },
       ]);
-      setActions(mapKickstartActions(res.actions));
+      const mapped = mapKickstartActions(res.actions);
+      setActions(mapped);
       setDataRefreshTick((tick) => tick + 1);
+
+      const pendingConfirm = findLatestConfirmationRequired(mapped);
+      if (pendingConfirm) {
+        setAgentConfirmMessage(pendingConfirm.message);
+        setAgentConfirmDetails(pendingConfirm.details);
+        setAgentConfirmOpen(true);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Request failed";
       setError(msg);
@@ -289,6 +400,41 @@ export function KickstartCopilotConsole() {
           Approve the wallet sign-in prompt to start chatting.
         </div>
       )}
+
+      <ConfirmDialog
+        open={agentConfirmOpen}
+        onOpenChange={(open) => {
+          setAgentConfirmOpen(open);
+          if (!open) {
+            setAgentConfirmMessage(null);
+            setAgentConfirmDetails(undefined);
+          }
+        }}
+        title="Confirm trading order"
+        description={
+          <>
+            <p className="whitespace-pre-wrap">
+              {agentConfirmMessage ?? "Please confirm before the agent places this order."}
+            </p>
+            <TradingConfirmDetailsView details={agentConfirmDetails} />
+          </>
+        }
+        confirmLabel="Yes, proceed"
+        cancelLabel="No, cancel"
+        busy={busy}
+        onCancel={() => {
+          setAgentConfirmOpen(false);
+          setAgentConfirmMessage(null);
+          setAgentConfirmDetails(undefined);
+          void runCommand("no, cancel");
+        }}
+        onConfirm={() => {
+          setAgentConfirmOpen(false);
+          setAgentConfirmMessage(null);
+          setAgentConfirmDetails(undefined);
+          void runCommand("yes, confirm");
+        }}
+      />
     </div>
   );
 }

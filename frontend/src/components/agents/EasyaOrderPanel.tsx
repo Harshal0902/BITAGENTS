@@ -410,7 +410,7 @@ export function EasyaOrderPanel({
   const [orders, setOrders] = useState<EasyaOrderSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<OrderStatusFilter>("active");
+  const [statusFilter, setStatusFilter] = useState<OrderStatusFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
   const reload = useCallback(async () => {
@@ -420,12 +420,15 @@ export function EasyaOrderPanel({
     }
     setLoading(true);
     setError(null);
-    const data = await fetchEasyaOrders(authToken);
-    setOrders(data?.orders ?? []);
-    if (!data) {
-      setError("Could not load trading orders.");
+    try {
+      const data = await fetchEasyaOrders(authToken);
+      setOrders(data?.orders ?? []);
+    } catch (err) {
+      setOrders([]);
+      setError(err instanceof Error ? err.message : "Could not load trading orders.");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [authToken]);
 
   useEffect(() => {
@@ -440,31 +443,22 @@ export function EasyaOrderPanel({
     return () => window.clearInterval(interval);
   }, [authToken, reload]);
 
-  const activeLimitOrders = useMemo(
-    () =>
-      orders.filter(
-        (order) =>
-          order.order_type === "limit" && (order.status === "active" || order.status === "pending")
-      ),
+  const limitOrders = useMemo(
+    () => orders.filter((order) => order.order_type === "limit"),
     [orders]
   );
 
-  const historyOrders = useMemo(
-    () =>
-      orders.filter(
-        (order) =>
-          order.status === "filled" ||
-          order.status === "cancelled" ||
-          order.status === "failed" ||
-          (order.order_type === "market" && order.status !== "active")
-      ),
+  const marketOrders = useMemo(
+    () => orders.filter((order) => order.order_type === "market"),
     [orders]
   );
 
-  const filteredActive = useMemo(() => {
+  const filteredLimitOrders = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    return activeLimitOrders.filter((order) => {
-      if (statusFilter !== "all" && statusFilter !== "active" && order.status !== statusFilter) {
+    return limitOrders.filter((order) => {
+      if (statusFilter === "active") {
+        if (order.status !== "active" && order.status !== "pending") return false;
+      } else if (statusFilter !== "all" && order.status !== statusFilter) {
         return false;
       }
       if (!query) return true;
@@ -475,7 +469,7 @@ export function EasyaOrderPanel({
         (order.output_mint ?? "").toLowerCase().includes(query)
       );
     });
-  }, [activeLimitOrders, statusFilter, searchQuery]);
+  }, [limitOrders, statusFilter, searchQuery]);
 
   if (!authToken) {
     return (
@@ -492,7 +486,7 @@ export function EasyaOrderPanel({
     <div className="space-y-6">
       <CollapsibleSection
         title="Your limit orders"
-        count={filteredActive.length}
+        count={filteredLimitOrders.length}
         defaultOpen
         headerExtra={
           <button
@@ -508,8 +502,8 @@ export function EasyaOrderPanel({
         {error && <p className="mb-3 font-mono text-[11px] text-warn">{error}</p>}
 
         <p className="mb-3 text-sm text-muted-foreground">
-          Active limit buys are monitored every ~30s. When EASY Screener price is at or below your
-          limit, the agent executes a Jupiter swap (0.1% platform fee).
+          Limit buys are monitored every ~30s. When EASY Screener price is at or below your limit,
+          the agent executes one Jupiter swap (0.1% platform fee). Each order runs once.
         </p>
 
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -524,45 +518,49 @@ export function EasyaOrderPanel({
             onChange={(e) => setStatusFilter(e.target.value as OrderStatusFilter)}
             className="border border-grid bg-background px-3 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-foreground outline-none focus:border-signal"
           >
+            <option value="all">All limit orders</option>
             <option value="active">Active only</option>
-            <option value="all">All statuses</option>
             <option value="filled">Filled</option>
             <option value="cancelled">Cancelled</option>
             <option value="failed">Failed</option>
           </select>
         </div>
 
-        {filteredActive.length === 0 && !loading && (
+        {filteredLimitOrders.length === 0 && !loading && (
           <p className="font-mono text-xs text-muted-foreground">
-            {activeLimitOrders.length === 0
-              ? "No active limit orders. Create one via chat, e.g. “Place a limit buy for 0.05 SOL of BITAGENTS at $0.02”."
+            {limitOrders.length === 0
+              ? "No limit orders yet. Create one via chat, e.g. “Place a limit buy for 0.05 SOL of BITAGENTS at $0.02”."
               : "No orders match your filters."}
           </p>
         )}
 
         <div className="grid gap-3 lg:grid-cols-2">
-          {filteredActive.map((order) => (
-            <LimitOrderRow
-              key={order.id}
-              order={order}
-              authToken={authToken}
-              busy={loading}
-              onUpdated={() => void reload()}
-              cluster={cluster}
-            />
-          ))}
+          {filteredLimitOrders.map((order) =>
+            order.status === "active" || order.status === "pending" ? (
+              <LimitOrderRow
+                key={order.id}
+                order={order}
+                authToken={authToken}
+                busy={loading}
+                onUpdated={() => void reload()}
+                cluster={cluster}
+              />
+            ) : (
+              <HistoryOrderRow key={order.id} order={order} cluster={cluster} />
+            )
+          )}
         </div>
       </CollapsibleSection>
 
-      <CollapsibleSection title="Order history" count={historyOrders.length} defaultOpen={false}>
-        {historyOrders.length === 0 && !loading && (
+      <CollapsibleSection title="Market orders" count={marketOrders.length} defaultOpen={false}>
+        {marketOrders.length === 0 && !loading && (
           <p className="font-mono text-xs text-muted-foreground">
-            Filled market/limit buys and cancelled orders appear here with on-chain signatures.
+            Immediate market buys appear here after execution.
           </p>
         )}
         <div className="space-y-2">
-          {historyOrders.map((order) => (
-            <HistoryOrderRow key={`${order.id}-${order.filled_at ?? order.created_at}`} order={order} cluster={cluster} />
+          {marketOrders.map((order) => (
+            <HistoryOrderRow key={order.id} order={order} cluster={cluster} />
           ))}
         </div>
       </CollapsibleSection>

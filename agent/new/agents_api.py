@@ -537,6 +537,7 @@ def kickstart_chat(
             user_message,
             history,
             user_wallet=auth_wallet,
+            session_id=session_id,
         )
     except requests.exceptions.ConnectionError as exc:
         raise HTTPException(
