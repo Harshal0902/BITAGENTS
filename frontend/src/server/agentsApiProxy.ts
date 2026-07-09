@@ -280,6 +280,24 @@ export async function proxyDcaPlanStatus(
   });
 }
 
+export async function proxyDcaUpdatePlan(
+  planId: string,
+  body: {
+    amount_per_buy?: number;
+    interval?: string;
+    max_executions?: number | null;
+    total_budget?: number | null;
+    slippage_bps?: number;
+  },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/plans/${encodeURIComponent(planId)}`, {
+    method: "PATCH",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
 export async function proxyDcaWalletLedger(
   authToken: string,
   limit = 50

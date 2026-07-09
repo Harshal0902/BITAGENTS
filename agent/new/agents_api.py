@@ -62,6 +62,7 @@ from dca_agent import (
     run_agent_with_actions,
     start_metrics_scheduler,
     start_scheduler,
+    update_dca_plan,
     update_dca_plan_status,
 )
 from easya_screener_client import CACHE_TTL_SECONDS, screener_configured
@@ -171,6 +172,14 @@ class WithdrawRequest(BaseModel):
 
 class PlanStatusRequest(BaseModel):
     action: str = Field(min_length=3)
+
+
+class UpdateDcaPlanRequest(BaseModel):
+    amount_per_buy: Optional[float] = Field(default=None, gt=0)
+    interval: Optional[str] = Field(default=None, min_length=1)
+    max_executions: Optional[int] = Field(default=None, ge=1)
+    total_budget: Optional[float] = Field(default=None, gt=0)
+    slippage_bps: Optional[int] = Field(default=None, ge=1, le=5000)
 
 
 def _redact_rpc_url(rpc_url: str) -> str:
@@ -436,6 +445,26 @@ def plan_executions(
     result = get_dca_history(plan_id, user_wallet=auth_wallet)
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@app.patch("/plans/{plan_id}")
+def update_plan(
+    plan_id: str,
+    body: UpdateDcaPlanRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = update_dca_plan(
+        plan_id,
+        auth_wallet,
+        amount_per_buy=body.amount_per_buy,
+        interval=body.interval,
+        max_executions=body.max_executions,
+        total_budget=body.total_budget,
+        slippage_bps=body.slippage_bps,
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
     return result
 
 
