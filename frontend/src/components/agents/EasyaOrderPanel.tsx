@@ -103,6 +103,13 @@ function hasOrderHistory(order: EasyaOrderSummary) {
   );
 }
 
+function isManageableLimitOrder(order: EasyaOrderSummary) {
+  return (
+    (order.order_type === "limit" || order.order_type === "threshold") &&
+    (order.status === "active" || order.status === "pending")
+  );
+}
+
 function OrderExecutionsDialog({
   open,
   onOpenChange,
@@ -300,6 +307,7 @@ function LimitOrderRow({
   const canEdit =
     (order.order_type === "limit" || order.order_type === "threshold") && order.status === "active";
   const canCancel = order.status === "active" || order.status === "pending";
+  const stopLabel = order.order_type === "threshold" || order.recurring ? "Stop order" : "Cancel order";
 
   async function runCancel() {
     setActionBusy(true);
@@ -610,7 +618,7 @@ function LimitOrderRow({
             onClick={() => setConfirmCancel(true)}
             className="border border-grid px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:border-warn hover:text-warn disabled:opacity-40"
           >
-            Delete
+            {stopLabel}
           </button>
         )}
         {hasOrderHistory(order) && (
@@ -636,14 +644,15 @@ function LimitOrderRow({
       <ConfirmDialog
         open={confirmCancel}
         onOpenChange={setConfirmCancel}
-        title="Delete limit order"
+        title={stopLabel}
         description={
           <p>
-            Cancel limit buy for <strong className="text-foreground">{order.output_token}</strong>{" "}
-            (ID `{order.id}`)? Reserved SOL will be released. This cannot be undone.
+            Stop {order.order_type === "threshold" ? "threshold" : "limit"} buy for{" "}
+            <strong className="text-foreground">{order.output_token}</strong> (ID `{order.id}`)?
+            No further buys will run and reserved SOL will be released. This cannot be undone.
           </p>
         }
-        confirmLabel="Delete order"
+        confirmLabel={stopLabel}
         cancelLabel="Keep order"
         busy={actionBusy}
         onConfirm={() => void runCancel()}
@@ -938,6 +947,16 @@ export function EasyaOrderPanel({
     });
   }, [limitOrders, statusFilter, searchQuery]);
 
+  const activeLimitOrders = useMemo(
+    () => filteredLimitOrders.filter(isManageableLimitOrder),
+    [filteredLimitOrders]
+  );
+
+  const pastLimitOrders = useMemo(
+    () => filteredLimitOrders.filter((order) => !isManageableLimitOrder(order)),
+    [filteredLimitOrders]
+  );
+
   if (!authToken) {
     return (
       <CollapsibleSection title="Your limit orders" defaultOpen>
@@ -969,9 +988,10 @@ export function EasyaOrderPanel({
         {error && <p className="mb-3 font-mono text-[11px] text-warn">{error}</p>}
 
         <p className="mb-3 text-sm text-muted-foreground">
-          Limit and threshold buys are monitored automatically. One-time limits check frequently;
-          threshold orders check EASY Screener price every ~15 minutes and buy when price is at or
-          below your limit until SOL runs out (0.1% platform fee per successful buy).
+          Active limit and threshold orders can be <strong className="text-foreground">edited</strong> or{" "}
+          <strong className="text-foreground">stopped</strong> anytime. One-time limits check frequently;
+          threshold orders check EASY Screener every ~15 minutes and buy when your conditions are met
+          until SOL runs out (0.1% platform fee per successful buy).
         </p>
 
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -1003,27 +1023,45 @@ export function EasyaOrderPanel({
           </p>
         )}
 
-        <div className="grid gap-3 lg:grid-cols-2">
-          {filteredLimitOrders.map((order) =>
-            order.status === "active" || order.status === "pending" ? (
-              <LimitOrderRow
-                key={order.id}
-                order={order}
-                authToken={authToken}
-                busy={loading}
-                onUpdated={() => void reload()}
-                cluster={cluster}
-              />
-            ) : (
-              <HistoryOrderRow
-                key={order.id}
-                order={order}
-                authToken={authToken}
-                cluster={cluster}
-              />
-            )
-          )}
-        </div>
+        {activeLimitOrders.length > 0 && (
+          <div className="mb-4">
+            <h3 className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-signal">
+              Active orders ({activeLimitOrders.length})
+            </h3>
+            <div className="grid gap-3 lg:grid-cols-2">
+              {activeLimitOrders.map((order) => (
+                <LimitOrderRow
+                  key={order.id}
+                  order={order}
+                  authToken={authToken}
+                  busy={loading}
+                  onUpdated={() => void reload()}
+                  cluster={cluster}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {pastLimitOrders.length > 0 && (
+          <div>
+            {activeLimitOrders.length > 0 && (
+              <h3 className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                Past orders ({pastLimitOrders.length})
+              </h3>
+            )}
+            <div className="grid gap-3 lg:grid-cols-2">
+              {pastLimitOrders.map((order) => (
+                <HistoryOrderRow
+                  key={order.id}
+                  order={order}
+                  authToken={authToken}
+                  cluster={cluster}
+                />
+              ))}
+            </div>
+          </div>
+        )}
       </CollapsibleSection>
 
       <CollapsibleSection

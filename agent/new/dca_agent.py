@@ -1746,6 +1746,8 @@ def list_dca_plans(
             "status":           p["status"],
             "executions":       p["executions_count"],
             "max_executions":   p.get("max_executions"),
+            "total_budget":     p.get("total_budget"),
+            "slippage_bps":     p.get("slippage_bps", 100),
             "spent":            p["spent_so_far"],
             "next_execution_at": p.get("next_execution_at"),
         })
@@ -1782,6 +1784,98 @@ def update_dca_plan_status(plan_id: str, action: str, user_wallet: Optional[str]
     if not plan:
         return {"error": f"Plan '{plan_id}' not found."}
     return _update_plan(plan_id, {"status": valid[action]}) or {"error": "Update failed."}
+
+
+def update_dca_plan(
+    plan_id: str,
+    user_wallet: str,
+    *,
+    amount_per_buy: Optional[float] = None,
+    interval: Optional[str] = None,
+    max_executions: Optional[int] = None,
+    total_budget: Optional[float] = None,
+    slippage_bps: Optional[int] = None,
+) -> dict:
+    owned = _assert_plan_owner(plan_id, user_wallet)
+    if "error" in owned:
+        return owned
+    plan = owned
+
+    if plan.get("status") not in ("active", "paused"):
+        return {"error": f"Plan is {plan.get('status')} and cannot be edited."}
+
+    updates: dict[str, Any] = {}
+    inp = resolve_token(plan["input_token"])
+    out = resolve_token(plan["output_token"])
+    if "error" in inp:
+        return inp
+    if "error" in out:
+        return out
+
+    next_amount = float(amount_per_buy) if amount_per_buy is not None else float(plan["amount_per_buy"])
+    next_interval_label = interval.strip() if interval else plan["interval"]
+    next_interval_minutes = float(plan.get("interval_minutes") or 1440)
+    if interval:
+        try:
+            next_interval_minutes = _parse_interval(interval)
+        except ValueError as exc:
+            return {"error": str(exc)}
+    next_max_exec = (
+        _coerce_nullable_int(max_executions) if max_executions is not None else plan.get("max_executions")
+    )
+    next_budget = (
+        _coerce_nullable_float(total_budget) if total_budget is not None else plan.get("total_budget")
+    )
+    next_slippage = int(slippage_bps) if slippage_bps is not None else int(plan.get("slippage_bps") or 100)
+
+    if next_max_exec is not None and next_max_exec < int(plan.get("executions_count") or 0):
+        return {
+            "error": (
+                f"max_executions ({next_max_exec}) cannot be less than completed buys "
+                f"({plan.get('executions_count')})."
+            )
+        }
+    if next_budget is not None and next_budget + 1e-12 < float(plan.get("spent_so_far") or 0):
+        return {
+            "error": (
+                f"total_budget ({next_budget}) cannot be less than already spent "
+                f"({plan.get('spent_so_far')})."
+            )
+        }
+    if next_slippage < 1 or next_slippage > 5000:
+        return {"error": "slippage_bps must be between 1 and 5000."}
+
+    feasibility = validate_dca_plan_feasibility(
+        inp,
+        out,
+        next_amount,
+        next_interval_minutes,
+        next_budget,
+        next_max_exec,
+        user_wallet.strip(),
+    )
+    if feasibility:
+        return feasibility
+
+    if amount_per_buy is not None:
+        updates["amount_per_buy"] = next_amount
+    if interval is not None:
+        updates["interval"] = next_interval_label
+        updates["interval_minutes"] = next_interval_minutes
+    if max_executions is not None:
+        updates["max_executions"] = next_max_exec
+    if total_budget is not None:
+        updates["total_budget"] = next_budget
+    if slippage_bps is not None:
+        updates["slippage_bps"] = next_slippage
+
+    if not updates:
+        return {"error": "No fields to update."}
+
+    updated = _update_plan(plan_id, updates)
+    if not updated:
+        return {"error": "Update failed."}
+    return {"status": "updated", "plan": updated}
 
 
 def execute_dca_now(plan_id: str, dry_run: bool = False, user_wallet: Optional[str] = None) -> dict:
