@@ -3,7 +3,7 @@ Solana DCA (Dollar-Cost Averaging) Agent
 Independent agent - run directly: python dca_agent.py
 
 Schedules recurring token buys on Solana via Jupiter v2 build API (mainnet)
-or SOL transfers (devnet). Powered by OpenRouter for natural-language plan management.
+or SOL transfers (devnet). Powered by hosted Ollama (or OpenRouter fallback) for natural-language plan management.
 """
 
 import base64
@@ -57,18 +57,26 @@ def _load_env() -> None:
 
 _load_env()
 
+from hosted_llm import (
+    HOSTED_OLLAMA_API_KEY,
+    HOSTED_OLLAMA_BASE_URL,
+    HOSTED_OLLAMA_MODEL as HOSTED_DEFAULT_MODEL,
+    OPEN_ROUTER_API,
+    OPEN_ROUTER_API_URL,
+    OPEN_ROUTER_APP_NAME,
+    OPEN_ROUTER_SITE_URL,
+    call_llm,
+    llm_configured,
+    llm_provider,
+    use_hosted_ollama,
+)
+
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-OPEN_ROUTER_API = (
-    os.environ.get("OPEN_ROUTER_API", "")
-    or os.environ.get("OPENROUTER_API_KEY", "")
+MODEL = os.environ.get(
+    "DCA_MODEL",
+    os.environ.get("OPEN_ROUTER_MODEL", HOSTED_DEFAULT_MODEL),
 )
-OPEN_ROUTER_API_URL = os.environ.get(
-    "OPEN_ROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"
-)
-OPEN_ROUTER_SITE_URL = os.environ.get("OPEN_ROUTER_SITE_URL", "https://bitagents.app")
-OPEN_ROUTER_APP_NAME = os.environ.get("OPEN_ROUTER_APP_NAME", "BIT Agents DCA")
-MODEL = os.environ.get("OPEN_ROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
 
 SOLANA_RPC = os.environ.get(
     "SOLANA_RPC_URL",
@@ -2548,77 +2556,9 @@ from shared_governance import GOVERNANCE_PROMPT
 SYSTEM_PROMPT = SYSTEM_PROMPT + GOVERNANCE_PROMPT
 
 
-def _openrouter_headers() -> dict[str, str]:
-    if not OPEN_ROUTER_API:
-        raise RuntimeError(
-            "OPEN_ROUTER_API is not set. Add it to agent/new/.env (see .env.example)."
-        )
-    return {
-        "Authorization": f"Bearer {OPEN_ROUTER_API}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": OPEN_ROUTER_SITE_URL,
-        "X-Title": OPEN_ROUTER_APP_NAME,
-    }
-
-
-def _openrouter_error_message_from_response(resp: requests.Response) -> str:
-    try:
-        body = resp.json()
-        err = body.get("error")
-        if isinstance(err, dict) and err.get("message"):
-            return str(err["message"])
-        if isinstance(err, str):
-            return err
-    except Exception:
-        pass
-    return resp.text or resp.reason or "Unknown error"
-
-
 def call_openrouter(messages: list) -> dict[str, Any]:
-    """Call OpenRouter chat completions (OpenAI-compatible) with tool support."""
-    payload = {
-        "model": MODEL,
-        "messages": messages,
-        "tools": TOOLS,
-        "tool_choice": "auto",
-        "temperature": 0.2,
-    }
-    last_error = "Unknown OpenRouter error"
-    for attempt in range(1, 4):
-        try:
-            resp = requests.post(
-                OPEN_ROUTER_API_URL,
-                json=payload,
-                headers=_openrouter_headers(),
-                timeout=180,
-            )
-        except requests.exceptions.RequestException as exc:
-            last_error = str(exc)
-            if attempt < 3:
-                time.sleep(1.5 * attempt)
-                continue
-            raise RuntimeError(f"Cannot reach OpenRouter API: {last_error}") from exc
-
-        if resp.status_code >= 400:
-            last_error = _openrouter_error_message_from_response(resp)
-            if resp.status_code in (408, 429, 500, 502, 503, 504) and attempt < 3:
-                time.sleep(1.5 * attempt)
-                continue
-            raise RuntimeError(
-                f"OpenRouter API error ({resp.status_code}): {last_error}"
-            )
-
-        data = resp.json()
-        choices = data.get("choices") or []
-        if not choices:
-            last_error = "OpenRouter returned no choices."
-            if attempt < 3:
-                time.sleep(1.5 * attempt)
-                continue
-            raise RuntimeError(last_error)
-        return {"message": choices[0]["message"]}
-
-    raise RuntimeError(f"OpenRouter API error: {last_error}")
+    """Call configured LLM (hosted Ollama or OpenRouter fallback) with tool support."""
+    return call_llm(messages, model=MODEL, tools=TOOLS, temperature=0.2)
 
 
 CONFIRMATION_REQUIRED_TOOLS = frozenset({
@@ -3239,7 +3179,7 @@ def run_agent(user_input: str, conversation_history: list) -> tuple[str, list]:
 BANNER = r"""
 ╔══════════════════════════════════════════════════════════════╗
 ║   💰  Solana DCA Agent                                       ║
-║   Recurring buys · Jupiter v2 swaps · OpenRouter-powered      ║
+║   Recurring buys · Jupiter v2 swaps · hosted LLM                ║
 ╚══════════════════════════════════════════════════════════════╝
 """
 
@@ -3253,11 +3193,18 @@ def main():
 
     init_db()
     print("  🗄️  Neon database ready")
-    print(f"  LLM        : OpenRouter ({MODEL})")
-    print(
-        f"  OpenRouter : "
-        f"{'configured' if OPEN_ROUTER_API else 'missing - set OPEN_ROUTER_API in .env'}"
-    )
+    print(f"  LLM        : {llm_provider()} ({MODEL})")
+    if use_hosted_ollama():
+        print(f"  Ollama URL : {HOSTED_OLLAMA_BASE_URL}")
+        print(
+            f"  Ollama key : "
+            f"{'configured' if HOSTED_OLLAMA_API_KEY else 'missing - set HOSTED_MODEL_API_KEY in .env'}"
+        )
+    else:
+        print(
+            f"  OpenRouter : "
+            f"{'configured' if OPEN_ROUTER_API else 'missing - set HOSTED_MODEL_API_KEY or OPEN_ROUTER_API in .env'}"
+        )
     print(f"  RPC        : {SOLANA_RPC}")
     print(f"  Cluster    : {SOLANA_CLUSTER} ({'Jupiter v2 swaps' if _is_mainnet() else 'devnet mode'})")
     print(f"  Jupiter API: {JUPITER_BUILD_API}")

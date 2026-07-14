@@ -266,7 +266,7 @@ export function DcaAgentConsole() {
           id: "welcome",
           role: "assistant",
           content: h
-            ? `Connected to DCA agent (**${h.model}** · **${h.cluster}**). Ask me to create plans, or manage DCA schedules.`
+            ? `Connected to DCA agent. Ask me to create plans, or manage DCA schedules.`
             : "DCA agent API is offline.",
         },
       ]);
@@ -333,7 +333,8 @@ export function DcaAgentConsole() {
         {
           id: `e-${Date.now()}`,
           role: "assistant",
-          content: `**Error:** ${message}\n\nMake sure the DCA API is running (\`python dca_api.py\`) with \`OPEN_ROUTER_API\` and \`DATABASE_URL\` set in \`agent/new/.env\`.`,
+          // content: `**Error:** ${message}\n\nMake sure the agents API is running (\`python agents_api.py\`) with \`HOSTED_MODEL_API_KEY\`, \`HOSTED_OLLAMA_URL\`, and \`DATABASE_URL\` set in \`agent/new/.env\`.`,
+          content: `**Error** ${message}.`,
           errors: [message],
         },
       ]);
@@ -428,7 +429,7 @@ export function DcaAgentConsole() {
         </Panel>
       )}
 
-      <div className="grid gap-6 grid-cols-3 lg:grid-cols-3">
+      <div className="grid gap-6 lg:grid-cols-3">
         <Panel title="Command · DCA Agent" className="lg:col-span-2">
           <div className="flex max-h-[420px] flex-col gap-4 overflow-y-auto pr-1">
             {messages.map((msg) => (

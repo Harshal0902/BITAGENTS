@@ -26,7 +26,7 @@ export function AgentCard({ agent }: { agent: MarketplaceAgent }) {
       <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{agent.tagline}</p>
 
       {showDcaStats && (
-        <div className="mt-5 grid grid-cols-3 gap-3 border-t border-grid pt-4">
+        <div className="mt-5 grid grid-cols-2 gap-3 border-t border-grid pt-4 sm:grid-cols-3">
           <div>
             <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
               Per task

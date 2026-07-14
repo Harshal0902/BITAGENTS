@@ -10,7 +10,7 @@ const NAV = [
 export function AppShell({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
   return (
     <div className="min-h-screen text-foreground">
-      <div className="mx-auto max-w-7xl px-6 py-10">
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10">
         <div className="mb-8 flex flex-col items-start justify-between gap-2 border-b border-grid pb-6 md:flex-row md:items-end">
           <div>
             <h1 className="font-display text-3xl font-bold leading-tight md:text-4xl">{title}</h1>

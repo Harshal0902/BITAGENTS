@@ -16,13 +16,8 @@ from typing import Any, Optional
 
 import requests
 
-from dca_agent import (
-    OPEN_ROUTER_API,
-    OPEN_ROUTER_API_URL,
-    OPEN_ROUTER_APP_NAME,
-    OPEN_ROUTER_SITE_URL,
-    SOLANA_CLUSTER,
-)
+from hosted_llm import HOSTED_OLLAMA_MODEL, call_llm
+from dca_agent import SOLANA_CLUSTER
 from db import (
     add_watchlist_token,
     compare_watchlist_tokens,
@@ -43,7 +38,7 @@ from shared_governance import GOVERNANCE_PROMPT
 
 KICKSTART_MODEL = os.environ.get(
     "KICKSTART_COPILOT_MODEL",
-    os.environ.get("OPEN_ROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct"),
+    os.environ.get("OPEN_ROUTER_MODEL", HOSTED_OLLAMA_MODEL),
 )
 
 OPERATION_GUIDES: dict[str, dict[str, Any]] = {
@@ -149,15 +144,14 @@ TOOL_RECOMMENDATIONS: dict[str, list[str]] = {
 }
 
 
-def _openrouter_headers() -> dict[str, str]:
-    if not OPEN_ROUTER_API:
-        raise RuntimeError("OPEN_ROUTER_API is not set in agent/new/.env")
-    return {
-        "Authorization": f"Bearer {OPEN_ROUTER_API}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": OPEN_ROUTER_SITE_URL,
-        "X-Title": f"{OPEN_ROUTER_APP_NAME} EasyA Analysis",
-    }
+def call_openrouter(messages: list) -> dict[str, Any]:
+    return call_llm(
+        messages,
+        model=KICKSTART_MODEL,
+        tools=TOOLS,
+        temperature=0.3,
+        app_suffix="EasyA Analysis",
+    )
 
 
 def _screener_gate() -> Optional[dict[str, Any]]:
@@ -1102,43 +1096,6 @@ def _try_overview_shortcut(user_input: str) -> Optional[tuple[str, list[dict[str
 
 def build_system_prompt() -> str:
     return SYSTEM_PROMPT + "\n\n" + get_allowlist_prompt_block()
-
-
-def call_openrouter(messages: list) -> dict[str, Any]:
-    payload = {
-        "model": KICKSTART_MODEL,
-        "messages": messages,
-        "tools": TOOLS,
-        "tool_choice": "auto",
-        "temperature": 0.3,
-    }
-    last_error = "Unknown OpenRouter error"
-    for attempt in range(1, 4):
-        try:
-            resp = requests.post(
-                OPEN_ROUTER_API_URL,
-                json=payload,
-                headers=_openrouter_headers(),
-                timeout=180,
-            )
-        except requests.exceptions.RequestException as exc:
-            last_error = str(exc)
-            if attempt < 3:
-                time.sleep(1.5 * attempt)
-                continue
-            raise RuntimeError(f"Cannot reach OpenRouter API: {last_error}") from exc
-        if resp.status_code >= 400:
-            last_error = resp.text or resp.reason
-            if resp.status_code in (408, 429, 500, 502, 503, 504) and attempt < 3:
-                time.sleep(1.5 * attempt)
-                continue
-            raise RuntimeError(f"OpenRouter API error ({resp.status_code}): {last_error}")
-        data = resp.json()
-        choices = data.get("choices") or []
-        if not choices:
-            raise RuntimeError("OpenRouter returned no choices.")
-        return choices[0]
-    raise RuntimeError(last_error)
 
 
 CONFIRMATION_REQUIRED_TOOLS = frozenset({

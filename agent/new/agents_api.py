@@ -47,10 +47,16 @@ from db import (
     list_watchlist,
     load_chat_history,
 )
+from hosted_llm import (
+    HOSTED_OLLAMA_BASE_URL,
+    HOSTED_OLLAMA_MODEL,
+    llm_configured,
+    llm_provider,
+    use_hosted_ollama,
+)
 from dca_agent import (
     JUPITER_BUILD_API,
     MODEL,
-    OPEN_ROUTER_API,
     SCHEDULER_POLL_SECONDS,
     SOLANA_CLUSTER,
     SOLANA_RPC,
@@ -262,10 +268,12 @@ def health() -> dict[str, Any]:
                 "pricing": "free analysis · 0.1% per Jupiter buy",
             },
         },
-        "llm": "openrouter",
+        "llm": llm_provider(),
+        "llm_configured": llm_configured(),
+        "hosted_ollama_url": HOSTED_OLLAMA_BASE_URL if use_hosted_ollama() else None,
+        "hosted_ollama_model": HOSTED_OLLAMA_MODEL if use_hosted_ollama() else None,
         "dca_model": MODEL,
         "kickstart_model": KICKSTART_MODEL,
-        "openrouter_configured": bool(OPEN_ROUTER_API),
         "database": "neon_postgres" if db_configured() else "unconfigured",
         "auth": "wallet_signature",
         "internal_api_key_required": internal_api_configured(),
@@ -287,12 +295,14 @@ def kickstart_health() -> dict[str, Any]:
         "status": "ok",
         "agent": "EasyA Analysis Agent",
         "model": KICKSTART_MODEL,
+        "llm": llm_provider(),
+        "llm_configured": llm_configured(),
+        "hosted_ollama_url": HOSTED_OLLAMA_BASE_URL if use_hosted_ollama() else None,
         "pricing": "free analysis · 0.1% per successful Jupiter buy",
         "auth_required": True,
         "data_source": "easy_screener",
         "easy_screener_configured": screener_configured(),
         "cache_ttl_seconds": CACHE_TTL_SECONDS,
-        "openrouter_configured": bool(OPEN_ROUTER_API),
         "cluster": SOLANA_CLUSTER,
         "trading_wallet_configured": bool(easya_wallet),
         "trading_wallet": easya_wallet,
@@ -527,10 +537,10 @@ def dca_chat(
     except requests.exceptions.ConnectionError as exc:
         raise HTTPException(
             status_code=503,
-            detail="Cannot reach OpenRouter API. Check your network connection.",
+            detail="Cannot reach LLM API. Check HOSTED_OLLAMA_URL and network.",
         ) from exc
     except requests.exceptions.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"OpenRouter error: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"LLM error: {exc}") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
@@ -573,7 +583,7 @@ def kickstart_chat(
     except requests.exceptions.ConnectionError as exc:
         raise HTTPException(
             status_code=503,
-            detail="Cannot reach OpenRouter API. Check your network connection.",
+            detail="Cannot reach LLM API. Check HOSTED_OLLAMA_URL and network.",
         ) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
