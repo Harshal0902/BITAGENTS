@@ -18,6 +18,10 @@ import requests
 
 DEFAULT_HOSTED_MODEL = "llama3.2:3b"
 DEFAULT_HOSTED_BASE_URL = "https://llm.bitagents.app"
+HOSTED_CONNECT_TIMEOUT_SECONDS = float(
+    os.environ.get("HOSTED_OLLAMA_CONNECT_TIMEOUT", "15")
+)
+HOSTED_READ_TIMEOUT_SECONDS = float(os.environ.get("HOSTED_OLLAMA_READ_TIMEOUT", "120"))
 
 
 def _looks_like_model_tag(value: str) -> bool:
@@ -130,6 +134,23 @@ def _openrouter_headers(app_suffix: str = "") -> dict[str, str]:
     }
 
 
+def _request_timeouts() -> tuple[float, float]:
+    return (HOSTED_CONNECT_TIMEOUT_SECONDS, HOSTED_READ_TIMEOUT_SECONDS)
+
+
+def _parse_json_response(resp: requests.Response) -> dict[str, Any]:
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        snippet = (resp.text or "").strip().replace("\n", " ")[:240]
+        raise RuntimeError(
+            f"Hosted Ollama returned non-JSON ({resp.status_code}): {snippet or resp.reason}"
+        ) from exc
+    if not isinstance(data, dict):
+        raise RuntimeError("Hosted Ollama returned an unexpected JSON payload.")
+    return data
+
+
 def _error_from_response(resp: requests.Response) -> str:
     try:
         body = resp.json()
@@ -144,6 +165,24 @@ def _error_from_response(resp: requests.Response) -> str:
     return resp.text or resp.reason or "Unknown error"
 
 
+def _coerce_tool_arguments(arguments: Any) -> str:
+    """Ollama requires tool-call arguments to be valid JSON object strings."""
+    if isinstance(arguments, dict):
+        return json.dumps(arguments, separators=(",", ":"))
+    if not isinstance(arguments, str):
+        return "{}"
+    text = arguments.strip()
+    if not text:
+        return "{}"
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return json.dumps(parsed, separators=(",", ":"))
+    except json.JSONDecodeError:
+        pass
+    return "{}"
+
+
 def _normalize_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
     if not tool_calls:
         return []
@@ -153,20 +192,55 @@ def _normalize_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
             continue
         fn = tc.get("function") or {}
         name = fn.get("name") or tc.get("name")
-        arguments = fn.get("arguments", tc.get("arguments", {}))
-        if isinstance(arguments, dict):
-            arguments = json.dumps(arguments)
         normalized.append(
             {
                 "id": tc.get("id") or f"call_{idx}",
                 "type": tc.get("type") or "function",
                 "function": {
                     "name": name,
-                    "arguments": arguments or "{}",
+                    "arguments": _coerce_tool_arguments(
+                        fn.get("arguments", tc.get("arguments", {}))
+                    ),
                 },
             }
         )
     return normalized
+
+
+def _sanitize_messages_for_ollama(messages: list) -> list[dict[str, Any]]:
+    """Normalize chat history so Ollama can parse tool-call follow-up turns."""
+    sanitized: list[dict[str, Any]] = []
+    last_tool_name: Optional[str] = None
+
+    for raw in messages:
+        if not isinstance(raw, dict):
+            continue
+        role = raw.get("role")
+        if role not in {"system", "user", "assistant", "tool"}:
+            continue
+
+        msg: dict[str, Any] = {"role": role}
+        content = raw.get("content")
+        if content is None:
+            msg["content"] = ""
+        elif isinstance(content, str):
+            msg["content"] = content
+        else:
+            msg["content"] = json.dumps(content, separators=(",", ":"))
+
+        if role == "assistant" and raw.get("tool_calls"):
+            msg["tool_calls"] = _normalize_tool_calls(raw.get("tool_calls"))
+            if msg["tool_calls"]:
+                last_tool_name = msg["tool_calls"][0]["function"].get("name")
+
+        if role == "tool":
+            tool_name = raw.get("tool_name") or raw.get("name") or last_tool_name
+            if tool_name:
+                msg["tool_name"] = tool_name
+
+        sanitized.append(msg)
+
+    return sanitized
 
 
 def _normalize_assistant_message(raw: dict[str, Any]) -> dict[str, Any]:
@@ -188,12 +262,20 @@ def call_hosted_ollama(
     """Call self-hosted Ollama /api/chat. Returns OpenAI-shaped {\"message\": ...}."""
     payload: dict[str, Any] = {
         "model": model or HOSTED_OLLAMA_MODEL,
-        "messages": messages,
+        "messages": _sanitize_messages_for_ollama(messages),
         "stream": stream,
         "options": {"temperature": temperature},
     }
     if tools:
-        payload["tools"] = tools
+        has_tool_history = any(
+            isinstance(m, dict) and (
+                m.get("role") == "tool"
+                or (m.get("role") == "assistant" and m.get("tool_calls"))
+            )
+            for m in payload["messages"]
+        )
+        if not has_tool_history:
+            payload["tools"] = tools
 
     url = f"{HOSTED_OLLAMA_BASE_URL}/api/chat"
     last_error = "Unknown hosted Ollama error"
@@ -203,9 +285,28 @@ def call_hosted_ollama(
                 url,
                 json=payload,
                 headers=_hosted_headers(),
-                timeout=180,
+                timeout=_request_timeouts(),
                 stream=stream,
             )
+        except requests.exceptions.ConnectTimeout as exc:
+            last_error = (
+                f"Connection to {HOSTED_OLLAMA_BASE_URL} timed out after "
+                f"{HOSTED_CONNECT_TIMEOUT_SECONDS:g}s. Check HOSTED_OLLAMA_URL, DNS, "
+                f"firewall, and that the Ollama gateway is running."
+            )
+            if attempt < 3:
+                time.sleep(1.5 * attempt)
+                continue
+            raise RuntimeError(last_error) from exc
+        except requests.exceptions.ReadTimeout as exc:
+            last_error = (
+                f"Hosted Ollama read timed out after {HOSTED_READ_TIMEOUT_SECONDS:g}s. "
+                f"The model may be overloaded or tool calls are taking too long."
+            )
+            if attempt < 3:
+                time.sleep(1.5 * attempt)
+                continue
+            raise RuntimeError(last_error) from exc
         except requests.exceptions.RequestException as exc:
             last_error = str(exc)
             if attempt < 3:
@@ -225,7 +326,7 @@ def call_hosted_ollama(
         if stream:
             raise RuntimeError("Streaming responses are not used by the agent loop yet.")
 
-        data = resp.json()
+        data = _parse_json_response(resp)
         message = data.get("message")
         if not isinstance(message, dict):
             last_error = "Hosted Ollama returned no message."
@@ -290,6 +391,89 @@ def call_openrouter(
         return {"message": _normalize_assistant_message(message)}
 
     raise RuntimeError(f"OpenRouter API error: {last_error}")
+
+
+def ping_hosted_ollama() -> dict[str, Any]:
+    """Lightweight connectivity check for /health and local debugging."""
+    if not use_hosted_ollama():
+        return {"ok": False, "error": "HOSTED_MODEL_API_KEY is not set"}
+    url = f"{HOSTED_OLLAMA_BASE_URL}/api/chat"
+    started = time.time()
+    try:
+        resp = requests.post(
+            url,
+            json={
+                "model": HOSTED_OLLAMA_MODEL,
+                "messages": [{"role": "user", "content": "Reply with exactly: ok"}],
+                "stream": False,
+                "options": {"temperature": 0},
+            },
+            headers=_hosted_headers(),
+            timeout=(min(HOSTED_CONNECT_TIMEOUT_SECONDS, 10), min(HOSTED_READ_TIMEOUT_SECONDS, 45)),
+        )
+    except requests.exceptions.ConnectTimeout:
+        return {
+            "ok": False,
+            "url": url,
+            "model": HOSTED_OLLAMA_MODEL,
+            "latency_ms": int((time.time() - started) * 1000),
+            "error": (
+                f"Connection timed out after {HOSTED_CONNECT_TIMEOUT_SECONDS:g}s. "
+                "Verify HOSTED_OLLAMA_URL and that llm.bitagents.app is reachable."
+            ),
+        }
+    except requests.exceptions.ReadTimeout:
+        return {
+            "ok": False,
+            "url": url,
+            "model": HOSTED_OLLAMA_MODEL,
+            "latency_ms": int((time.time() - started) * 1000),
+            "error": (
+                f"Model response timed out after {min(HOSTED_READ_TIMEOUT_SECONDS, 45):g}s."
+            ),
+        }
+    except requests.exceptions.RequestException as exc:
+        return {
+            "ok": False,
+            "url": url,
+            "model": HOSTED_OLLAMA_MODEL,
+            "latency_ms": int((time.time() - started) * 1000),
+            "error": str(exc),
+        }
+
+    latency_ms = int((time.time() - started) * 1000)
+    if resp.status_code >= 400:
+        return {
+            "ok": False,
+            "url": url,
+            "model": HOSTED_OLLAMA_MODEL,
+            "latency_ms": latency_ms,
+            "status_code": resp.status_code,
+            "error": _error_from_response(resp),
+        }
+
+    try:
+        data = _parse_json_response(resp)
+    except RuntimeError as exc:
+        return {
+            "ok": False,
+            "url": url,
+            "model": HOSTED_OLLAMA_MODEL,
+            "latency_ms": latency_ms,
+            "status_code": resp.status_code,
+            "error": str(exc),
+        }
+
+    message = data.get("message") if isinstance(data.get("message"), dict) else {}
+    content = str(message.get("content") or "").strip()
+    return {
+        "ok": True,
+        "url": url,
+        "model": HOSTED_OLLAMA_MODEL,
+        "latency_ms": latency_ms,
+        "sample": content[:120] or None,
+        "tool_calls_supported": bool(message.get("tool_calls")),
+    }
 
 
 def call_llm(

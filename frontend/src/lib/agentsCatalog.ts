@@ -66,7 +66,7 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     name: "DCA Agent",
     category: "Trading",
     description: "Set up dollar-cost averaging on Solana. Schedule recurring token buys, preview Jupiter quotes, and manage plans from natural language.",
-    tagline: "Recurring buys · Jupiter swaps · hosted LLM",
+    tagline: "Recurring buys · hosted LLM",
     pricePerTask: "0.5% / tx",
     runs: "-",
     volumeSol: "-",

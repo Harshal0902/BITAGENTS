@@ -52,6 +52,7 @@ from hosted_llm import (
     HOSTED_OLLAMA_MODEL,
     llm_configured,
     llm_provider,
+    ping_hosted_ollama,
     use_hosted_ollama,
 )
 from dca_agent import (
@@ -251,9 +252,10 @@ def _startup() -> None:
 
 
 @app.get("/health")
-def health() -> dict[str, Any]:
+def health(ping_llm: bool = Query(False)) -> dict[str, Any]:
     wallet = get_wallet_pubkey()
     agent_info = get_agent_wallet_info()
+    llm_ping = ping_hosted_ollama() if ping_llm and use_hosted_ollama() else None
     return {
         "status": "ok",
         "agents": {
@@ -270,6 +272,8 @@ def health() -> dict[str, Any]:
         },
         "llm": llm_provider(),
         "llm_configured": llm_configured(),
+        "llm_reachable": llm_ping.get("ok") if llm_ping else None,
+        "llm_ping": llm_ping,
         "hosted_ollama_url": HOSTED_OLLAMA_BASE_URL if use_hosted_ollama() else None,
         "hosted_ollama_model": HOSTED_OLLAMA_MODEL if use_hosted_ollama() else None,
         "dca_model": MODEL,
@@ -286,6 +290,18 @@ def health() -> dict[str, Any]:
         "any_spl_token": agent_info.get("any_spl_token", True),
         "common_tokens": agent_info.get("common_tokens", []),
     }
+
+
+@app.get("/health/llm")
+def health_llm() -> dict[str, Any]:
+    if not use_hosted_ollama():
+        return {
+            "ok": False,
+            "provider": llm_provider(),
+            "error": "HOSTED_MODEL_API_KEY is not set",
+        }
+    result = ping_hosted_ollama()
+    return {"provider": llm_provider(), **result}
 
 
 @app.get("/kickstart/health")

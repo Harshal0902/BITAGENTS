@@ -4,7 +4,7 @@ const cards = [
   {
     icon: ArrowLeftRight,
     title: "DCA Agent",
-    body: "Set up recurring Solana buys from natural language. Schedule Jupiter swaps, preview quotes, and manage plans without leaving chat.",
+    body: "Set up recurring Solana buys from natural language. Schedule swaps, preview quotes, and manage plans without leaving chat.",
   },
   {
     icon: Workflow,
@@ -39,7 +39,7 @@ export function Product() {
               is not available yet.
             </p>
           </div>
-          <div className="grid gap-px border border-grid bg-[color:var(--border)] sm:grid-cols-2">
+          <div className="grid gap-px border border-grid bg-border sm:grid-cols-2">
             {cards.map(({ icon: Icon, title, body }) => (
               <div key={title} className="bg-background p-6">
                 <Icon className="h-5 w-5 text-signal" />

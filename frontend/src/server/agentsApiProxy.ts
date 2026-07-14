@@ -25,8 +25,9 @@ function getAuthToken(request?: Request): string | undefined {
   return header.slice("Bearer ".length).trim();
 }
 
-export async function proxyAgentsHealth(): Promise<Response> {
-  return fetch(`${getAgentsBaseUrl()}/health`, {
+export async function proxyAgentsHealth(pingLlm = false): Promise<Response> {
+  const params = pingLlm ? "?ping_llm=true" : "";
+  return fetch(`${getAgentsBaseUrl()}/health${params}`, {
     cache: "no-store",
     headers: buildHeaders(),
   });
@@ -169,8 +170,8 @@ export async function proxyKickstartUpdateOrder(
   });
 }
 
-export async function proxyDcaHealth(): Promise<Response> {
-  return proxyAgentsHealth();
+export async function proxyDcaHealth(pingLlm = false): Promise<Response> {
+  return proxyAgentsHealth(pingLlm);
 }
 
 export async function proxyDcaAuthChallenge(userWallet: string): Promise<Response> {

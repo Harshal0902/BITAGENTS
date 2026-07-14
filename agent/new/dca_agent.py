@@ -2814,6 +2814,18 @@ def _merge_tool_args(stored: dict, current: dict) -> dict:
     return merged
 
 
+def _json_compact(value: Any) -> str:
+    """Compact JSON safe for Ollama tool-call argument strings."""
+
+    def _default(obj: Any) -> Any:
+        if isinstance(obj, float):
+            text = format(obj, ".12f").rstrip("0").rstrip(".")
+            return text if text else "0"
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+    return json.dumps(value, separators=(",", ":"), default=_default)
+
+
 def _format_pending_execution_reply(tool_name: str, result: str) -> str:
     try:
         data = json.loads(result)
@@ -2822,8 +2834,25 @@ def _format_pending_execution_reply(tool_name: str, result: str) -> str:
 
     if data.get("status") == "confirmation_required":
         return str(data.get("message") or result)
+    if data.get("status") == "cancelled":
+        return str(data.get("message") or "Action cancelled.")
     if "error" in data:
         return f"Could not complete the action: {data['error']}"
+
+    if tool_name == "list_dca_plans":
+        return _format_dca_plans_reply(data)
+
+    if tool_name == "get_user_deposit_balance" and isinstance(data.get("balances"), list):
+        lines = ["**Your deposit balances**"]
+        for row in data["balances"]:
+            token = row.get("token", "?")
+            available = row.get("available", 0)
+            deposited = row.get("deposited", 0)
+            lines.append(f"- **{token}**: {available} available ({deposited} deposited)")
+        if not data["balances"]:
+            lines.append("- No verified deposits yet.")
+        lines.append("\nNot financial advice. DYOR.")
+        return "\n".join(lines)
 
     if tool_name == "create_dca_plan" and data.get("status") == "created":
         plan = data.get("plan") or {}
@@ -2908,13 +2937,12 @@ def _check_action_confirmation(
         with _CONFIRMATION_LOCK:
             pending = _pending_confirmations.pop(key, None)
         if pending:
-            return json.dumps(
+            return _json_compact(
                 {
                     "status": "cancelled",
                     "message": "Action cancelled. No changes were made.",
                     "cancelled_action": pending.get("summary") or summary,
-                },
-                indent=2,
+                }
             ), args
         # No pending action - treat "no" as not confirmed and require confirmation.
 
@@ -2934,7 +2962,7 @@ def _check_action_confirmation(
         }
 
     details = _pending_action_details(tool_name, args)
-    return json.dumps(
+    return _json_compact(
         {
             "status": "confirmation_required",
             "message": (
@@ -2944,8 +2972,7 @@ def _check_action_confirmation(
             "pending_action": summary,
             "confirmation_details": details,
             "tool": tool_name,
-        },
-        indent=2,
+        }
     ), args
 
 
@@ -3012,7 +3039,7 @@ def execute_tool(
         if blocked:
             return blocked
 
-        return json.dumps(func(**args), indent=2)
+        return json.dumps(func(**args), separators=(",", ":"), default=lambda o: format(o, ".12f").rstrip("0").rstrip(".") if isinstance(o, float) else str(o))
     except TypeError as e:
         return json.dumps({"error": str(e), "received_args": tool_args})
     except Exception as e:
@@ -3127,7 +3154,10 @@ def run_agent_with_actions(
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history
 
     for i in range(12):
+        print(f"\n  🤖 LLM call [{i + 1}/12] via {llm_provider()} …")
+        started = time.time()
         response   = call_openrouter(messages)
+        print(f"  ⏱️  LLM responded in {time.time() - started:.1f}s")
         message    = response["message"]
         tool_calls = message.get("tool_calls") or []
 
@@ -3137,13 +3167,10 @@ def run_agent_with_actions(
             return reply, conversation_history, actions
 
         print(f"\n  🔧 [{i + 1}] Tools: {[tc['function']['name'] for tc in tool_calls]}")
-        messages.append({
-            "role":       "assistant",
-            "content":    message.get("content", ""),
-            "tool_calls": tool_calls,
-        })
+        sanitized_tool_calls: list[dict[str, Any]] = []
+        parsed_calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
 
-        for tc in tool_calls:
+        for idx, tc in enumerate(tool_calls):
             name = tc["function"]["name"]
             args = tc["function"].get("arguments", {})
             if isinstance(args, str):
@@ -3151,6 +3178,21 @@ def run_agent_with_actions(
                     args = json.loads(args)
                 except Exception:
                     args = {}
+            if not isinstance(args, dict):
+                args = {}
+            call_id = tc.get("id") or f"call_{idx}"
+            sanitized_tool_calls.append({
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": _json_compact(args),
+                },
+            })
+            parsed_calls.append((name, args, tc))
+
+        results_this_round: list[tuple[str, dict[str, Any], str]] = []
+        for name, args, tc in parsed_calls:
             print(f"  📡 {name}({args})")
             result = execute_tool(
                 name,
@@ -3161,10 +3203,26 @@ def run_agent_with_actions(
             )
             print("  ✅ Done")
             actions.append({"tool": name, "args": args, "result": result})
-            tool_message: dict[str, Any] = {"role": "tool", "content": result}
-            if tc.get("id"):
-                tool_message["tool_call_id"] = tc["id"]
-            messages.append(tool_message)
+            results_this_round.append((name, args, result))
+
+        # Hosted Ollama struggles with multi-turn tool follow-ups; reply locally.
+        if use_hosted_ollama() and results_this_round:
+            reply_parts = [
+                _format_pending_execution_reply(name, result)
+                for name, _, result in results_this_round
+            ]
+            reply = "\n\n".join(part for part in reply_parts if part)
+            conversation_history.append({"role": "assistant", "content": reply})
+            return reply, conversation_history, actions
+
+        messages.append({
+            "role": "assistant",
+            "content": message.get("content") or "",
+            "tool_calls": sanitized_tool_calls,
+        })
+
+        for (_, _, _), (_, _, result) in zip(parsed_calls, results_this_round):
+            messages.append({"role": "tool", "content": result})
 
     reply = "Agent reached max iterations."
     conversation_history.append({"role": "assistant", "content": reply})

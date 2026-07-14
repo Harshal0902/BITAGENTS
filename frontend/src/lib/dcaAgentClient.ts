@@ -17,8 +17,33 @@ export type DcaAgentHealth = {
   rpc: string;
   wallet: string | null;
   wallet_configured: boolean;
+  llm?: string;
+  llm_configured?: boolean;
+  llm_reachable?: boolean | null;
+  llm_ping?: {
+    ok?: boolean;
+    error?: string;
+    latency_ms?: number;
+    url?: string;
+    model?: string;
+  } | null;
   detail?: string;
 };
+
+async function readJsonResponse(res: Response): Promise<Record<string, unknown>> {
+  const text = await res.text();
+  if (!text.trim()) {
+    throw new Error(`Empty response from DCA agent API (${res.status})`);
+  }
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    const snippet = text.trim().slice(0, 180);
+    throw new Error(
+      `DCA agent API returned non-JSON (${res.status}): ${snippet}`
+    );
+  }
+}
 
 export type DcaAgentChatResponse = {
   reply: string;
@@ -36,9 +61,10 @@ export type AgentAction = {
   transactions: ParsedTransaction[];
 };
 
-export async function fetchDcaAgentHealth(): Promise<DcaAgentHealth | null> {
+export async function fetchDcaAgentHealth(pingLlm = false): Promise<DcaAgentHealth | null> {
   try {
-    const res = await fetch("/api/agents/dca/health", { cache: "no-store" });
+    const params = pingLlm ? "?ping_llm=true" : "";
+    const res = await fetch(`/api/agents/dca/health${params}`, { cache: "no-store" });
     if (!res.ok) return null;
     return (await res.json()) as DcaAgentHealth;
   } catch {
@@ -63,9 +89,14 @@ export async function sendDcaAgentMessage(
     }),
   });
 
-  const data = await res.json();
+  const data = await readJsonResponse(res);
   if (!res.ok) {
-    const detail = typeof data.detail === "string" ? data.detail : data.error ?? "Request failed";
+    const detail =
+      typeof data.detail === "string"
+        ? data.detail
+        : typeof data.error === "string"
+          ? data.error
+          : "Request failed";
     throw new Error(detail);
   }
 

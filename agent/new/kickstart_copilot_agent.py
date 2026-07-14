@@ -1544,12 +1544,10 @@ def run_kickstart_agent(
             conversation_history.append({"role": "assistant", "content": reply})
             return reply, conversation_history, actions
 
-        messages.append({
-            "role": "assistant",
-            "content": message.get("content"),
-            "tool_calls": tool_calls,
-        })
-        for tc in tool_calls:
+        sanitized_tool_calls: list[dict[str, Any]] = []
+        parsed_calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+
+        for idx, tc in enumerate(tool_calls):
             fn = tc.get("function") or {}
             name = fn.get("name", "")
             raw_args = fn.get("arguments") or "{}"
@@ -1557,6 +1555,25 @@ def run_kickstart_agent(
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
             except json.JSONDecodeError:
                 args = {}
+            if not isinstance(args, dict):
+                args = {}
+            call_id = tc.get("id") or f"call_{idx}"
+            sanitized_tool_calls.append({
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": json.dumps(args, separators=(",", ":")),
+                },
+            })
+            parsed_calls.append((name, args, tc))
+
+        messages.append({
+            "role": "assistant",
+            "content": message.get("content") or "",
+            "tool_calls": sanitized_tool_calls,
+        })
+        for name, args, tc in parsed_calls:
             result = execute_tool(
                 name,
                 args,
@@ -1568,6 +1585,7 @@ def run_kickstart_agent(
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.get("id", f"call_{i}"),
+                "tool_name": name,
                 "content": result,
             })
 
