@@ -2897,6 +2897,7 @@ def _try_execute_pending_confirmation(
     user_wallet: Optional[str],
     session_id: Optional[str],
     user_input: Optional[str],
+    conversation_history: Optional[list] = None,
 ) -> Optional[tuple[str, dict, str, str]]:
     """When the user confirms, run the stored pending action immediately."""
     if not user_wallet or not _user_confirmed(user_input) or _user_declined(user_input):
@@ -2905,6 +2906,13 @@ def _try_execute_pending_confirmation(
     key = _confirmation_key(user_wallet, session_id)
     with _CONFIRMATION_LOCK:
         pending = _pending_confirmations.pop(key, None)
+    if not pending and conversation_history:
+        recovered = _recover_create_dca_from_history(conversation_history)
+        if recovered:
+            pending = {
+                "tool": "create_dca_plan",
+                "args": {**recovered, "user_wallet": user_wallet.strip()},
+            }
     if not pending:
         return None
 
@@ -3049,6 +3057,107 @@ def execute_tool(
         return json.dumps({"error": str(e)})
 
 
+def _parse_create_dca_request(user_input: str) -> Optional[dict[str, Any]]:
+    """Parse natural-language DCA / swap schedules without relying on LLM tool calls."""
+    text = (user_input or "").strip()
+    lower = text.lower()
+    if not text or _user_confirmed(text) or _user_declined(text):
+        return None
+    if not re.search(r"\b(swap|dca|buy|every|recurring|schedule|trx|transaction)\b", lower):
+        return None
+
+    mint_match = re.search(r"[1-9A-HJ-NP-Za-km-z]{32,44}", text)
+    if not mint_match:
+        return None
+    output_token = mint_match.group(0)
+
+    amount_match = re.search(r"\b(\d+(?:\.\d+)?)\s*sol\b", lower)
+    if not amount_match:
+        amount_match = re.search(r"\b(?:swap|buy|spend)\s+(\d+(?:\.\d+)?)\b", lower)
+    if not amount_match:
+        return None
+    amount_per_buy = float(amount_match.group(1))
+
+    interval_match = re.search(
+        r"every\s+(\d+)\s*(second|seconds|sec|secs|s|minute|minutes|min|mins|m|hour|hours|h|day|days|d)\b",
+        lower,
+    )
+    if not interval_match:
+        return None
+    count, unit = interval_match.groups()
+    unit = unit.rstrip(".")
+    unit_aliases = {
+        "sec": "seconds",
+        "secs": "seconds",
+        "s": "seconds",
+        "min": "minutes",
+        "mins": "minutes",
+        "m": "minutes",
+        "h": "hours",
+        "d": "days",
+    }
+    interval = f"{count} {unit_aliases.get(unit, unit)}"
+
+    max_match = re.search(
+        r"(?:for\s+)?(?:next\s+)?(\d+)\s*(?:trx|transactions?|buys?|times?|executions?)\b",
+        lower,
+    )
+    if not max_match:
+        max_match = re.search(r"\b(\d+)\s*(?:trx|transactions?|buys?)\b", lower)
+    max_executions = int(max_match.group(1)) if max_match else None
+
+    return {
+        "input_token": "SOL",
+        "output_token": output_token,
+        "amount_per_buy": amount_per_buy,
+        "interval": interval,
+        "max_executions": max_executions,
+    }
+
+
+def _recover_create_dca_from_history(conversation_history: list) -> Optional[dict[str, Any]]:
+    for msg in reversed(conversation_history or []):
+        if msg.get("role") != "user":
+            continue
+        content = str(msg.get("content") or "")
+        if content.startswith("[Connected user wallet:"):
+            content = content.split("\n", 1)[-1]
+        if content.startswith("[Instruction:"):
+            continue
+        parsed = _parse_create_dca_request(content)
+        if parsed:
+            return parsed
+    return None
+
+
+def _try_stage_dca_plan_confirmation(
+    user_wallet: Optional[str],
+    session_id: Optional[str],
+    user_input: str,
+) -> Optional[str]:
+    if not user_wallet or _user_confirmed(user_input) or _user_declined(user_input):
+        return None
+    parsed = _parse_create_dca_request(user_input)
+    if not parsed:
+        return None
+    if parsed.get("max_executions") is None:
+        return None
+
+    args = {**parsed, "user_wallet": user_wallet.strip()}
+    key = _confirmation_key(user_wallet, session_id)
+    with _CONFIRMATION_LOCK:
+        _pending_confirmations[key] = {
+            "tool": "create_dca_plan",
+            "args": args,
+            "summary": _summarize_pending_action("create_dca_plan", parsed),
+            "details": _pending_action_details("create_dca_plan", parsed),
+        }
+    return (
+        f"Please confirm before I proceed: {_summarize_pending_action('create_dca_plan', parsed)}. "
+        "Reply **yes** or **confirm** to proceed, or **no** to cancel."
+    )
+
+
 def _detect_plan_list_intent(user_input: str) -> Optional[dict[str, Any]]:
     lower = user_input.lower()
     if re.search(r"\b(detail|details|history|execution|executions|pause|resume|cancel)\b", lower):
@@ -3102,13 +3211,27 @@ def run_agent_with_actions(
     """Run one user turn; returns reply, updated history, and tool action trace."""
     actions: list[dict[str, Any]] = []
 
-    pending_execution = _try_execute_pending_confirmation(user_wallet, session_id, user_input)
+    pending_execution = _try_execute_pending_confirmation(
+        user_wallet, session_id, user_input, conversation_history
+    )
     if pending_execution:
         tool_name, args, result, reply = pending_execution
         actions.append({"tool": tool_name, "args": args, "result": result})
         conversation_history.append({"role": "user", "content": user_input.strip()})
         conversation_history.append({"role": "assistant", "content": reply})
         return reply, conversation_history, actions
+
+    if user_wallet and not _user_confirmed(user_input) and not _user_declined(user_input):
+        staged_reply = _try_stage_dca_plan_confirmation(user_wallet, session_id, user_input)
+        if staged_reply:
+            actions.append({
+                "tool": "create_dca_plan",
+                "args": _parse_create_dca_request(user_input) or {},
+                "result": json.dumps({"status": "confirmation_required", "message": staged_reply}),
+            })
+            conversation_history.append({"role": "user", "content": user_input.strip()})
+            conversation_history.append({"role": "assistant", "content": staged_reply})
+            return staged_reply, conversation_history, actions
 
     plan_intent = _detect_plan_list_intent(user_input) if user_wallet else None
     if plan_intent:
@@ -3165,6 +3288,15 @@ def run_agent_with_actions(
         tool_calls = message.get("tool_calls") or []
 
         if not tool_calls:
+            if _user_confirmed(user_input) and user_wallet:
+                recovered = _try_execute_pending_confirmation(
+                    user_wallet, session_id, user_input, conversation_history
+                )
+                if recovered:
+                    tool_name, args, result, reply = recovered
+                    actions.append({"tool": tool_name, "args": args, "result": result})
+                    conversation_history.append({"role": "assistant", "content": reply})
+                    return reply, conversation_history, actions
             reply = message.get("content", "")
             conversation_history.append({"role": "assistant", "content": reply})
             return reply, conversation_history, actions
@@ -3208,8 +3340,8 @@ def run_agent_with_actions(
             actions.append({"tool": name, "args": args, "result": result})
             results_this_round.append((name, args, result))
 
-        # Hosted Ollama struggles with multi-turn tool follow-ups; reply locally.
-        if use_hosted_ollama() and results_this_round:
+        # CapIX / hosted Ollama: format tool results locally instead of a second LLM turn.
+        if (use_hosted_ollama() or use_capix()) and results_this_round:
             reply_parts = [
                 _format_pending_execution_reply(name, result)
                 for name, _, result in results_this_round

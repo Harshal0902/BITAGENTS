@@ -376,6 +376,74 @@ def get_token_performance(token: str, days: int = 7) -> dict[str, Any]:
     }
 
 
+def get_top_token_holders(token: str, limit: int = 10) -> dict[str, Any]:
+    """Fetch largest SPL token accounts from Solana RPC (real on-chain data)."""
+    from dca_agent import resolve_token, sol_rpc
+
+    limit = max(1, min(int(limit), 20))
+    bundle = _token_bundle(token)
+    if bundle.get("error"):
+        resolved = resolve_token(token)
+        if "error" in resolved:
+            return resolved
+        mint = resolved["mint"]
+        symbol = resolved["symbol"]
+        holder_count_screener = None
+    else:
+        row = _row(bundle)
+        mint = row.get("mint")
+        symbol = row.get("symbol")
+        holder_count_screener = row.get("holder_count")
+
+    if not mint:
+        return {"error": "Could not resolve token mint."}
+
+    largest = sol_rpc("getTokenLargestAccounts", [mint, {"commitment": "confirmed"}])
+    accounts = (largest or {}).get("value") or []
+    if not accounts:
+        return {
+            "error": "No holder data returned from Solana RPC for this mint.",
+            "symbol": symbol,
+            "mint": mint,
+        }
+
+    supply = sol_rpc("getTokenSupply", [mint])
+    total_ui = float(((supply or {}).get("value") or {}).get("uiAmount") or 0)
+
+    holders: list[dict[str, Any]] = []
+    for rank, acct in enumerate(accounts[:limit], start=1):
+        token_account = acct.get("address")
+        ui_amount = float(acct.get("uiAmount") or 0)
+        pct = round((ui_amount / total_ui) * 100, 4) if total_ui > 0 else None
+        owner_wallet = None
+        if token_account:
+            info = sol_rpc(
+                "getAccountInfo",
+                [token_account, {"encoding": "jsonParsed", "commitment": "confirmed"}],
+            )
+            parsed = (((info or {}).get("value") or {}).get("data") or {}).get("parsed") or {}
+            owner_wallet = (parsed.get("info") or {}).get("owner")
+        holders.append(
+            {
+                "rank": rank,
+                "wallet": owner_wallet,
+                "token_account": token_account,
+                "amount": ui_amount,
+                "percent_of_supply": pct,
+            }
+        )
+
+    return {
+        "symbol": symbol,
+        "mint": mint,
+        "total_supply": total_ui,
+        "holder_count_screener": holder_count_screener,
+        "top_holders": holders,
+        "source": "solana_rpc_getTokenLargestAccounts",
+        "attribution": "On-chain holder balances via Solana RPC. Total holder count from EASY Screener when available.",
+    }
+
+
 def _locked_percent(locked: Optional[dict[str, Any]]) -> Optional[float]:
     if not locked:
         return None
@@ -776,6 +844,7 @@ TOOLS = [
     {"type": "function", "function": {"name": "search_tokens", "description": "Search EASY Screener for tokens by name, symbol, or keyword.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}, "verified_only": {"type": "boolean"}, "tag": {"type": "string"}, "category": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {"name": "get_token_overview", "description": "Full verified token summary.", "parameters": {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]}}},
     {"type": "function", "function": {"name": "get_token_analytics", "description": "Live price, mcap, liquidity, volume, holders, buy/sell ratio.", "parameters": {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]}}},
+    {"type": "function", "function": {"name": "get_top_token_holders", "description": "Top wallet holders by on-chain balance (Solana RPC). Never invent holder lists.", "parameters": {"type": "object", "properties": {"token": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["token"]}}},
     {"type": "function", "function": {"name": "get_token_performance", "description": "Historical performance over N days.", "parameters": {"type": "object", "properties": {"token": {"type": "string"}, "days": {"type": "integer"}}, "required": ["token"]}}},
     {"type": "function", "function": {"name": "analyze_token_health", "description": "Strengths, weaknesses, and health score /100.", "parameters": {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]}}},
     {"type": "function", "function": {"name": "get_improvement_suggestions", "description": "Actionable recommendations for a token project.", "parameters": {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]}}},
@@ -802,6 +871,7 @@ TOOL_MAP = {
     "search_tokens": search_tokens,
     "get_token_overview": get_token_overview,
     "get_token_analytics": get_token_analytics,
+    "get_top_token_holders": get_top_token_holders,
     "get_token_performance": get_token_performance,
     "analyze_token_health": analyze_token_health,
     "get_improvement_suggestions": get_improvement_suggestions,
@@ -895,6 +965,10 @@ HEALTH_INTENT_RE = re.compile(
     r"\b(health|health score|risk profile|token health|how healthy)\b",
     re.I,
 )
+TOP_HOLDERS_INTENT_RE = re.compile(
+    r"\b(top\s*\d*\s*holders?|who\s+are\s+the\s+(?:top\s+)?holders?|holder\s+breakdown|largest\s+holders?|biggest\s+holders?)\b",
+    re.I,
+)
 ANALYZE_INTENT_RE = re.compile(r"\b(analyze|analyse|check|review|assess)\b", re.I)
 
 
@@ -982,6 +1056,76 @@ def _extract_token_query(user_input: str) -> Optional[str]:
     if tickers:
         return tickers[-1].upper()
     return None
+
+
+def _extract_token_from_context(
+    user_input: str,
+    conversation_history: Optional[list] = None,
+) -> Optional[str]:
+    token = _extract_token_query(user_input)
+    if token:
+        return token
+    for msg in reversed(conversation_history or []):
+        content = str(msg.get("content") or "")
+        mint_match = re.search(r"Mint:\s*`([1-9A-HJ-NP-Za-km-z]{32,44})`", content)
+        if mint_match:
+            return mint_match.group(1)
+        sym_match = re.search(r"\(([A-Za-z][A-Za-z0-9]{1,24})\)", content)
+        if sym_match:
+            return sym_match.group(1).upper()
+        sym_match = re.search(r"\*\*([A-Za-z][A-Za-z0-9]+)\s*\(", content)
+        if sym_match:
+            return sym_match.group(1).upper()
+    return None
+
+
+def _format_top_holders_reply(data: dict[str, Any]) -> str:
+    if data.get("error"):
+        return str(data["error"])
+
+    lines = [
+        f"**Top holders — {data.get('symbol')}**",
+        f"Mint: `{data.get('mint')}`",
+    ]
+    if data.get("holder_count_screener") is not None:
+        lines.append(f"Total holders (EASY Screener): **{data['holder_count_screener']}**")
+    lines.append("")
+
+    for row in data.get("top_holders") or []:
+        wallet = row.get("wallet") or row.get("token_account") or "unknown"
+        amount = row.get("amount")
+        pct = row.get("percent_of_supply")
+        pct_label = f" ({pct}%)" if pct is not None else ""
+        lines.append(f"{row.get('rank')}. `{wallet}` — {amount:,.4f} tokens{pct_label}")
+
+    lines.extend([
+        "",
+        "_On-chain balances via Solana RPC (`getTokenLargestAccounts`)._",
+        "",
+        DISCLAIMER,
+    ])
+    return "\n".join(lines)
+
+
+def _try_top_holders_shortcut(
+    user_input: str,
+    conversation_history: Optional[list] = None,
+) -> Optional[tuple[str, list[dict[str, Any]]]]:
+    if not TOP_HOLDERS_INTENT_RE.search(user_input):
+        return None
+    token = _extract_token_from_context(user_input, conversation_history)
+    if not token:
+        return None
+    limit_match = re.search(r"\btop\s+(\d+)\s+holders?\b", user_input, re.I)
+    limit = int(limit_match.group(1)) if limit_match else 10
+    result = get_top_token_holders(token, limit=limit)
+    reply = _format_top_holders_reply(result)
+    actions = [{
+        "tool": "get_top_token_holders",
+        "args": {"token": token, "limit": limit},
+        "result": json.dumps(result, indent=2),
+    }]
+    return reply, actions
 
 
 def _format_health_reply(data: dict[str, Any]) -> str:
@@ -1523,7 +1667,11 @@ def run_kickstart_agent(
         conversation_history.append({"role": "assistant", "content": reply})
         return reply, conversation_history, actions
 
-    shortcut = _try_health_shortcut(prompt) or _try_overview_shortcut(prompt)
+    shortcut = (
+        _try_health_shortcut(prompt)
+        or _try_overview_shortcut(prompt)
+        or _try_top_holders_shortcut(prompt, conversation_history)
+    )
     if shortcut:
         reply, actions = shortcut
         conversation_history.append({"role": "user", "content": prompt})
