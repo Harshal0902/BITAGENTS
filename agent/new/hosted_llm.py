@@ -1,8 +1,8 @@
 """
-Self-hosted Ollama chat API client (llm.bitagents.app).
+LLM clients: CapIX (primary), self-hosted Ollama, OpenRouter fallback.
 
-Replaces OpenRouter when HOSTED_OLLAMA_URL / HOSTED_MODEL_API_KEY are set.
-Docs: POST {base}/api/chat with X-API-Key header, stream=false for full JSON.
+CapIX: OpenAI-compatible POST {base}/v1/chat/completions with Bearer auth.
+Ollama: POST {base}/api/chat with X-API-Key header.
 """
 
 from __future__ import annotations
@@ -16,12 +16,16 @@ from urllib.parse import urlparse
 
 import requests
 
+DEFAULT_CAPIX_MODEL = "meta-llama/llama-3.1-8b-instruct"
+DEFAULT_CAPIX_API_URL = "https://www.capix.network/api/v1/chat/completions"
 DEFAULT_HOSTED_MODEL = "llama3.2:3b"
 DEFAULT_HOSTED_BASE_URL = "https://llm.bitagents.app"
 HOSTED_CONNECT_TIMEOUT_SECONDS = float(
     os.environ.get("HOSTED_OLLAMA_CONNECT_TIMEOUT", "15")
 )
 HOSTED_READ_TIMEOUT_SECONDS = float(os.environ.get("HOSTED_OLLAMA_READ_TIMEOUT", "120"))
+CAPIX_CONNECT_TIMEOUT_SECONDS = float(os.environ.get("CAPIX_CONNECT_TIMEOUT", "15"))
+CAPIX_READ_TIMEOUT_SECONDS = float(os.environ.get("CAPIX_READ_TIMEOUT", "120"))
 
 
 def _looks_like_model_tag(value: str) -> bool:
@@ -79,6 +83,14 @@ HOSTED_OLLAMA_API_KEY = (
     or ""
 ).strip()
 
+CAPIX_API_KEY = (
+    os.environ.get("CAPIX_API_KEY")
+    or os.environ.get("CAPIX_API_TOKEN")
+    or ""
+).strip()
+CAPIX_API_URL = os.environ.get("CAPIX_API_URL", DEFAULT_CAPIX_API_URL).strip() or DEFAULT_CAPIX_API_URL
+CAPIX_MODEL = os.environ.get("CAPIX_MODEL", DEFAULT_CAPIX_MODEL).strip() or DEFAULT_CAPIX_MODEL
+
 # Legacy OpenRouter (optional fallback)
 OPEN_ROUTER_API = (
     os.environ.get("OPEN_ROUTER_API", "")
@@ -91,11 +103,17 @@ OPEN_ROUTER_SITE_URL = os.environ.get("OPEN_ROUTER_SITE_URL", "https://bitagents
 OPEN_ROUTER_APP_NAME = os.environ.get("OPEN_ROUTER_APP_NAME", "BIT Agents")
 
 
+def use_capix() -> bool:
+    return bool(CAPIX_API_KEY)
+
+
 def use_hosted_ollama() -> bool:
-    return bool(HOSTED_OLLAMA_API_KEY)
+    return bool(HOSTED_OLLAMA_API_KEY) and not use_capix()
 
 
 def llm_provider() -> str:
+    if use_capix():
+        return "capix"
     if use_hosted_ollama():
         return "hosted_ollama"
     if OPEN_ROUTER_API:
@@ -104,7 +122,35 @@ def llm_provider() -> str:
 
 
 def llm_configured() -> bool:
-    return use_hosted_ollama() or bool(OPEN_ROUTER_API)
+    return use_capix() or bool(HOSTED_OLLAMA_API_KEY) or bool(OPEN_ROUTER_API)
+
+
+def default_llm_model() -> str:
+    if use_capix():
+        return CAPIX_MODEL
+    if HOSTED_OLLAMA_API_KEY:
+        return HOSTED_OLLAMA_MODEL
+    if OPEN_ROUTER_API:
+        return os.environ.get("OPEN_ROUTER_MODEL", DEFAULT_HOSTED_MODEL)
+    return CAPIX_MODEL
+
+
+DEFAULT_LLM_MODEL = default_llm_model()
+
+
+def _capix_headers() -> dict[str, str]:
+    if not CAPIX_API_KEY:
+        raise RuntimeError(
+            "CAPIX_API_KEY is not set. Add it to agent/new/.env (see .env.example)."
+        )
+    return {
+        "Authorization": f"Bearer {CAPIX_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+def _capix_timeouts() -> tuple[float, float]:
+    return (CAPIX_CONNECT_TIMEOUT_SECONDS, CAPIX_READ_TIMEOUT_SECONDS)
 
 
 def _hosted_headers() -> dict[str, str]:
@@ -339,6 +385,77 @@ def call_hosted_ollama(
     raise RuntimeError(f"Hosted Ollama API error: {last_error}")
 
 
+def call_capix(
+    messages: list,
+    *,
+    model: str,
+    tools: Optional[list] = None,
+    temperature: float = 0.2,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": model or CAPIX_MODEL,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+
+    last_error = "Unknown CapIX error"
+    for attempt in range(1, 4):
+        try:
+            resp = requests.post(
+                CAPIX_API_URL,
+                json=payload,
+                headers=_capix_headers(),
+                timeout=_capix_timeouts(),
+            )
+        except requests.exceptions.ConnectTimeout as exc:
+            last_error = (
+                f"Connection to CapIX timed out after {CAPIX_CONNECT_TIMEOUT_SECONDS:g}s. "
+                "Check CAPIX_API_URL and network."
+            )
+            if attempt < 3:
+                time.sleep(1.5 * attempt)
+                continue
+            raise RuntimeError(last_error) from exc
+        except requests.exceptions.ReadTimeout as exc:
+            last_error = (
+                f"CapIX read timed out after {CAPIX_READ_TIMEOUT_SECONDS:g}s. "
+                "The model may be overloaded."
+            )
+            if attempt < 3:
+                time.sleep(1.5 * attempt)
+                continue
+            raise RuntimeError(last_error) from exc
+        except requests.exceptions.RequestException as exc:
+            last_error = str(exc)
+            if attempt < 3:
+                time.sleep(1.5 * attempt)
+                continue
+            raise RuntimeError(f"Cannot reach CapIX API at {CAPIX_API_URL}: {last_error}") from exc
+
+        if resp.status_code >= 400:
+            last_error = _error_from_response(resp)
+            if resp.status_code in (408, 429, 500, 502, 503, 504) and attempt < 3:
+                time.sleep(1.5 * attempt)
+                continue
+            raise RuntimeError(f"CapIX API error ({resp.status_code}): {last_error}")
+
+        data = resp.json()
+        choices = data.get("choices") or []
+        if not choices:
+            last_error = "CapIX returned no choices."
+            if attempt < 3:
+                time.sleep(1.5 * attempt)
+                continue
+            raise RuntimeError(last_error)
+        message = choices[0].get("message") or {}
+        return {"message": _normalize_assistant_message(message)}
+
+    raise RuntimeError(f"CapIX API error: {last_error}")
+
+
 def call_openrouter(
     messages: list,
     *,
@@ -391,6 +508,83 @@ def call_openrouter(
         return {"message": _normalize_assistant_message(message)}
 
     raise RuntimeError(f"OpenRouter API error: {last_error}")
+
+
+def ping_capix() -> dict[str, Any]:
+    """Lightweight connectivity check for CapIX."""
+    if not use_capix():
+        return {"ok": False, "error": "CAPIX_API_KEY is not set"}
+    started = time.time()
+    try:
+        resp = requests.post(
+            CAPIX_API_URL,
+            json={
+                "model": CAPIX_MODEL,
+                "messages": [{"role": "user", "content": "Reply with exactly: ok"}],
+                "temperature": 0,
+            },
+            headers=_capix_headers(),
+            timeout=(min(CAPIX_CONNECT_TIMEOUT_SECONDS, 10), min(CAPIX_READ_TIMEOUT_SECONDS, 45)),
+        )
+    except requests.exceptions.ConnectTimeout:
+        return {
+            "ok": False,
+            "url": CAPIX_API_URL,
+            "model": CAPIX_MODEL,
+            "latency_ms": int((time.time() - started) * 1000),
+            "error": f"Connection timed out after {CAPIX_CONNECT_TIMEOUT_SECONDS:g}s.",
+        }
+    except requests.exceptions.ReadTimeout:
+        return {
+            "ok": False,
+            "url": CAPIX_API_URL,
+            "model": CAPIX_MODEL,
+            "latency_ms": int((time.time() - started) * 1000),
+            "error": f"Model response timed out after {min(CAPIX_READ_TIMEOUT_SECONDS, 45):g}s.",
+        }
+    except requests.exceptions.RequestException as exc:
+        return {
+            "ok": False,
+            "url": CAPIX_API_URL,
+            "model": CAPIX_MODEL,
+            "latency_ms": int((time.time() - started) * 1000),
+            "error": str(exc),
+        }
+
+    latency_ms = int((time.time() - started) * 1000)
+    if resp.status_code >= 400:
+        return {
+            "ok": False,
+            "url": CAPIX_API_URL,
+            "model": CAPIX_MODEL,
+            "latency_ms": latency_ms,
+            "status_code": resp.status_code,
+            "error": _error_from_response(resp),
+        }
+
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "url": CAPIX_API_URL,
+            "model": CAPIX_MODEL,
+            "latency_ms": latency_ms,
+            "status_code": resp.status_code,
+            "error": str(exc),
+        }
+
+    choices = data.get("choices") or []
+    message = choices[0].get("message") if choices else {}
+    content = str((message or {}).get("content") or "").strip()
+    return {
+        "ok": True,
+        "url": CAPIX_API_URL,
+        "model": CAPIX_MODEL,
+        "latency_ms": latency_ms,
+        "sample": content[:120] or None,
+        "tool_calls_supported": bool((message or {}).get("tool_calls")),
+    }
 
 
 def ping_hosted_ollama() -> dict[str, Any]:
@@ -476,6 +670,15 @@ def ping_hosted_ollama() -> dict[str, Any]:
     }
 
 
+def ping_llm() -> dict[str, Any]:
+    """Ping the active LLM provider."""
+    if use_capix():
+        return ping_capix()
+    if use_hosted_ollama():
+        return ping_hosted_ollama()
+    return {"ok": False, "error": "No LLM provider configured"}
+
+
 def call_llm(
     messages: list,
     *,
@@ -484,7 +687,14 @@ def call_llm(
     temperature: float = 0.2,
     app_suffix: str = "",
 ) -> dict[str, Any]:
-    """Primary LLM entry: hosted Ollama when configured, else OpenRouter."""
+    """Primary LLM entry: CapIX → hosted Ollama → OpenRouter."""
+    if use_capix():
+        return call_capix(
+            messages,
+            model=model or CAPIX_MODEL,
+            tools=tools,
+            temperature=temperature,
+        )
     if use_hosted_ollama():
         return call_hosted_ollama(
             messages,

@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 import requests
 
-from hosted_llm import HOSTED_OLLAMA_MODEL, call_llm
+from hosted_llm import DEFAULT_LLM_MODEL, call_llm
 from dca_agent import SOLANA_CLUSTER
 from db import (
     add_watchlist_token,
@@ -38,7 +38,7 @@ from shared_governance import GOVERNANCE_PROMPT
 
 KICKSTART_MODEL = os.environ.get(
     "KICKSTART_COPILOT_MODEL",
-    os.environ.get("OPEN_ROUTER_MODEL", HOSTED_OLLAMA_MODEL),
+    os.environ.get("DCA_MODEL", os.environ.get("OPEN_ROUTER_MODEL", DEFAULT_LLM_MODEL)),
 )
 
 OPERATION_GUIDES: dict[str, dict[str, Any]] = {

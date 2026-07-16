@@ -275,6 +275,40 @@ MIGRATION_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_easya_order_exec_order ON easya_order_executions (order_id)",
     "CREATE INDEX IF NOT EXISTS idx_easya_order_exec_wallet ON easya_order_executions (user_wallet)",
+    """
+    CREATE TABLE IF NOT EXISTS volume_campaigns (
+        id                      VARCHAR(16) PRIMARY KEY,
+        user_wallet             VARCHAR(64) NOT NULL,
+        name                    TEXT NOT NULL,
+        base_token              VARCHAR(32) NOT NULL,
+        quote_token             VARCHAR(32) NOT NULL DEFAULT 'SOL',
+        base_mint               VARCHAR(64) NOT NULL,
+        quote_mint              VARCHAR(64) NOT NULL,
+        pool_address            VARCHAR(64),
+        pool_exists             BOOLEAN NOT NULL DEFAULT FALSE,
+        pool_creation_cost_sol  DOUBLE PRECISION NOT NULL DEFAULT 0.02669,
+        trade_amount            DOUBLE PRECISION NOT NULL,
+        interval_label          TEXT NOT NULL,
+        interval_minutes        DOUBLE PRECISION NOT NULL,
+        total_budget            DOUBLE PRECISION,
+        spent_so_far            DOUBLE PRECISION NOT NULL DEFAULT 0,
+        max_executions          INTEGER NOT NULL,
+        executions_count      INTEGER NOT NULL DEFAULT 0,
+        slippage_bps            INTEGER NOT NULL DEFAULT 100,
+        platform_fee_rate       DOUBLE PRECISION NOT NULL DEFAULT 0.0025,
+        status                  VARCHAR(20) NOT NULL DEFAULT 'provisioning',
+        created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        next_execution_at       TIMESTAMPTZ,
+        executions              JSONB NOT NULL DEFAULT '[]'::jsonb,
+        infrastructure          JSONB NOT NULL DEFAULT '{}'::jsonb
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_volume_campaigns_user ON volume_campaigns (user_wallet)",
+    "CREATE INDEX IF NOT EXISTS idx_volume_campaigns_status ON volume_campaigns (status)",
+    """
+    CREATE INDEX IF NOT EXISTS idx_volume_campaigns_next_execution ON volume_campaigns (next_execution_at)
+        WHERE status = 'active'
+    """,
 ]
 
 
@@ -960,3 +994,147 @@ def list_watchlist(user_wallet: str) -> dict[str, Any]:
 
 def compare_watchlist_tokens(user_wallet: str) -> dict[str, Any]:
     return list_watchlist(user_wallet)
+
+
+# ─── Volume campaigns ─────────────────────────────────────────────────────────
+
+def _volume_campaign_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
+    if not row:
+        return {}
+    out = dict(row)
+    out["interval"] = out.pop("interval_label", out.get("interval"))
+    out["created_at"] = _iso(out.get("created_at"))
+    out["next_execution_at"] = _iso(out.get("next_execution_at"))
+    if isinstance(out.get("executions"), str):
+        try:
+            out["executions"] = json.loads(out["executions"])
+        except Exception:
+            out["executions"] = []
+    if isinstance(out.get("infrastructure"), str):
+        try:
+            out["infrastructure"] = json.loads(out["infrastructure"])
+        except Exception:
+            out["infrastructure"] = {}
+    return out
+
+
+def load_all_volume_campaigns(user_wallet: Optional[str] = None) -> list[dict[str, Any]]:
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if user_wallet:
+                cur.execute(
+                    "SELECT * FROM volume_campaigns WHERE user_wallet = %s ORDER BY created_at ASC",
+                    (user_wallet.strip(),),
+                )
+            else:
+                cur.execute("SELECT * FROM volume_campaigns ORDER BY created_at ASC")
+            rows = cur.fetchall()
+    return [_volume_campaign_row_to_dict(row) for row in rows]
+
+
+def find_volume_campaign(campaign_id: str) -> Optional[dict[str, Any]]:
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM volume_campaigns WHERE id = %s", (campaign_id,))
+            row = cur.fetchone()
+    return _volume_campaign_row_to_dict(row) if row else None
+
+
+def insert_volume_campaign(campaign: dict[str, Any]) -> dict[str, Any]:
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO volume_campaigns (
+                    id, user_wallet, name, base_token, quote_token, base_mint, quote_mint,
+                    pool_address, pool_exists, pool_creation_cost_sol, trade_amount,
+                    interval_label, interval_minutes, total_budget, spent_so_far,
+                    max_executions, executions_count, slippage_bps, platform_fee_rate,
+                    status, created_at, next_execution_at, executions, infrastructure
+                ) VALUES (
+                    %(id)s, %(user_wallet)s, %(name)s, %(base_token)s, %(quote_token)s,
+                    %(base_mint)s, %(quote_mint)s, %(pool_address)s, %(pool_exists)s,
+                    %(pool_creation_cost_sol)s, %(trade_amount)s, %(interval)s,
+                    %(interval_minutes)s, %(total_budget)s, %(spent_so_far)s,
+                    %(max_executions)s, %(executions_count)s, %(slippage_bps)s,
+                    %(platform_fee_rate)s, %(status)s, %(created_at)s, %(next_execution_at)s,
+                    %(executions)s, %(infrastructure)s
+                )
+                """,
+                {
+                    **campaign,
+                    "interval": campaign.get("interval"),
+                    "executions": Json(campaign.get("executions") or []),
+                    "infrastructure": Json(campaign.get("infrastructure") or {}),
+                },
+            )
+    return campaign
+
+
+def update_volume_campaign(campaign_id: str, updates: dict[str, Any]) -> Optional[dict[str, Any]]:
+    init_db()
+    campaign = find_volume_campaign(campaign_id)
+    if not campaign:
+        return None
+    merged = {**campaign, **updates}
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE volume_campaigns SET
+                    user_wallet = %(user_wallet)s,
+                    name = %(name)s,
+                    base_token = %(base_token)s,
+                    quote_token = %(quote_token)s,
+                    base_mint = %(base_mint)s,
+                    quote_mint = %(quote_mint)s,
+                    pool_address = %(pool_address)s,
+                    pool_exists = %(pool_exists)s,
+                    pool_creation_cost_sol = %(pool_creation_cost_sol)s,
+                    trade_amount = %(trade_amount)s,
+                    interval_label = %(interval)s,
+                    interval_minutes = %(interval_minutes)s,
+                    total_budget = %(total_budget)s,
+                    spent_so_far = %(spent_so_far)s,
+                    max_executions = %(max_executions)s,
+                    executions_count = %(executions_count)s,
+                    slippage_bps = %(slippage_bps)s,
+                    platform_fee_rate = %(platform_fee_rate)s,
+                    status = %(status)s,
+                    created_at = %(created_at)s,
+                    next_execution_at = %(next_execution_at)s,
+                    executions = %(executions)s,
+                    infrastructure = %(infrastructure)s
+                WHERE id = %(id)s
+                """,
+                {
+                    "id": campaign_id,
+                    "user_wallet": merged.get("user_wallet"),
+                    "name": merged["name"],
+                    "base_token": merged["base_token"],
+                    "quote_token": merged.get("quote_token", "SOL"),
+                    "base_mint": merged["base_mint"],
+                    "quote_mint": merged["quote_mint"],
+                    "pool_address": merged.get("pool_address"),
+                    "pool_exists": bool(merged.get("pool_exists")),
+                    "pool_creation_cost_sol": merged.get("pool_creation_cost_sol", 0.02669),
+                    "trade_amount": merged["trade_amount"],
+                    "interval": merged["interval"],
+                    "interval_minutes": merged["interval_minutes"],
+                    "total_budget": merged.get("total_budget"),
+                    "spent_so_far": merged.get("spent_so_far", 0),
+                    "max_executions": merged.get("max_executions"),
+                    "executions_count": merged.get("executions_count", 0),
+                    "slippage_bps": merged.get("slippage_bps", 100),
+                    "platform_fee_rate": merged.get("platform_fee_rate", 0.0025),
+                    "status": merged.get("status", "provisioning"),
+                    "created_at": merged.get("created_at"),
+                    "next_execution_at": merged.get("next_execution_at"),
+                    "executions": Json(merged.get("executions") or []),
+                    "infrastructure": Json(merged.get("infrastructure") or {}),
+                },
+            )
+    return find_volume_campaign(campaign_id)

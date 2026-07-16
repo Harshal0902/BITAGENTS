@@ -45,7 +45,7 @@ export type MarketplaceAgent = {
 };
 
 export const MARKETPLACE_STATS = {
-  liveAgents: "2",
+  liveAgents: "3",
   tasks24h: "102",
   activeBuilders: "22",
   uptime30d: "99.2%",
@@ -73,7 +73,7 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     rating: 4.9,
     iconId: "swap",
     available: true,
-    model: "llama3.2:3b",
+    model: "meta-llama/llama-3.1-8b-instruct",
     cluster: "mainnet",
   },
   {
@@ -87,7 +87,24 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     rating: 4.9,
     iconId: "search",
     available: true,
-    model: "llama3.2:3b",
+    model: "meta-llama/llama-3.1-8b-instruct",
+    cluster: "mainnet",
+  },
+  {
+    id: "volume",
+    slug: "volume",
+    name: "Volume Agent",
+    category: "Trading",
+    description:
+      "Run Meteora DLMM volume campaigns. Deposit your token + SOL, create or reuse a DLMM pool, and schedule buy/sell cycles at your chosen frequency.",
+    tagline: "DLMM volume · pool infra",
+    pricePerTask: "0.25% / leg",
+    runs: "-",
+    volumeSol: "-",
+    rating: 4.8,
+    iconId: "swap",
+    available: false,
+    model: "meta-llama/llama-3.1-8b-instruct",
     cluster: "mainnet",
   },
   {
@@ -156,4 +173,10 @@ export const DCA_QUICK_ACTIONS = [
   "List my DCA plans",
   "Analyze SOL for DCA timing",
   "Execute plan dry run",
+] as const;
+
+export const VOLUME_QUICK_ACTIONS = [
+  "List my volume campaigns",
+  "Check DLMM pool status",
+  "How does pool creation work?",
 ] as const;

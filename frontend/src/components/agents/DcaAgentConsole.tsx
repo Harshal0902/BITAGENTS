@@ -267,9 +267,7 @@ export function DcaAgentConsole() {
           role: "assistant",
           content: h
             ? h.llm_reachable === false
-              ? `Connected to DCA agent API, but the hosted LLM is unreachable: ${
-                  h.llm_ping?.error ?? "check HOSTED_OLLAMA_URL and HOSTED_MODEL_API_KEY"
-                }`
+              ? `Connected to DCA agent API, but the hosted LLM is unreachable`
               : `Connected to DCA agent. Ask me to create plans, or manage DCA schedules.`
             : "DCA agent API is offline.",
         },

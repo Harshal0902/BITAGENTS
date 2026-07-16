@@ -6,7 +6,7 @@ export const KICKSTART_COPILOT = {
   description:
     "AI agent for live Solana token research - price, liquidity, holders, risk checks, health scores, and diligence summaries.",
   status: "Running" as const,
-  model: "llama3.2:3b",
+  model: "meta-llama/llama-3.1-8b-instruct",
   cluster: "mainnet-beta",
   dataSource: "EASY Screener",
   dataSourceUrl: "https://easyscreener.xyz",

@@ -58,9 +58,11 @@ def _load_env() -> None:
 _load_env()
 
 from hosted_llm import (
+    CAPIX_API_URL,
+    CAPIX_MODEL,
     HOSTED_OLLAMA_API_KEY,
     HOSTED_OLLAMA_BASE_URL,
-    HOSTED_OLLAMA_MODEL as HOSTED_DEFAULT_MODEL,
+    DEFAULT_LLM_MODEL,
     OPEN_ROUTER_API,
     OPEN_ROUTER_API_URL,
     OPEN_ROUTER_APP_NAME,
@@ -68,15 +70,13 @@ from hosted_llm import (
     call_llm,
     llm_configured,
     llm_provider,
+    use_capix,
     use_hosted_ollama,
 )
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-MODEL = os.environ.get(
-    "DCA_MODEL",
-    os.environ.get("OPEN_ROUTER_MODEL", HOSTED_DEFAULT_MODEL),
-)
+MODEL = os.environ.get("DCA_MODEL", os.environ.get("OPEN_ROUTER_MODEL", DEFAULT_LLM_MODEL))
 
 SOLANA_RPC = os.environ.get(
     "SOLANA_RPC_URL",
@@ -3252,7 +3252,10 @@ def main():
     init_db()
     print("  🗄️  Neon database ready")
     print(f"  LLM        : {llm_provider()} ({MODEL})")
-    if use_hosted_ollama():
+    if use_capix():
+        print(f"  CapIX URL  : {CAPIX_API_URL}")
+        print(f"  CapIX model: {CAPIX_MODEL}")
+    elif use_hosted_ollama():
         print(f"  Ollama URL : {HOSTED_OLLAMA_BASE_URL}")
         print(
             f"  Ollama key : "
@@ -3261,7 +3264,7 @@ def main():
     else:
         print(
             f"  OpenRouter : "
-            f"{'configured' if OPEN_ROUTER_API else 'missing - set HOSTED_MODEL_API_KEY or OPEN_ROUTER_API in .env'}"
+            f"{'configured' if OPEN_ROUTER_API else 'missing - set CAPIX_API_KEY, HOSTED_MODEL_API_KEY, or OPEN_ROUTER_API in .env'}"
         )
     print(f"  RPC        : {SOLANA_RPC}")
     print(f"  Cluster    : {SOLANA_CLUSTER} ({'Jupiter v2 swaps' if _is_mainnet() else 'devnet mode'})")

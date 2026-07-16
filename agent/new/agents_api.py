@@ -48,11 +48,14 @@ from db import (
     load_chat_history,
 )
 from hosted_llm import (
+    CAPIX_API_URL,
+    CAPIX_MODEL,
     HOSTED_OLLAMA_BASE_URL,
     HOSTED_OLLAMA_MODEL,
     llm_configured,
     llm_provider,
-    ping_hosted_ollama,
+    ping_llm,
+    use_capix,
     use_hosted_ollama,
 )
 from dca_agent import (
@@ -95,6 +98,27 @@ from kickstart_copilot_agent import (
     KICKSTART_MODEL,
     list_verified_kickstart_tokens,
     run_kickstart_agent,
+)
+from meteora_dlmm import check_pool_infrastructure, get_pool_creation_cost_sol
+from volume_agent import (
+    VOLUME_MODEL,
+    VOLUME_SCHEDULER_POLL_SECONDS,
+    create_volume_campaign,
+    get_volume_history,
+    list_volume_campaigns,
+    provision_campaign_infrastructure,
+    run_volume_agent_with_actions,
+    start_volume_scheduler,
+    update_volume_campaign_status,
+)
+from volume_ledger import (
+    VOLUME_PLATFORM_FEE_RATE,
+    get_volume_agent_wallet_info,
+    get_volume_user_balances,
+    get_volume_wallet_pubkey,
+    list_volume_user_ledger,
+    verify_and_record_volume_deposit,
+    withdraw_volume_tokens,
 )
 from wallet_auth import (
     create_auth_challenge,
@@ -248,14 +272,16 @@ def _startup() -> None:
         print("  📊 Platform metrics scheduler started (refresh every 24h)")
     if start_easya_order_scheduler():
         print(f"  📈 EasyA limit-order scheduler started (every {EASYA_ORDER_POLL_SECONDS}s)")
-    print("  🤖 Agents: DCA, Kickstart Token Copilot")
+    if start_volume_scheduler():
+        print(f"  📊 Volume Agent scheduler started (every {VOLUME_SCHEDULER_POLL_SECONDS}s)")
+    print("  🤖 Agents: DCA, Kickstart Token Copilot, Volume Agent")
 
 
 @app.get("/health")
 def health(ping_llm: bool = Query(False)) -> dict[str, Any]:
     wallet = get_wallet_pubkey()
     agent_info = get_agent_wallet_info()
-    llm_ping = ping_hosted_ollama() if ping_llm and use_hosted_ollama() else None
+    llm_ping = ping_llm() if ping_llm and llm_configured() else None
     return {
         "status": "ok",
         "agents": {
@@ -269,11 +295,18 @@ def health(ping_llm: bool = Query(False)) -> dict[str, Any]:
                 "chat": "/kickstart/chat",
                 "pricing": "free analysis · 0.1% per Jupiter buy",
             },
+            "volume": {
+                "path_prefix": "/volume",
+                "chat": "/volume/chat",
+                "pricing": "0.25% per swap leg · Meteora DLMM",
+            },
         },
         "llm": llm_provider(),
         "llm_configured": llm_configured(),
         "llm_reachable": llm_ping.get("ok") if llm_ping else None,
         "llm_ping": llm_ping,
+        "capix_url": CAPIX_API_URL if use_capix() else None,
+        "capix_model": CAPIX_MODEL if use_capix() else None,
         "hosted_ollama_url": HOSTED_OLLAMA_BASE_URL if use_hosted_ollama() else None,
         "hosted_ollama_model": HOSTED_OLLAMA_MODEL if use_hosted_ollama() else None,
         "dca_model": MODEL,
@@ -294,13 +327,13 @@ def health(ping_llm: bool = Query(False)) -> dict[str, Any]:
 
 @app.get("/health/llm")
 def health_llm() -> dict[str, Any]:
-    if not use_hosted_ollama():
+    if not llm_configured():
         return {
             "ok": False,
             "provider": llm_provider(),
-            "error": "HOSTED_MODEL_API_KEY is not set",
+            "error": "CAPIX_API_KEY, HOSTED_MODEL_API_KEY, or OPEN_ROUTER_API is not set",
         }
-    result = ping_hosted_ollama()
+    result = ping_llm()
     return {"provider": llm_provider(), **result}
 
 
@@ -313,6 +346,8 @@ def kickstart_health() -> dict[str, Any]:
         "model": KICKSTART_MODEL,
         "llm": llm_provider(),
         "llm_configured": llm_configured(),
+        "capix_url": CAPIX_API_URL if use_capix() else None,
+        "capix_model": CAPIX_MODEL if use_capix() else None,
         "hosted_ollama_url": HOSTED_OLLAMA_BASE_URL if use_hosted_ollama() else None,
         "pricing": "free analysis · 0.1% per successful Jupiter buy",
         "auth_required": True,
@@ -553,7 +588,7 @@ def dca_chat(
     except requests.exceptions.ConnectionError as exc:
         raise HTTPException(
             status_code=503,
-            detail="Cannot reach LLM API. Check HOSTED_OLLAMA_URL and network.",
+            detail="Cannot reach LLM API. Check CAPIX_API_URL or HOSTED_OLLAMA_URL and network.",
         ) from exc
     except requests.exceptions.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"LLM error: {exc}") from exc
@@ -599,7 +634,7 @@ def kickstart_chat(
     except requests.exceptions.ConnectionError as exc:
         raise HTTPException(
             status_code=503,
-            detail="Cannot reach LLM API. Check HOSTED_OLLAMA_URL and network.",
+            detail="Cannot reach LLM API. Check CAPIX_API_URL or HOSTED_OLLAMA_URL and network.",
         ) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -827,6 +862,211 @@ def kickstart_update_order(
         stop_market_cap_usd=body.stop_market_cap_usd,
         slippage_bps=body.slippage_bps,
     )
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+# ─── Volume Agent ─────────────────────────────────────────────────────────────
+
+
+class VolumeChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+    session_id: Optional[str] = None
+
+
+class CreateVolumeCampaignRequest(BaseModel):
+    base_token: str = Field(min_length=1)
+    quote_token: str = Field(default="SOL", min_length=1)
+    trade_amount: float = Field(gt=0)
+    interval: str = Field(min_length=1)
+    max_executions: int = Field(ge=1)
+    name: Optional[str] = None
+    total_budget: Optional[float] = Field(default=None, gt=0)
+    slippage_bps: int = Field(default=100, ge=1, le=5000)
+    seed_token_amount: float = Field(default=0.0, ge=0)
+
+
+class VolumeCampaignStatusRequest(BaseModel):
+    action: str = Field(min_length=3)
+
+
+@app.get("/volume/health")
+def volume_health() -> dict[str, Any]:
+    volume_wallet = get_volume_wallet_pubkey()
+    return {
+        "status": "ok",
+        "agent": "Volume Agent",
+        "model": VOLUME_MODEL,
+        "llm": llm_provider(),
+        "llm_configured": llm_configured(),
+        "capix_url": CAPIX_API_URL if use_capix() else None,
+        "capix_model": CAPIX_MODEL if use_capix() else None,
+        "hosted_ollama_url": HOSTED_OLLAMA_BASE_URL if use_hosted_ollama() else None,
+        "pricing": "0.25% per swap leg (buy and sell)",
+        "auth_required": True,
+        "cluster": SOLANA_CLUSTER,
+        "trading_wallet_configured": bool(volume_wallet),
+        "trading_wallet": volume_wallet,
+        "platform_fee_rate": VOLUME_PLATFORM_FEE_RATE,
+        "pool_creation_cost_sol": get_pool_creation_cost_sol(),
+        "scheduler_poll_seconds": VOLUME_SCHEDULER_POLL_SECONDS,
+    }
+
+
+@app.post("/volume/chat", response_model=ChatResponse)
+def volume_chat(
+    body: VolumeChatRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> ChatResponse:
+    session_id = body.session_id or str(uuid.uuid4())
+    access_error = assert_chat_session_access(session_id, auth_wallet)
+    if access_error:
+        raise HTTPException(status_code=403, detail=access_error)
+
+    history = load_chat_history(session_id)
+    user_message = body.message.strip()
+    reply, history, actions = run_volume_agent_with_actions(
+        user_message,
+        history,
+        user_wallet=auth_wallet,
+        session_id=session_id,
+    )
+    append_chat_messages(session_id, user_message, reply, actions, user_wallet=auth_wallet)
+    return ChatResponse(reply=reply, session_id=session_id, actions=actions)
+
+
+@app.get("/volume/wallet/agent")
+def volume_wallet_agent(_: None = Depends(require_internal_key)) -> dict[str, Any]:
+    return get_volume_agent_wallet_info()
+
+
+@app.get("/volume/wallet/balance")
+def volume_wallet_balance(
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    return get_volume_user_balances(auth_wallet)
+
+
+@app.post("/volume/wallet/deposit/verify")
+def volume_deposit_verify(
+    body: DepositVerifyRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = verify_and_record_volume_deposit(body.signature.strip(), auth_wallet)
+    if result.get("error") and result.get("status") != "already_recorded":
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/volume/wallet/withdraw")
+def volume_wallet_withdraw(
+    body: WithdrawRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = withdraw_volume_tokens(auth_wallet, body.token.strip(), body.amount)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.get("/volume/wallet/ledger")
+def volume_wallet_ledger(
+    auth_wallet: str = Depends(require_wallet_session),
+    limit: int = Query(50, ge=1, le=100),
+) -> dict[str, Any]:
+    entries = list_volume_user_ledger(auth_wallet, limit=limit)
+    return {"user_wallet": auth_wallet, "entries": entries, "count": len(entries)}
+
+
+@app.get("/volume/pool/check")
+def volume_pool_check(
+    base_mint: str = Query(..., min_length=32),
+    quote_mint: str = Query(default="So11111111111111111111111111111111111111112", min_length=32),
+    _: None = Depends(require_internal_key),
+) -> dict[str, Any]:
+    return check_pool_infrastructure(base_mint.strip(), quote_mint.strip())
+
+
+@app.get("/volume/campaigns")
+def volume_list_campaigns(
+    auth_wallet: str = Depends(require_wallet_session),
+    active_only: bool = Query(False),
+    status: Optional[str] = Query(None),
+) -> dict[str, Any]:
+    result = list_volume_campaigns(auth_wallet, active_only=active_only, status=status)
+    return {**result, "user_wallet": auth_wallet}
+
+
+@app.post("/volume/campaigns")
+def volume_create_campaign(
+    body: CreateVolumeCampaignRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = create_volume_campaign(
+        base_token=body.base_token.strip(),
+        quote_token=body.quote_token.strip(),
+        trade_amount=body.trade_amount,
+        interval=body.interval.strip(),
+        max_executions=body.max_executions,
+        user_wallet=auth_wallet,
+        name=body.name.strip() if body.name else None,
+        total_budget=body.total_budget,
+        slippage_bps=body.slippage_bps,
+        seed_token_amount=body.seed_token_amount,
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.get("/volume/campaigns/{campaign_id}")
+def volume_get_campaign(
+    campaign_id: str,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    from volume_agent import _assert_campaign_owner
+
+    campaign = _assert_campaign_owner(campaign_id, auth_wallet)
+    if "error" in campaign:
+        raise HTTPException(status_code=404, detail=campaign["error"])
+    return {"campaign": campaign}
+
+
+@app.get("/volume/campaigns/{campaign_id}/executions")
+def volume_campaign_executions(
+    campaign_id: str,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = get_volume_history(campaign_id, auth_wallet)
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@app.post("/volume/campaigns/{campaign_id}/status")
+def volume_campaign_status(
+    campaign_id: str,
+    body: VolumeCampaignStatusRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = update_volume_campaign_status(campaign_id, body.action, auth_wallet)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/volume/campaigns/{campaign_id}/provision")
+def volume_campaign_provision(
+    campaign_id: str,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    from volume_agent import _assert_campaign_owner
+
+    owned = _assert_campaign_owner(campaign_id, auth_wallet)
+    if "error" in owned:
+        raise HTTPException(status_code=404, detail=owned["error"])
+    result = provision_campaign_infrastructure(campaign_id)
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
     return result

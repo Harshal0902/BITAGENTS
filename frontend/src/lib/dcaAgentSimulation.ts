@@ -236,6 +236,6 @@ export const DCA_AGENT = {
   status: "Running" as const,
   task: "Monitoring 2 active DCA plans on devnet",
   strategy: "dca-scheduler",
-  model: "llama3.1",
+  model: "meta-llama/llama-3.1-8b-instruct",
   cluster: "devnet",
 };
