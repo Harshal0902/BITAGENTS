@@ -76,7 +76,10 @@ from hosted_llm import (
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-MODEL = os.environ.get("DCA_MODEL", os.environ.get("OPEN_ROUTER_MODEL", DEFAULT_LLM_MODEL))
+MODEL = CAPIX_MODEL if use_capix() else os.environ.get(
+    "DCA_MODEL",
+    os.environ.get("OPEN_ROUTER_MODEL", DEFAULT_LLM_MODEL),
+)
 
 SOLANA_RPC = os.environ.get(
     "SOLANA_RPC_URL",
@@ -3154,7 +3157,7 @@ def run_agent_with_actions(
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history
 
     for i in range(12):
-        print(f"\n  🤖 LLM call [{i + 1}/12] via {llm_provider()} …")
+        print(f"\n  🤖 LLM call [{i + 1}/12] via {llm_provider()} · model {MODEL} …")
         started = time.time()
         response   = call_openrouter(messages)
         print(f"  ⏱️  LLM responded in {time.time() - started:.1f}s")

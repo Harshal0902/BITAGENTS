@@ -90,6 +90,8 @@ CAPIX_API_KEY = (
 ).strip()
 CAPIX_API_URL = os.environ.get("CAPIX_API_URL", DEFAULT_CAPIX_API_URL).strip() or DEFAULT_CAPIX_API_URL
 CAPIX_MODEL = os.environ.get("CAPIX_MODEL", DEFAULT_CAPIX_MODEL).strip() or DEFAULT_CAPIX_MODEL
+CAPIX_PROVIDER = os.environ.get("CAPIX_PROVIDER", "DeepInfra").strip()
+CAPIX_MAX_RETRIES = int(os.environ.get("CAPIX_MAX_RETRIES", "5"))
 
 # Legacy OpenRouter (optional fallback)
 OPEN_ROUTER_API = (
@@ -136,6 +138,30 @@ def default_llm_model() -> str:
 
 
 DEFAULT_LLM_MODEL = default_llm_model()
+
+
+def resolve_capix_model(_requested: Optional[str] = None) -> str:
+    """Always use the configured CapIX model (default: meta-llama/llama-3.1-8b-instruct).
+
+    Agent-local MODEL tags (llama3.2:3b, mistral, etc.) are ignored so CapIX cannot
+    route tool calls to a different upstream model.
+    """
+    return CAPIX_MODEL
+
+
+def _capix_provider_block() -> Optional[dict[str, Any]]:
+    if not CAPIX_PROVIDER:
+        return None
+    return {
+        "only": [p.strip() for p in CAPIX_PROVIDER.split(",") if p.strip()],
+        "allow_fallbacks": False,
+    }
+
+
+def _capix_retry_delay(attempt: int, status_code: Optional[int] = None) -> float:
+    if status_code == 429:
+        return min(2.0 * (2 ** (attempt - 1)), 30.0)
+    return 1.5 * attempt
 
 
 def _capix_headers() -> dict[str, str]:
@@ -392,17 +418,22 @@ def call_capix(
     tools: Optional[list] = None,
     temperature: float = 0.2,
 ) -> dict[str, Any]:
+    resolved_model = resolve_capix_model(model)
     payload: dict[str, Any] = {
-        "model": model or CAPIX_MODEL,
+        "model": resolved_model,
         "messages": messages,
         "temperature": temperature,
     }
+    provider = _capix_provider_block()
+    if provider:
+        payload["provider"] = provider
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
 
     last_error = "Unknown CapIX error"
-    for attempt in range(1, 4):
+    max_attempts = max(CAPIX_MAX_RETRIES, 1)
+    for attempt in range(1, max_attempts + 1):
         try:
             resp = requests.post(
                 CAPIX_API_URL,
@@ -415,8 +446,8 @@ def call_capix(
                 f"Connection to CapIX timed out after {CAPIX_CONNECT_TIMEOUT_SECONDS:g}s. "
                 "Check CAPIX_API_URL and network."
             )
-            if attempt < 3:
-                time.sleep(1.5 * attempt)
+            if attempt < max_attempts:
+                time.sleep(_capix_retry_delay(attempt))
                 continue
             raise RuntimeError(last_error) from exc
         except requests.exceptions.ReadTimeout as exc:
@@ -424,36 +455,38 @@ def call_capix(
                 f"CapIX read timed out after {CAPIX_READ_TIMEOUT_SECONDS:g}s. "
                 "The model may be overloaded."
             )
-            if attempt < 3:
-                time.sleep(1.5 * attempt)
+            if attempt < max_attempts:
+                time.sleep(_capix_retry_delay(attempt))
                 continue
             raise RuntimeError(last_error) from exc
         except requests.exceptions.RequestException as exc:
             last_error = str(exc)
-            if attempt < 3:
-                time.sleep(1.5 * attempt)
+            if attempt < max_attempts:
+                time.sleep(_capix_retry_delay(attempt))
                 continue
             raise RuntimeError(f"Cannot reach CapIX API at {CAPIX_API_URL}: {last_error}") from exc
 
         if resp.status_code >= 400:
             last_error = _error_from_response(resp)
-            if resp.status_code in (408, 429, 500, 502, 503, 504) and attempt < 3:
-                time.sleep(1.5 * attempt)
+            if resp.status_code in (408, 429, 500, 502, 503, 504) and attempt < max_attempts:
+                time.sleep(_capix_retry_delay(attempt, resp.status_code))
                 continue
-            raise RuntimeError(f"CapIX API error ({resp.status_code}): {last_error}")
+            raise RuntimeError(
+                f"CapIX API error ({resp.status_code}) for model {resolved_model}: {last_error}"
+            )
 
         data = resp.json()
         choices = data.get("choices") or []
         if not choices:
             last_error = "CapIX returned no choices."
-            if attempt < 3:
-                time.sleep(1.5 * attempt)
+            if attempt < max_attempts:
+                time.sleep(_capix_retry_delay(attempt))
                 continue
             raise RuntimeError(last_error)
         message = choices[0].get("message") or {}
         return {"message": _normalize_assistant_message(message)}
 
-    raise RuntimeError(f"CapIX API error: {last_error}")
+    raise RuntimeError(f"CapIX API error for model {resolved_model}: {last_error}")
 
 
 def call_openrouter(
@@ -515,14 +548,18 @@ def ping_capix() -> dict[str, Any]:
     if not use_capix():
         return {"ok": False, "error": "CAPIX_API_KEY is not set"}
     started = time.time()
+    payload: dict[str, Any] = {
+        "model": CAPIX_MODEL,
+        "messages": [{"role": "user", "content": "Reply with exactly: ok"}],
+        "temperature": 0,
+    }
+    provider = _capix_provider_block()
+    if provider:
+        payload["provider"] = provider
     try:
         resp = requests.post(
             CAPIX_API_URL,
-            json={
-                "model": CAPIX_MODEL,
-                "messages": [{"role": "user", "content": "Reply with exactly: ok"}],
-                "temperature": 0,
-            },
+            json=payload,
             headers=_capix_headers(),
             timeout=(min(CAPIX_CONNECT_TIMEOUT_SECONDS, 10), min(CAPIX_READ_TIMEOUT_SECONDS, 45)),
         )
@@ -691,7 +728,7 @@ def call_llm(
     if use_capix():
         return call_capix(
             messages,
-            model=model or CAPIX_MODEL,
+            model=resolve_capix_model(model),
             tools=tools,
             temperature=temperature,
         )

@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 import requests
 
-from hosted_llm import DEFAULT_LLM_MODEL, call_llm
+from hosted_llm import CAPIX_MODEL, DEFAULT_LLM_MODEL, call_llm, use_capix
 from dca_agent import SOLANA_CLUSTER
 from db import (
     add_watchlist_token,
@@ -36,9 +36,13 @@ from easya_screener_client import (
 )
 from shared_governance import GOVERNANCE_PROMPT
 
-KICKSTART_MODEL = os.environ.get(
-    "KICKSTART_COPILOT_MODEL",
-    os.environ.get("DCA_MODEL", os.environ.get("OPEN_ROUTER_MODEL", DEFAULT_LLM_MODEL)),
+KICKSTART_MODEL = (
+    CAPIX_MODEL
+    if use_capix()
+    else os.environ.get(
+        "KICKSTART_COPILOT_MODEL",
+        os.environ.get("DCA_MODEL", os.environ.get("OPEN_ROUTER_MODEL", DEFAULT_LLM_MODEL)),
+    )
 )
 
 OPERATION_GUIDES: dict[str, dict[str, Any]] = {
