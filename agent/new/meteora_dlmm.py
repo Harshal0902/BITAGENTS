@@ -16,6 +16,9 @@ import requests
 METEORA_DLMM_API = os.environ.get(
     "METEORA_DLMM_API", "https://dlmm-api.meteora.ag"
 ).rstrip("/")
+METEORA_DLMM_DATAPI = os.environ.get(
+    "METEORA_DLMM_DATAPI", "https://dlmm.datapi.meteora.ag"
+).rstrip("/")
 METEORA_POOL_CREATION_SOL = float(os.environ.get("METEORA_POOL_CREATION_SOL", "0.02669"))
 METEORA_DEFAULT_BIN_STEP = int(os.environ.get("METEORA_DEFAULT_BIN_STEP", "80"))
 METEORA_DEFAULT_FEE_BPS = int(os.environ.get("METEORA_DEFAULT_FEE_BPS", "25"))
@@ -33,11 +36,65 @@ def get_pool_creation_cost_sol() -> float:
     return METEORA_POOL_CREATION_SOL
 
 
+def _pair_from_datapi_pool(pair: dict[str, Any]) -> dict[str, Any]:
+    token_x = pair.get("token_x") or {}
+    token_y = pair.get("token_y") or {}
+    x = token_x.get("address") if isinstance(token_x, dict) else str(token_x or "")
+    y = token_y.get("address") if isinstance(token_y, dict) else str(token_y or "")
+    pool_config = pair.get("pool_config") or {}
+    volume = pair.get("volume") or {}
+    base_fee_pct = pool_config.get("base_fee_pct")
+    base_fee_bps = None
+    if base_fee_pct is not None:
+        try:
+            base_fee_bps = int(round(float(base_fee_pct) * 100))
+        except (TypeError, ValueError):
+            base_fee_bps = None
+    return {
+        "pool_address": pair.get("address") or pair.get("lb_pair"),
+        "mint_x": x,
+        "mint_y": y,
+        "bin_step": pool_config.get("bin_step") or pair.get("bin_step"),
+        "base_fee_bps": base_fee_bps,
+        "name": pair.get("name"),
+        "liquidity": pair.get("tvl") or pair.get("liquidity"),
+        "trade_volume_24h": volume.get("24h") if isinstance(volume, dict) else pair.get("trade_volume_24h"),
+        "raw": pair,
+    }
+
+
+def _find_pool_via_datapi(mint_x: str, mint_y: str) -> Optional[dict[str, Any]]:
+    """Query Meteora's indexed DLMM API (dlmm.datapi.meteora.ag)."""
+    try:
+        resp = requests.get(
+            f"{METEORA_DLMM_DATAPI}/pools",
+            params={
+                "filter_by": f"token_x={mint_x} && token_y={mint_y}",
+                "page_size": 5,
+                "sort_by": "volume_24h:desc",
+            },
+            timeout=25,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        pools = data.get("data") if isinstance(data, dict) else None
+        if not pools:
+            return None
+        return _pair_from_datapi_pool(pools[0])
+    except Exception as exc:
+        print(f"  Meteora datapi lookup failed: {exc}")
+        return None
+
+
 def find_dlmm_pool(token_mint: str, quote_mint: str = SOL_MINT) -> Optional[dict[str, Any]]:
     """Return Meteora DLMM pair metadata if a pool exists for the mint pair."""
     token_mint = token_mint.strip()
     quote_mint = quote_mint.strip() or SOL_MINT
     mint_x, mint_y = _normalize_mint_pair(token_mint, quote_mint)
+
+    found = _find_pool_via_datapi(mint_x, mint_y)
+    if found and found.get("pool_address"):
+        return found
 
     try:
         resp = requests.get(
@@ -59,7 +116,7 @@ def find_dlmm_pool(token_mint: str, quote_mint: str = SOL_MINT) -> Optional[dict
                 if matched:
                     return matched
     except Exception as exc:
-        print(f"  ⚠️  Meteora pair lookup failed: {exc}")
+        print(f"  Meteora pair lookup failed: {exc}")
 
     return _find_pool_via_pair_all(mint_x, mint_y)
 
@@ -76,7 +133,7 @@ def _find_pool_via_pair_all(mint_x: str, mint_y: str) -> Optional[dict[str, Any]
             if matched:
                 return matched
     except Exception as exc:
-        print(f"  ⚠️  Meteora pair/all lookup failed: {exc}")
+        print(f"  Meteora pair/all lookup failed: {exc}")
     return None
 
 

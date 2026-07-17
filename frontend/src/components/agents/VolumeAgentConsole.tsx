@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Panel } from "@/components/AppShell";
 import { VolumeAgentDeposit } from "@/components/agents/VolumeAgentDeposit";
@@ -9,19 +8,24 @@ import { VOLUME_AGENT, VOLUME_EXAMPLE_PROMPTS } from "@/lib/volumeAgentSimulatio
 import {
   fetchVolumeAgentHealth,
   mapVolumeApiActions,
+  mergeTransactions,
   sendVolumeAgentMessage,
   type AgentAction,
+  type ParsedTransaction,
   type VolumeAgentHealth,
 } from "@/lib/volumeAgentClient";
 import { checkVolumePool, createVolumeCampaign } from "@/lib/volumePlanClient";
 import { useVolumeWalletAuth } from "@/hooks/useVolumeWalletAuth";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { explorerUrlForSignature } from "@/lib/dcaActionResults";
 import { useWallet } from "@solana/wallet-adapter-react";
+import type { UserDepositBalances } from "@/lib/volumeWalletClient";
 
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  errors?: string[];
+  transactions?: ParsedTransaction[];
 };
 
 function formatReply(text: string) {
@@ -51,18 +55,105 @@ function formatReply(text: string) {
   });
 }
 
+function TxLink({ tx, cluster }: { tx: ParsedTransaction; cluster?: string }) {
+  const href = tx.explorerUrl ?? explorerUrlForSignature(tx.signature, cluster);
+  const short = `${tx.signature.slice(0, 8)}…${tx.signature.slice(-8)}`;
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex flex-wrap items-center justify-between gap-2 border border-grid bg-surface/40 px-3 py-2 transition hover:border-signal"
+    >
+      <span className="font-mono text-[11px] text-foreground">{short}</span>
+      <span className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em]">
+        {tx.status && (
+          <span className={tx.status === "success" ? "text-signal" : "text-warn"}>{tx.status}</span>
+        )}
+        <span className="text-signal">Explorer ↗</span>
+      </span>
+    </a>
+  );
+}
+
+function ActionCard({
+  act,
+  index,
+  cluster,
+}: {
+  act: AgentAction;
+  index: number;
+  cluster?: string;
+}) {
+  const isError = act.status === "error";
+
+  return (
+    <div
+      className={`border bg-background/60 p-3 ${
+        isError ? "border-warn/50 bg-warn/5" : "border-grid"
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className={isError ? "text-warn" : "text-signal"}>
+          [{index + 1}] {act.tool}
+        </span>
+        <span
+          className={
+            isError
+              ? "text-warn"
+              : act.status === "done"
+                ? "text-signal"
+                : "text-warn animate-pulse"
+          }
+        >
+          {isError ? "✗ error" : act.status === "done" ? "✓ done" : act.status}
+        </span>
+      </div>
+
+      {isError && act.error && (
+        <div className="mt-2 border border-warn/30 bg-warn/10 px-3 py-2 font-mono text-[11px] leading-relaxed text-warn">
+          {act.error}
+        </div>
+      )}
+
+      {act.transactions.length > 0 && (
+        <div className="mt-2 space-y-2 border-t border-grid pt-2">
+          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+            Transaction{act.transactions.length > 1 ? "s" : ""}
+          </div>
+          {act.transactions.map((tx) => (
+            <TxLink key={tx.signature} tx={tx} cluster={cluster} />
+          ))}
+        </div>
+      )}
+
+      {act.result && (
+        <pre className="mt-2 max-h-40 overflow-auto border-t border-grid pt-2 text-[10px] leading-relaxed text-foreground/80">
+          {act.result}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 export function VolumeAgentConsole() {
-  const { connected } = useWallet();
-  const { wallet, token, busy: authBusy, error: authError, isAuthenticated } = useVolumeWalletAuth();
+  const { publicKey } = useWallet();
+  const { token, busy: authBusy, error: authError, isAuthenticated } = useVolumeWalletAuth();
   const [health, setHealth] = useState<VolumeAgentHealth | null>(null);
+  const [agentOnline, setAgentOnline] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | undefined>();
-  const [chatBusy, setChatBusy] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [actions, setActions] = useState<AgentAction[]>([]);
+  const [transactions, setTransactions] = useState<ParsedTransaction[]>([]);
+  const [userBalances, setUserBalances] = useState<UserDepositBalances | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
 
   const [baseToken, setBaseToken] = useState("");
+  const [quoteToken, setQuoteToken] = useState("SOL");
   const [tradeAmount, setTradeAmount] = useState("0.01");
   const [interval, setInterval] = useState("30 seconds");
   const [maxExecutions, setMaxExecutions] = useState("10");
@@ -72,55 +163,101 @@ export function VolumeAgentConsole() {
   const [poolStatus, setPoolStatus] = useState<string | null>(null);
   const [poolCheckBusy, setPoolCheckBusy] = useState(false);
 
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const actionsEndRef = useRef<HTMLDivElement>(null);
+
+  const cluster = health?.cluster;
+  const poolCost = health?.pool_creation_cost_sol ?? VOLUME_AGENT.poolCreationCostSol;
 
   useEffect(() => {
-    void fetchVolumeAgentHealth().then(setHealth);
+    void fetchVolumeAgentHealth().then((h) => {
+      setHealth(h);
+      setAgentOnline(h?.status === "ok");
+      setMessages([
+        {
+          id: "welcome",
+          role: "assistant",
+          content: h
+            ? `Connected to Volume Agent. Deposit SOL + your token, then create a campaign or ask in chat. Platform fee is **${VOLUME_AGENT.platformFeeLabel}**.`
+            : "Volume Agent API is offline. Start the agents API to continue.",
+        },
+      ]);
+    });
   }, []);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, actions]);
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, busy]);
 
-  async function handleSend(message: string) {
-    if (!token || !message.trim()) return;
-    const userMsg: ChatMessage = { id: `u-${Date.now()}`, role: "user", content: message.trim() };
-    setMessages((prev) => [...prev, userMsg]);
+  useEffect(() => {
+    actionsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [actions]);
+
+  async function runCommand(command: string) {
+    const trimmed = command.trim();
+    if (!trimmed || busy) return;
+    if (!token) {
+      setError("Connect your wallet and approve the sign-in message first.");
+      return;
+    }
+
     setInput("");
-    setChatBusy(true);
-    setActions([]);
+    setBusy(true);
+    setError(null);
+    setMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: "user", content: trimmed }]);
 
     try {
-      const res = await sendVolumeAgentMessage(message.trim(), token, sessionId);
+      const res = await sendVolumeAgentMessage(trimmed, token, sessionId);
+      const mapped = mapVolumeApiActions(res.actions ?? []);
+      const turnErrors = mapped.filter((a) => a.error).map((a) => a.error as string);
+      const turnTxs = mapped.flatMap((a) => a.transactions);
+
       setSessionId(res.session_id);
+      setActions((prev) => [...prev, ...mapped]);
+      setTransactions((prev) => mergeTransactions(prev, turnTxs));
+
+      if (mapped.some((a) => a.tool === "create_volume_campaign" || a.tool === "list_volume_campaigns")) {
+        setRefreshTick((t) => t + 1);
+      }
+
       setMessages((prev) => [
         ...prev,
-        { id: `a-${Date.now()}`, role: "assistant", content: res.reply },
+        {
+          id: `a-${Date.now()}`,
+          role: "assistant",
+          content: res.reply,
+          errors: turnErrors.length > 0 ? turnErrors : undefined,
+          transactions: turnTxs.length > 0 ? turnTxs : undefined,
+        },
       ]);
-      setActions(mapVolumeApiActions(res.actions ?? []));
+      setAgentOnline(true);
     } catch (err) {
+      const message = err instanceof Error ? err.message : "Request failed";
+      setError(message);
+      setAgentOnline(false);
       setMessages((prev) => [
         ...prev,
         {
           id: `e-${Date.now()}`,
           role: "assistant",
-          content: err instanceof Error ? err.message : "Request failed",
+          content: `**Error:** ${message}`,
+          errors: [message],
         },
       ]);
     } finally {
-      setChatBusy(false);
+      setBusy(false);
     }
   }
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
-    void handleSend(input);
+    void runCommand(input);
   }
 
   async function checkPool() {
     const mint = baseToken.trim();
-    if (mint.length < 32) {
-      setPoolStatus("Enter a valid base token mint to check pool.");
+    if (mint.length < 2) {
+      setPoolStatus("Enter a valid base token symbol or mint to check pool.");
       return;
     }
     setPoolCheckBusy(true);
@@ -129,8 +266,8 @@ export function VolumeAgentConsole() {
       const result = await checkVolumePool(mint);
       setPoolStatus(
         result.pool_exists
-          ? `DLMM pool exists · ${result.pool_address ?? "address pending"}`
-          : `No pool found · creation cost ~${result.pool_creation_cost_sol ?? health?.pool_creation_cost_sol ?? VOLUME_AGENT.poolCreationCostSol} SOL`
+          ? `DLMM pool found · ${result.pool_address ?? "address pending"}`
+          : `No pool found · creation cost ~${result.pool_creation_cost_sol ?? poolCost} SOL`
       );
     } catch (err) {
       setPoolStatus(err instanceof Error ? err.message : "Pool check failed");
@@ -150,7 +287,7 @@ export function VolumeAgentConsole() {
       const result = await createVolumeCampaign(
         {
           base_token: baseToken.trim(),
-          quote_token: "SOL",
+          quote_token: quoteToken.trim() || "SOL",
           trade_amount: Number(tradeAmount),
           interval: interval.trim(),
           max_executions: Number(maxExecutions),
@@ -166,212 +303,272 @@ export function VolumeAgentConsole() {
     }
   }
 
-  const poolCost = health?.pool_creation_cost_sol ?? VOLUME_AGENT.poolCreationCostSol;
-  const cluster = health?.cluster;
-
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-      <div className="space-y-6 lg:col-span-2">
-        <Panel title="Create volume campaign">
-          <form className="space-y-4" onSubmit={(e) => void handleCreateCampaign(e)}>
-            <p className="text-sm text-muted-foreground">
-              1. Sign in with your wallet · 2. Deposit token + SOL · 3. Set pair, trade size, frequency, and
-              number of transactions. The agent checks for a Meteora DLMM pool, creates one if needed (~
-              {poolCost} SOL), or reuses an existing pool. Platform fee is{" "}
-              <strong className="text-foreground">{VOLUME_AGENT.platformFeeLabel}</strong> on every leg.
-            </p>
+    <div className="space-y-6">
+      <div className="border border-grid bg-surface/40 px-4 py-4">
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          {VOLUME_AGENT.description} Connect your wallet, deposit SOL + token, then schedule Meteora DLMM
+          buy/sell volume cycles. Existing pools are reused automatically; new pairs may require ~{poolCost}{" "}
+          SOL pool creation. Platform fee is{" "}
+          <strong className="text-foreground">{VOLUME_AGENT.platformFeeLabel}</strong>.
+        </p>
+      </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="space-y-1 font-mono text-[11px] sm:col-span-2">
-                <span className="text-muted-foreground">Base token (symbol or mint)</span>
-                <input
-                  className="w-full border border-grid bg-background px-3 py-2 text-foreground"
-                  value={baseToken}
-                  onChange={(e) => setBaseToken(e.target.value)}
-                  placeholder="Your token mint or symbol"
-                  required
-                />
-              </label>
-              <label className="space-y-1 font-mono text-[11px]">
-                <span className="text-muted-foreground">SOL per trade leg</span>
-                <input
-                  className="w-full border border-grid bg-background px-3 py-2 text-foreground"
-                  value={tradeAmount}
-                  onChange={(e) => setTradeAmount(e.target.value)}
-                  inputMode="decimal"
-                  required
-                />
-              </label>
-              <label className="space-y-1 font-mono text-[11px]">
-                <span className="text-muted-foreground">Interval</span>
-                <input
-                  className="w-full border border-grid bg-background px-3 py-2 text-foreground"
-                  value={interval}
-                  onChange={(e) => setInterval(e.target.value)}
-                  placeholder="30 seconds"
-                  required
-                />
-              </label>
-              <label className="space-y-1 font-mono text-[11px]">
-                <span className="text-muted-foreground">Number of transactions (cycles)</span>
-                <input
-                  className="w-full border border-grid bg-background px-3 py-2 text-foreground"
-                  value={maxExecutions}
-                  onChange={(e) => setMaxExecutions(e.target.value)}
-                  inputMode="numeric"
-                  required
-                />
-              </label>
-              <div className="flex items-end">
-                <button
-                  type="button"
-                  onClick={() => void checkPool()}
-                  disabled={poolCheckBusy}
-                  className="w-full border border-grid px-3 py-2 font-mono text-[11px] uppercase"
-                >
-                  {poolCheckBusy ? "Checking…" : "Check DLMM pool"}
-                </button>
-              </div>
-            </div>
+      {error && (
+        <div className="border border-warn/40 bg-warn/10 px-4 py-3 font-mono text-xs text-warn">{error}</div>
+      )}
 
-            {poolStatus && <p className="font-mono text-[11px] text-muted-foreground">{poolStatus}</p>}
-            {campaignError && <p className="font-mono text-[11px] text-warn">{campaignError}</p>}
-            {campaignSuccess && <p className="font-mono text-[11px] text-signal">{campaignSuccess}</p>}
+      {authError && (
+        <div className="border border-warn/40 bg-warn/10 px-4 py-3 font-mono text-xs text-warn">
+          Wallet sign-in: {authError}
+        </div>
+      )}
 
-            <button
-              type="submit"
-              disabled={!isAuthenticated || campaignBusy}
-              className="w-full border border-signal bg-signal/10 px-4 py-2 font-mono text-[11px] uppercase tracking-wider text-signal disabled:opacity-50"
-            >
-              {campaignBusy ? "Creating infrastructure…" : "Create campaign"}
-            </button>
-          </form>
+      {publicKey && authBusy && (
+        <div className="border border-grid bg-surface/40 px-4 py-3 font-mono text-xs text-muted-foreground">
+          Approve the wallet sign-in message to authenticate. The message includes acceptance of our Terms,
+          Privacy Policy, and Risk Disclaimer.
+        </div>
+      )}
+
+      <VolumeAgentDeposit
+        cluster={cluster}
+        authToken={token}
+        refreshTick={refreshTick}
+        poolCreationCostSol={poolCost}
+        onBalancesChange={setUserBalances}
+      />
+
+      {!publicKey && (
+        <div className="border border-grid bg-surface/40 px-4 py-3 font-mono text-xs text-muted-foreground">
+          Connect your wallet above to deposit and run volume campaigns tied to your balance.
+        </div>
+      )}
+
+      {publicKey && !isAuthenticated && !authBusy && (
+        <div className="border border-grid bg-surface/40 px-4 py-3 font-mono text-xs text-muted-foreground">
+          Approve the wallet sign-in prompt to use the Volume Agent.
+        </div>
+      )}
+
+      {userBalances && userBalances.balances.length > 0 && (
+        <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+          <span className="text-foreground">
+            {userBalances.user_wallet.slice(0, 4)}…{userBalances.user_wallet.slice(-4)}
+          </span>{" "}
+          · {userBalances.balances.length} deposited token{userBalances.balances.length === 1 ? "" : "s"}
+        </div>
+      )}
+
+      {transactions.length > 0 && (
+        <Panel title="On-chain transactions · session">
+          <div className="grid gap-2 sm:grid-cols-2">
+            {transactions.map((tx) => (
+              <TxLink key={tx.signature} tx={tx} cluster={cluster} />
+            ))}
+          </div>
         </Panel>
+      )}
 
-        <Panel title="Volume Agent chat">
-          <div className="mb-4 flex flex-wrap gap-2">
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Panel title="Command · Volume Agent" className="lg:col-span-2">
+          <div className="flex max-h-[420px] flex-col gap-4 overflow-y-auto pr-1">
+            {messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`rounded border px-4 py-3 text-sm leading-relaxed ${
+                  msg.role === "user"
+                    ? "border-grid bg-surface/60 text-foreground"
+                    : msg.errors?.length
+                      ? "border-warn/40 bg-warn/5 text-muted-foreground"
+                      : "border-signal/30 bg-surface/30 text-muted-foreground"
+                }`}
+              >
+                <div className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-signal">
+                  {msg.role === "user" ? "You" : "Agent"}
+                </div>
+                <div className="space-y-1">{formatReply(msg.content)}</div>
+
+                {msg.errors && msg.errors.length > 0 && (
+                  <div className="mt-3 space-y-1 border-t border-warn/30 pt-3">
+                    <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-warn">Error</div>
+                    {msg.errors.map((err, i) => (
+                      <p key={i} className="font-mono text-[11px] leading-relaxed text-warn">
+                        {err}
+                      </p>
+                    ))}
+                  </div>
+                )}
+
+                {msg.transactions && msg.transactions.length > 0 && (
+                  <div className="mt-3 space-y-2 border-t border-grid pt-3">
+                    <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                      Transaction{msg.transactions.length > 1 ? "s" : ""}
+                    </div>
+                    {msg.transactions.map((tx) => (
+                      <TxLink key={tx.signature} tx={tx} cluster={cluster} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+            {busy && (
+              <div className="animate-pulse font-mono text-xs text-muted-foreground">
+                Working… (Volume Agent may take a moment)
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+
+          <form onSubmit={onSubmit} className="mt-4 border-t border-grid pt-4">
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                disabled={busy || !token}
+                placeholder={token ? "e.g. List my volume campaigns" : "Sign in with wallet to chat"}
+                className="flex-1 border border-grid bg-background px-4 py-3 font-mono text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-signal disabled:opacity-50"
+              />
+              <button
+                type="submit"
+                disabled={busy || !input.trim() || !token}
+                className="bg-signal px-5 py-3 font-mono text-xs font-semibold uppercase tracking-[0.14em] text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Send
+              </button>
+            </div>
+          </form>
+
+          <div className="mt-4 flex flex-wrap gap-2">
             {VOLUME_EXAMPLE_PROMPTS.map((prompt) => (
               <button
                 key={prompt}
                 type="button"
-                onClick={() => void handleSend(prompt)}
-                disabled={!isAuthenticated || chatBusy}
-                className="border border-grid px-2 py-1 font-mono text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-50"
+                disabled={busy || !token}
+                onClick={() => void runCommand(prompt)}
+                className="border border-grid px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition hover:border-signal hover:text-foreground disabled:opacity-40"
               >
                 {prompt}
               </button>
             ))}
           </div>
+        </Panel>
 
-          <div className="mb-4 max-h-[360px] space-y-3 overflow-y-auto border border-grid bg-background/40 p-3">
-            {messages.length === 0 && (
-              <p className="font-mono text-[11px] text-muted-foreground">
-                Ask about campaigns, pool infrastructure, or fees.
+        <Panel
+          title="Agent actions · live"
+          action={
+            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+              {!agentOnline && "Waiting"}
+            </span>
+          }
+        >
+          <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1 font-mono text-xs">
+            {actions.length === 0 && (
+              <p className="text-muted-foreground">
+                Pool checks, campaign creation, and swap tool calls appear here with tx signatures.
               </p>
             )}
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`font-mono text-[12px] ${
-                  msg.role === "user" ? "text-foreground" : "text-muted-foreground"
-                }`}
-              >
-                <span className="mr-2 text-[10px] uppercase tracking-wider text-signal">
-                  {msg.role === "user" ? "You" : "Agent"}
-                </span>
-                {formatReply(msg.content)}
-              </div>
+            {actions.map((act, index) => (
+              <ActionCard key={`${act.id}-${index}`} act={act} index={index} cluster={cluster} />
             ))}
-            {chatBusy && <p className="font-mono text-[11px] text-muted-foreground">Working…</p>}
-            <div ref={bottomRef} />
+            <div ref={actionsEndRef} />
           </div>
-
-          <form onSubmit={onSubmit} className="flex gap-2">
-            <input
-              className="min-w-0 flex-1 border border-grid bg-background px-3 py-2 font-mono text-[12px]"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={isAuthenticated ? "Message Volume Agent…" : "Connect wallet to chat"}
-              disabled={!isAuthenticated || chatBusy}
-            />
-            <button
-              type="submit"
-              disabled={!isAuthenticated || chatBusy || !input.trim()}
-              className="border border-signal px-4 py-2 font-mono text-[11px] uppercase text-signal disabled:opacity-50"
-            >
-              Send
-            </button>
-          </form>
-
-          {actions.length > 0 && (
-            <div className="mt-4 space-y-2">
-              {actions.map((act) => (
-                <div key={act.id} className="border border-grid p-2 font-mono text-[10px]">
-                  <span className="text-signal">{act.tool}</span> · {act.status}
-                </div>
-              ))}
-            </div>
-          )}
         </Panel>
-
-        {token && (
-          <VolumeCampaignPanel
-            authToken={token}
-            cluster={cluster}
-            refreshTick={refreshTick}
-            onCampaignChange={() => setRefreshTick((t) => t + 1)}
-          />
-        )}
       </div>
 
-      <div className="space-y-6">
-        <Panel title="Wallet & status">
-          <div className="space-y-3 font-mono text-[11px]">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-muted-foreground">Wallet</span>
-              {!connected ? (
-                <WalletMultiButton className="!h-8" />
-              ) : (
-                <code className="break-all text-foreground">{wallet}</code>
-              )}
-            </div>
-            <div className="flex justify-between gap-2">
-              <span className="text-muted-foreground">Sign-in</span>
-              <span className={isAuthenticated ? "text-signal" : "text-warn"}>
-                {authBusy ? "Signing…" : isAuthenticated ? "Authenticated" : "Required"}
-              </span>
-            </div>
-            {authError && <p className="text-warn">{authError}</p>}
-            <div className="flex justify-between gap-2">
-              <span className="text-muted-foreground">Cluster</span>
-              <span>{cluster ?? "—"}</span>
-            </div>
-            <div className="flex justify-between gap-2">
-              <span className="text-muted-foreground">Agent wallet</span>
-              <span>{health?.trading_wallet_configured ? "Configured" : "Not set"}</span>
-            </div>
-            <div className="flex justify-between gap-2">
-              <span className="text-muted-foreground">Pool creation</span>
-              <span>~{poolCost} SOL</span>
-            </div>
-            <div className="flex justify-between gap-2">
-              <span className="text-muted-foreground">Platform fee</span>
-              <span>{VOLUME_AGENT.platformFeeLabel}</span>
-            </div>
-            <Link href="/agents" className="inline-block text-signal">
-              ← Marketplace
-            </Link>
-          </div>
-        </Panel>
+      <Panel title="Quick create · volume campaign">
+        <form className="space-y-4" onSubmit={(e) => void handleCreateCampaign(e)}>
+          <p className="text-sm text-muted-foreground">
+            Set pair, trade size, frequency, and cycle count. The agent checks Meteora DLMM pools and reuses
+            existing liquidity when available.
+          </p>
 
-        <VolumeAgentDeposit
-          cluster={cluster}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1 font-mono text-[11px] sm:col-span-2">
+              <span className="text-muted-foreground">Base token (symbol or mint)</span>
+              <input
+                className="w-full border border-grid bg-background px-3 py-2 text-foreground outline-none focus:border-signal"
+                value={baseToken}
+                onChange={(e) => setBaseToken(e.target.value)}
+                placeholder="Your token mint or symbol (e.g. USDC)"
+                required
+              />
+            </label>
+            <label className="space-y-1 font-mono text-[11px]">
+              <span className="text-muted-foreground">Quote token</span>
+              <select
+                className="w-full border border-grid bg-background px-3 py-2 text-foreground outline-none focus:border-signal"
+                value={quoteToken}
+                onChange={(e) => setQuoteToken(e.target.value)}
+              >
+                <option value="SOL">SOL</option>
+                <option value="USDC">USDC</option>
+              </select>
+            </label>
+            <label className="space-y-1 font-mono text-[11px]">
+              <span className="text-muted-foreground">{quoteToken} per trade leg</span>
+              <input
+                className="w-full border border-grid bg-background px-3 py-2 text-foreground outline-none focus:border-signal"
+                value={tradeAmount}
+                onChange={(e) => setTradeAmount(e.target.value)}
+                inputMode="decimal"
+                required
+              />
+            </label>
+            <label className="space-y-1 font-mono text-[11px]">
+              <span className="text-muted-foreground">Interval</span>
+              <input
+                className="w-full border border-grid bg-background px-3 py-2 text-foreground outline-none focus:border-signal"
+                value={interval}
+                onChange={(e) => setInterval(e.target.value)}
+                placeholder="30 seconds"
+                required
+              />
+            </label>
+            <label className="space-y-1 font-mono text-[11px]">
+              <span className="text-muted-foreground">Cycles (buy + sell each)</span>
+              <input
+                className="w-full border border-grid bg-background px-3 py-2 text-foreground outline-none focus:border-signal"
+                value={maxExecutions}
+                onChange={(e) => setMaxExecutions(e.target.value)}
+                inputMode="numeric"
+                required
+              />
+            </label>
+            <div className="flex items-end">
+              <button
+                type="button"
+                onClick={() => void checkPool()}
+                disabled={poolCheckBusy}
+                className="w-full border border-grid px-3 py-2 font-mono text-[11px] uppercase tracking-[0.12em] transition hover:border-signal disabled:opacity-50"
+              >
+                {poolCheckBusy ? "Checking…" : "Check DLMM pool"}
+              </button>
+            </div>
+          </div>
+
+          {poolStatus && <p className="font-mono text-[11px] text-muted-foreground">{poolStatus}</p>}
+          {campaignError && <p className="font-mono text-[11px] text-warn">{campaignError}</p>}
+          {campaignSuccess && <p className="font-mono text-[11px] text-signal">{campaignSuccess}</p>}
+
+          <button
+            type="submit"
+            disabled={!isAuthenticated || campaignBusy}
+            className="bg-signal px-5 py-3 font-mono text-xs font-semibold uppercase tracking-[0.14em] text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {campaignBusy ? "Creating…" : "Create campaign"}
+          </button>
+        </form>
+      </Panel>
+
+      {token && (
+        <VolumeCampaignPanel
           authToken={token}
+          cluster={cluster}
           refreshTick={refreshTick}
-          poolCreationCostSol={poolCost}
-          onBalancesChange={() => setRefreshTick((t) => t + 1)}
+          onCampaignChange={() => setRefreshTick((t) => t + 1)}
         />
-      </div>
+      )}
     </div>
   );
 }

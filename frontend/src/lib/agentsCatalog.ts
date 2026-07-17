@@ -96,7 +96,7 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     name: "Volume Agent",
     category: "Trading",
     description:
-      "Run Meteora DLMM volume campaigns. Deposit your token + SOL, create or reuse a DLMM pool, and schedule buy/sell cycles at your chosen frequency.",
+      "Run volume campaigns. Deposit your token + SOL, create or reuse a pool, and schedule buy/sell cycles at your chosen frequency.",
     tagline: "DLMM volume · pool infra",
     pricePerTask: "0.25% / leg",
     runs: "-",

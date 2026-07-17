@@ -165,9 +165,11 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
         quote_amount=pool_cost,
     )
     if created.get("error"):
+        updates["status"] = "failed"
         updates["infrastructure"] = {
             **updates.get("infrastructure", {}),
             "pool_creation_error": created,
+            "last_provision_error_at": datetime.now(timezone.utc).isoformat(),
         }
         update_volume_campaign(campaign_id, updates)
         return created
@@ -304,6 +306,17 @@ def create_volume_campaign(
     if not infra.get("pool_exists"):
         provisioned = provision_campaign_infrastructure(campaign["id"])
         campaign = find_volume_campaign(campaign["id"]) or campaign
+        if campaign.get("status") == "failed":
+            err = provisioned.get("error") or "Pool provisioning failed."
+            return {
+                "status": "created",
+                "campaign": campaign,
+                "infrastructure": provisioned,
+                "platform_fee_rate": VOLUME_PLATFORM_FEE_RATE,
+                "error": err,
+                "message": f"Volume campaign **{name}** created but pool setup failed: {err}",
+            }
+        pool_note = "reused" if campaign.get("pool_exists") else "created"
         return {
             "status": "created",
             "campaign": campaign,
@@ -312,7 +325,7 @@ def create_volume_campaign(
             "message": (
                 f"Volume campaign **{name}** created. "
                 f"Platform fee **0.25% per transaction leg** (buy and sell). "
-                f"Pool: {'reused' if campaign.get('pool_exists') else 'created'}."
+                f"Pool: {pool_note}."
             ),
         }
 
@@ -513,7 +526,16 @@ def _scheduler_loop() -> None:
     while not _scheduler_stop.is_set():
         try:
             for campaign in load_all_volume_campaigns():
-                if campaign.get("status") != "active":
+                status = campaign.get("status")
+                if status == "provisioning":
+                    print(
+                        f"\n  Pool provision retry: {campaign.get('name')} ({campaign.get('id')})"
+                    )
+                    result = provision_campaign_infrastructure(campaign["id"])
+                    if result.get("error"):
+                        print(f"  Provision failed: {result.get('error')}")
+                    continue
+                if status != "active":
                     continue
                 next_at = campaign.get("next_execution_at")
                 if not next_at:
@@ -550,6 +572,116 @@ def stop_volume_scheduler() -> None:
     _scheduler_stop.set()
 
 
+def _format_create_campaign_reply(result: dict[str, Any]) -> str:
+    if result.get("error"):
+        return f"Could not create campaign: {result['error']}"
+    campaign = result.get("campaign") or {}
+    lines = [
+        result.get("message") or "Volume campaign created.",
+        "",
+        f"- ID: `{campaign.get('id', '—')}`",
+        f"- Pair: **{campaign.get('base_token')} / {campaign.get('quote_token')}**",
+        f"- Trade size: **{campaign.get('trade_amount')} {campaign.get('quote_token')}** per leg",
+        f"- Interval: **{campaign.get('interval')}**",
+        f"- Cycles: **{campaign.get('max_executions')}**",
+        f"- Status: **{campaign.get('status')}**",
+        f"- Pool: `{campaign.get('pool_address') or 'provisioning…'}`",
+        "",
+        "Not financial advice. DYOR.",
+    ]
+    infra = result.get("infrastructure") or {}
+    if infra.get("error"):
+        lines.insert(1, f"\nInfrastructure: {infra['error']}")
+    if campaign.get("status") == "failed":
+        err = (campaign.get("infrastructure") or {}).get("pool_creation_error") or {}
+        if isinstance(err, dict) and err.get("error"):
+            lines.insert(1, f"\nPool setup failed: {err['error']}")
+    return "\n".join(lines)
+
+
+def _parse_create_volume_campaign_request(user_input: str) -> Optional[dict[str, Any]]:
+    """Parse natural-language volume campaign requests without LLM tool calls."""
+    text = (user_input or "").strip()
+    lower = text.lower()
+    if not text:
+        return None
+    if not re.search(r"\b(create|start|launch|run|swap|campaign|campagin|volume)\b", lower):
+        return None
+
+    base_token: Optional[str] = None
+    quote_token: Optional[str] = None
+    trade_amount: Optional[float] = None
+
+    arrow_match = re.search(
+        r"(\d+(?:\.\d+)?)\s*(sol|usdc|usdt)\s*(?:->|→|to|into)\s*(sol|usdc|usdt|[1-9A-HJ-NP-Za-km-z]{32,44})",
+        lower,
+    )
+    if arrow_match:
+        trade_amount = float(arrow_match.group(1))
+        quote_token = arrow_match.group(2).upper()
+        dest = arrow_match.group(3)
+        base_token = dest if _looks_like_mint(dest) else dest.upper()
+    else:
+        amount_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(sol|usdc|usdt)\b", lower)
+        if amount_match:
+            trade_amount = float(amount_match.group(1))
+            quote_token = amount_match.group(2).upper()
+        mint_match = re.search(r"[1-9A-HJ-NP-Za-km-z]{32,44}", text)
+        if mint_match:
+            base_token = mint_match.group(0)
+        for sym in ("USDC", "USDT", "SOL", "JUP", "BONK"):
+            if quote_token and sym == quote_token:
+                continue
+            if re.search(rf"\b{sym.lower()}\b", lower):
+                base_token = base_token or sym
+                break
+
+    if trade_amount is None or not base_token:
+        return None
+    if not quote_token:
+        quote_token = "SOL"
+
+    max_match = re.search(
+        r"(?:for\s+)?(\d+)\s*(?:times?|trx|transactions?|cycles?|executions?|swaps?)\b",
+        lower,
+    )
+    if not max_match:
+        return None
+    max_executions = int(max_match.group(1))
+
+    interval_match = re.search(
+        r"every\s+(\d+)\s*(second|seconds|sec|secs|s|minute|minutes|min|mins|m)\b",
+        lower,
+    )
+    if interval_match:
+        count, unit = interval_match.groups()
+        unit = unit.rstrip(".")
+        unit_aliases = {
+            "sec": "seconds",
+            "secs": "seconds",
+            "s": "seconds",
+            "min": "minutes",
+            "mins": "minutes",
+            "m": "minutes",
+        }
+        interval = f"{count} {unit_aliases.get(unit, unit)}"
+    else:
+        interval = os.environ.get("VOLUME_DEFAULT_INTERVAL", "30 seconds")
+
+    return {
+        "base_token": base_token,
+        "quote_token": quote_token,
+        "trade_amount": trade_amount,
+        "interval": interval,
+        "max_executions": max_executions,
+    }
+
+
+def _looks_like_mint(value: str) -> bool:
+    value = (value or "").strip()
+    return len(value) >= 32 and bool(re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]+", value))
+
+
 def run_volume_agent_with_actions(
     user_input: str,
     conversation_history: list,
@@ -571,7 +703,25 @@ def run_volume_agent_with_actions(
                 f"\n- `{c.get('id')}` **{c.get('name')}** · {c.get('status')} · "
                 f"{c.get('executions_count', 0)}/{c.get('max_executions')} cycles · pool {c.get('pool_address') or 'pending'}"
             )
+        reply += "\n\nNot financial advice. DYOR."
         actions.append({"tool": "list_volume_campaigns", "args": {}, "result": json.dumps(result)})
+        conversation_history.append({"role": "user", "content": text})
+        conversation_history.append({"role": "assistant", "content": reply})
+        return reply, conversation_history, actions
+
+    parsed = _parse_create_volume_campaign_request(text)
+    if parsed:
+        if not user_wallet:
+            reply = "Connect your wallet and sign in before creating a volume campaign."
+        else:
+            args = {**parsed, "user_wallet": user_wallet.strip()}
+            result = create_volume_campaign(**args)
+            reply = _format_create_campaign_reply(result)
+            actions.append({
+                "tool": "create_volume_campaign",
+                "args": {k: v for k, v in args.items() if k != "user_wallet"},
+                "result": json.dumps(result, default=str),
+            })
         conversation_history.append({"role": "user", "content": text})
         conversation_history.append({"role": "assistant", "content": reply})
         return reply, conversation_history, actions
@@ -593,9 +743,9 @@ def run_volume_agent_with_actions(
     reply = (
         "Volume Agent helps you run Meteora DLMM volume campaigns.\n\n"
         "**Create a campaign** using the form above, or say:\n"
-        "`Create volume campaign: TOKEN_MINT, 0.01 SOL per trade, every 30 seconds, 10 transactions`\n\n"
+        "`Create campaign: swap 0.0001 SOL -> USDC for 3 times every 30 seconds`\n\n"
         "Requirements:\n"
-        f"- Deposit your token + SOL to the Volume Agent wallet\n"
+        f"- Deposit **SOL** (and your base token if needed) to the Volume Agent wallet\n"
         f"- Pool creation costs ~{get_pool_creation_cost_sol()} SOL if no DLMM pool exists\n"
         f"- Platform fee: **0.25% per swap leg** (buy and sell)\n\n"
         "Not financial advice. DYOR."

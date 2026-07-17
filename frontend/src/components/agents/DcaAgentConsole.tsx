@@ -269,7 +269,7 @@ export function DcaAgentConsole() {
             ? h.llm_reachable === false
               ? `Connected to DCA agent API, but the hosted LLM is unreachable`
               : `Connected to DCA agent. Ask me to create plans, or manage DCA schedules.`
-            : "DCA agent API is offline.",
+            : "Connected to DCA agent API.",
         },
       ]);
     });

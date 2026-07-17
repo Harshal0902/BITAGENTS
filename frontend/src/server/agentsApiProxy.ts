@@ -466,6 +466,19 @@ export async function proxyVolumeCampaignStatus(
   );
 }
 
+export async function proxyVolumeCampaignProvision(
+  campaignId: string,
+  authToken: string
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/volume/campaigns/${encodeURIComponent(campaignId)}/provision`,
+    {
+      method: "POST",
+      headers: buildHeaders(authToken),
+    }
+  );
+}
+
 export async function proxyVolumeAuthChallenge(userWallet: string): Promise<Response> {
   return proxyAgentsAuthChallenge(userWallet);
 }

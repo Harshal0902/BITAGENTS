@@ -15,7 +15,7 @@ export const VOLUME_AGENT = {
 };
 
 export const VOLUME_EXAMPLE_PROMPTS = [
+  "Create campaign: swap 0.0001 SOL -> USDC for 3 times",
   "List my volume campaigns",
-  "Check DLMM pool for my token",
-  "How much SOL do I need for pool creation?",
+  "Check DLMM pool for USDC",
 ] as const;

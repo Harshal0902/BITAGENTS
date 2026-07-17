@@ -167,7 +167,7 @@ export function VolumeAgentDeposit({
         </p>
 
         {!connected && <WalletMultiButton className="!w-full !justify-center" />}
-        {connected && !authToken && <LegalSignInNotice agentName="Volume Agent" />}
+        {connected && !authToken && <LegalSignInNotice />}
 
         {agentWallet && (
           <p className="font-mono text-[11px] text-muted-foreground break-all">

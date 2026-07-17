@@ -20,6 +20,11 @@ export type VolumeCampaignSummary = {
   pool_creation_cost_sol?: number;
   platform_fee_rate?: number;
   next_execution_at?: string | null;
+  infrastructure?: {
+    pool_creation_error?: { error?: string };
+    last_check?: { message?: string };
+    initial_check?: { message?: string };
+  };
 };
 
 export type VolumeCampaignsResponse = {
@@ -120,6 +125,21 @@ export async function updateVolumeCampaignStatus(
   });
   if (!res.ok) throw new Error(await readError(res));
   return (await res.json()) as { status: string; campaign: VolumeCampaignSummary };
+}
+
+export async function provisionVolumeCampaign(
+  campaignId: string,
+  authToken: string
+): Promise<{ status?: string; pool_address?: string; message?: string; error?: string }> {
+  const res = await fetch(
+    `/api/agents/volume/campaigns/${encodeURIComponent(campaignId)}/provision`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}` },
+    }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as { status?: string; pool_address?: string; message?: string };
 }
 
 export async function fetchVolumeCampaignExecutions(
