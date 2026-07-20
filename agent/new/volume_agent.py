@@ -156,6 +156,13 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
     pool_cost = float(campaign.get("pool_creation_cost_sol") or get_pool_creation_cost_sol())
     spend_check = check_user_can_spend_volume(user_wallet, campaign.get("quote_token", "SOL"), pool_cost)
     if "error" in spend_check:
+        updates["status"] = "failed"
+        updates["infrastructure"] = {
+            **updates.get("infrastructure", {}),
+            "spend_check_error": spend_check,
+            "last_provision_error_at": datetime.now(timezone.utc).isoformat(),
+        }
+        update_volume_campaign(campaign_id, updates)
         return spend_check
 
     created = create_dlmm_pool(

@@ -981,11 +981,17 @@ def volume_wallet_ledger(
 
 @app.get("/volume/pool/check")
 def volume_pool_check(
-    base_mint: str = Query(..., min_length=32),
-    quote_mint: str = Query(default="So11111111111111111111111111111111111111112", min_length=32),
+    base_mint: str = Query(..., min_length=2),
+    quote_mint: str = Query(default="So11111111111111111111111111111111111111112", min_length=2),
     _: None = Depends(require_internal_key),
 ) -> dict[str, Any]:
-    return check_pool_infrastructure(base_mint.strip(), quote_mint.strip())
+    base = resolve_token(base_mint.strip())
+    if "error" in base:
+        raise HTTPException(status_code=400, detail=base["error"])
+    quote = resolve_token(quote_mint.strip())
+    if "error" in quote:
+        raise HTTPException(status_code=400, detail=quote["error"])
+    return check_pool_infrastructure(base["mint"], quote["mint"])
 
 
 @app.get("/volume/campaigns")
