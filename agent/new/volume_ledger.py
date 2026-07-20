@@ -15,6 +15,31 @@ from dca_agent import resolve_token, sol_rpc
 
 VOLUME_PLATFORM_FEE_RATE = float(os.environ.get("VOLUME_PLATFORM_FEE_RATE", "0.0025"))
 
+# A new SPL token account costs ~0.00204 SOL in rent (refunded only if closed).
+# The first execution for a given base token may need to create one, so require
+# the per-leg trade size to comfortably clear that cost plus tx fee headroom —
+# otherwise the swap fails on-chain with "insufficient SOL for ATA rent" and the
+# wallet still pays network fees on every failed attempt.
+ATA_RENT_SOL = 0.00204
+MIN_VOLUME_TRADE_SOL = float(os.environ.get("MIN_VOLUME_TRADE_SOL", "0.005"))
+MAX_CONSECUTIVE_FAILURES = int(os.environ.get("VOLUME_MAX_CONSECUTIVE_FAILURES", "3"))
+
+
+def validate_volume_trade_amount(trade_amount: float, quote_token: str) -> dict[str, Any]:
+    """Reject trade sizes too small to survive ATA-rent overhead, before a campaign is ever created."""
+    if (quote_token or "SOL").strip().upper() != "SOL":
+        return {}
+    amount = float(trade_amount or 0)
+    if amount < MIN_VOLUME_TRADE_SOL:
+        return {
+            "error": (
+                f"Trade size {amount} SOL is too small. A new token account costs "
+                f"~{ATA_RENT_SOL} SOL in one-time rent, so trade size per leg must be "
+                f"at least {MIN_VOLUME_TRADE_SOL} SOL to avoid failed swaps."
+            )
+        }
+    return {}
+
 
 def load_volume_keypair():
     from dca_agent import HAS_SOLDERS, Keypair

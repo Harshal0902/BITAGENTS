@@ -22,7 +22,7 @@ METEORA_DLMM_DATAPI = os.environ.get(
 METEORA_POOL_CREATION_SOL = float(os.environ.get("METEORA_POOL_CREATION_SOL", "0.02669"))
 METEORA_DEFAULT_BIN_STEP = int(os.environ.get("METEORA_DEFAULT_BIN_STEP", "80"))
 METEORA_DEFAULT_FEE_BPS = int(os.environ.get("METEORA_DEFAULT_FEE_BPS", "25"))
-METEORA_POOL_SCRIPT = Path(__file__).resolve().parent / "scripts" / "create_dlmm_pool.mjs"
+METEORA_POOL_SCRIPT = Path(__file__).resolve().parent / "scripts" / "create_dlmm_pool.cjs"
 SOL_MINT = "So11111111111111111111111111111111111111112"
 
 
@@ -158,8 +158,37 @@ def _pair_matches_mints(pair: dict[str, Any], mint_x: str, mint_y: str) -> Optio
     return None
 
 
+def check_jupiter_route_exists(token_mint: str, quote_mint: str = SOL_MINT) -> bool:
+    """
+    Cheap, wallet-free liquidity check: does Jupiter's aggregator already have a
+    route for this pair, regardless of which pool type (DLMM, DAMM v2, DBC, Raydium,
+    etc.) actually holds the liquidity? Most real launched tokens (e.g. EasyA
+    Kickstart tokens) live on DAMM v2/DBC pools, not DLMM, so this is the correct
+    "does tradeable liquidity exist" signal — the DLMM-specific lookup below only
+    catches the narrower case of a dedicated DLMM pool.
+    """
+    try:
+        resp = requests.get(
+            "https://api.jup.ag/swap/v1/quote",
+            params={
+                "inputMint": quote_mint,
+                "outputMint": token_mint,
+                "amount": "10000000",
+                "slippageBps": "500",
+            },
+            timeout=15,
+        )
+        if not resp.ok:
+            return False
+        data = resp.json()
+        return bool(data.get("routePlan"))
+    except Exception as exc:
+        print(f"  Jupiter route check failed: {exc}")
+        return False
+
+
 def check_pool_infrastructure(token_mint: str, quote_mint: str = SOL_MINT) -> dict[str, Any]:
-    """Agent infrastructure check: reuse existing pool or flag creation required."""
+    """Agent infrastructure check: reuse existing liquidity or flag pool creation required."""
     existing = find_dlmm_pool(token_mint, quote_mint)
     if existing and existing.get("pool_address"):
         return {
@@ -171,6 +200,22 @@ def check_pool_infrastructure(token_mint: str, quote_mint: str = SOL_MINT) -> di
             "platform_fee_bps": METEORA_DEFAULT_FEE_BPS,
             "message": f"DLMM pool found. Reusing pool {existing['pool_address']}.",
         }
+
+    if check_jupiter_route_exists(token_mint, quote_mint):
+        return {
+            "pool_exists": True,
+            "pool_address": None,
+            "action": "reuse_existing_liquidity",
+            "pool": None,
+            "pool_creation_cost_sol": 0.0,
+            "platform_fee_bps": METEORA_DEFAULT_FEE_BPS,
+            "message": (
+                "No dedicated DLMM pool, but Jupiter already routes this pair "
+                "through existing liquidity (e.g. a DAMM v2/DBC pool). Trading "
+                "via Jupiter directly rather than creating a redundant pool."
+            ),
+        }
+
     return {
         "pool_exists": False,
         "pool_address": None,

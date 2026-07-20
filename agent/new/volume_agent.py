@@ -52,6 +52,7 @@ from meteora_dlmm import (
     get_pool_creation_cost_sol,
 )
 from volume_ledger import (
+    MAX_CONSECUTIVE_FAILURES,
     VOLUME_PLATFORM_FEE_RATE,
     check_user_can_spend_volume,
     get_volume_agent_wallet_info,
@@ -59,6 +60,7 @@ from volume_ledger import (
     load_volume_keypair,
     record_user_spend_volume,
     record_volume_platform_fee,
+    validate_volume_trade_amount,
     volume_execution_total_cost,
     volume_platform_fee,
 )
@@ -240,6 +242,10 @@ def create_volume_campaign(
     if max_executions <= 0:
         return {"error": "max_executions must be at least 1."}
 
+    size_check = validate_volume_trade_amount(trade_amount, quote["symbol"])
+    if "error" in size_check:
+        return size_check
+
     try:
         interval_minutes = _parse_interval(interval)
     except ValueError as exc:
@@ -393,10 +399,7 @@ def _execute_meteora_swap(
         "computeUnitPricePercentile": "high",
         "maxAccounts": "54",
         "skipUserAccountsRpcCalls": "true",
-        "dexes": "Meteora DLMM",
     }
-    if pool_address:
-        params["excludeDexes"] = ""
 
     try:
         resp = _jupiter_get(JUPITER_BUILD_API, params)
@@ -405,9 +408,40 @@ def _execute_meteora_swap(
         build_data = resp.json()
         if build_data.get("error"):
             return {"error": str(build_data["error"])}
-        return _execute_jupiter_swap_v2(build_data, wallet_pubkey, keypair)
+        result = _execute_jupiter_swap_v2(build_data, wallet_pubkey, keypair)
+        if result.get("status") == "success":
+            out_raw = int(build_data.get("outAmount") or 0)
+            if out_raw > 0:
+                result["output_amount_raw"] = out_raw
+        return result
     except Exception as exc:
         return {"error": str(exc)}
+
+
+def _record_execution_failure(
+    campaign_id: str, campaign: dict[str, Any], leg: str, leg_result: dict[str, Any]
+) -> dict[str, Any]:
+    """
+    Track consecutive failures and auto-pause a campaign rather than letting the
+    scheduler retry forever — an unattended retry loop silently drains the wallet
+    on Solana network fees even when every attempt fails.
+    """
+    failures = int(campaign.get("consecutive_failures") or 0) + 1
+    updates: dict[str, Any] = {"consecutive_failures": failures, "last_error": {"leg": leg, **leg_result}}
+    auto_paused = failures >= MAX_CONSECUTIVE_FAILURES
+    if auto_paused:
+        updates["status"] = "failed"
+    update_volume_campaign(campaign_id, updates)
+
+    result = {"campaign_id": campaign_id, "leg": leg, "consecutive_failures": failures, **leg_result}
+    if auto_paused:
+        result["auto_paused"] = True
+        result["message"] = (
+            f"Campaign auto-paused after {failures} consecutive failed attempts "
+            f"(last error: {leg_result.get('error', 'unknown')}). No further retries "
+            f"will run until you review and resume it."
+        )
+    return result
 
 
 def _run_volume_execution(campaign_id: str, *, dry_run: bool = False, force: bool = False) -> dict[str, Any]:
@@ -471,7 +505,7 @@ def _run_volume_execution(campaign_id: str, *, dry_run: bool = False, force: boo
         quote["mint"], base["mint"], trade_amount, quote["decimals"], slippage_bps, pool_address
     )
     if buy.get("status") != "success":
-        return {"campaign_id": campaign_id, "leg": "buy", **buy}
+        return _record_execution_failure(campaign_id, campaign, "buy", buy)
 
     if user_wallet:
         record_user_spend_volume(user_wallet, quote_token, trade_amount, reference_id=f"{campaign_id}-buy", signature=buy.get("signature"))
@@ -484,10 +518,20 @@ def _run_volume_execution(campaign_id: str, *, dry_run: bool = False, force: boo
         base["mint"], quote["mint"], sell_amount, base["decimals"], slippage_bps, pool_address
     )
     if sell.get("status") != "success":
-        return {"campaign_id": campaign_id, "leg": "sell", "buy": buy, **sell}
+        result = _record_execution_failure(campaign_id, campaign, "sell", sell)
+        result["buy"] = buy
+        return result
 
     if user_wallet:
-        record_volume_platform_fee(user_wallet, quote_token, sell_amount, reference_id=f"{campaign_id}-sell-fee", signature=sell.get("signature"))
+        # Fee must be recorded in quote-currency (SOL) terms — sell_amount above is
+        # the base-token quantity sold, not SOL, and was wrongly passed here before
+        # (produced fee "spends" thousands of times too large, corrupting the ledger).
+        # Use the actual SOL proceeds from the sell leg, falling back to trade_amount.
+        sell_out_raw = int(sell.get("output_amount_raw") or 0)
+        sell_proceeds_sol = (
+            sell_out_raw / (10 ** quote["decimals"]) if sell_out_raw > 0 else trade_amount
+        )
+        record_volume_platform_fee(user_wallet, quote_token, sell_proceeds_sol, reference_id=f"{campaign_id}-sell-fee", signature=sell.get("signature"))
 
     now = datetime.now(timezone.utc)
     exec_record = {
@@ -508,6 +552,7 @@ def _run_volume_execution(campaign_id: str, *, dry_run: bool = False, force: boo
             "spent_so_far": round(spent + cycle_cost, 9),
             "next_execution_at": next_run.isoformat(),
             "executions": executions[-50:],
+            "consecutive_failures": 0,
         },
     )
     return {
