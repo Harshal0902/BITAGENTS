@@ -400,9 +400,20 @@ export function VolumeCampaignPanel({
                   <dd className="text-foreground">{campaign.interval}</dd>
                 </div>
                 <div>
-                  <dt className="text-muted-foreground">Pool</dt>
+                  <dt className="text-muted-foreground">Meteora pool</dt>
                   <dd className="text-foreground">
-                    {campaign.pool_address ? shortAddress(campaign.pool_address) : "pending"}
+                    {campaign.pool_address ? (
+                      <a
+                        href={`https://app.meteora.ag/dlmm/${campaign.pool_address}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="break-all text-signal"
+                      >
+                        {campaign.pool_address}
+                      </a>
+                    ) : (
+                      "pending"
+                    )}
                   </dd>
                 </div>
                 <div>

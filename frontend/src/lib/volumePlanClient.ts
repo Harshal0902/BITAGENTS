@@ -38,6 +38,26 @@ export type VolumePoolCheck = {
   pool_address?: string | null;
   pool_creation_cost_sol?: number;
   message?: string;
+  source?: string;
+  meteora_url?: string;
+  base_token?: string;
+  quote_token?: string;
+  base_mint?: string;
+  quote_mint?: string;
+  pair?: string;
+  pool?: {
+    name?: string;
+    bin_step?: number;
+    trade_volume_24h?: number;
+    liquidity?: number;
+  };
+};
+
+export type VolumePoolEnsureResult = VolumePoolCheck & {
+  status?: string;
+  signature?: string;
+  explorer_url?: string;
+  error?: string;
 };
 
 export type VolumeCampaignExecutionsResponse = {
@@ -158,14 +178,38 @@ export async function fetchVolumeCampaignExecutions(
 }
 
 export async function checkVolumePool(
-  baseMint: string,
-  quoteMint?: string
+  baseToken: string,
+  quoteToken = "SOL"
 ): Promise<VolumePoolCheck> {
-  const params = new URLSearchParams({ base_mint: baseMint });
-  if (quoteMint) params.set("quote_mint", quoteMint);
+  const params = new URLSearchParams({
+    base_token: baseToken.trim(),
+    quote_token: quoteToken.trim() || "SOL",
+  });
   const res = await fetch(`/api/agents/volume/pool/check?${params}`, { cache: "no-store" });
   if (!res.ok) throw new Error(await readError(res));
   return (await res.json()) as VolumePoolCheck;
+}
+
+export async function ensureVolumeMeteoraPool(
+  baseToken: string,
+  quoteToken: string,
+  authToken: string,
+  createIfMissing = false
+): Promise<VolumePoolEnsureResult> {
+  const res = await fetch("/api/agents/volume/pool/ensure", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${authToken}`,
+    },
+    body: JSON.stringify({
+      base_token: baseToken.trim(),
+      quote_token: quoteToken.trim() || "SOL",
+      create_if_missing: createIfMissing,
+    }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return (await res.json()) as VolumePoolEnsureResult;
 }
 
 export function executionExplorerUrl(signature?: string, cluster?: string) {
