@@ -49,7 +49,9 @@ from meteora_dlmm import (
     METEORA_DEFAULT_FEE_BPS,
     check_pool_infrastructure,
     create_dlmm_pool,
+    ensure_meteora_dlmm_pool,
     get_pool_creation_cost_sol,
+    meteora_pool_app_url,
 )
 from volume_ledger import (
     MAX_CONSECUTIVE_FAILURES,
@@ -130,6 +132,64 @@ def _estimate_campaign_budget(
     return round(total, 9)
 
 
+def _dlmm_pool_ready(infra: dict[str, Any]) -> bool:
+    """True only when Meteora returned a real on-chain DLMM pool address."""
+    return bool(infra.get("pool_exists") and infra.get("pool_address"))
+
+
+def ensure_volume_meteora_pool(
+    *,
+    base_token: str,
+    quote_token: str = "SOL",
+    user_wallet: Optional[str] = None,
+    create_if_missing: bool = False,
+) -> dict[str, Any]:
+    """Resolve tokens, check Meteora live, optionally create a DLMM pool on Meteora."""
+    base = resolve_token(base_token)
+    quote = resolve_token(quote_token)
+    if "error" in base:
+        return base
+    if "error" in quote:
+        return quote
+
+    if create_if_missing and user_wallet:
+        pool_cost = get_pool_creation_cost_sol()
+        spend_check = check_user_can_spend_volume(user_wallet.strip(), quote["symbol"], pool_cost)
+        if "error" in spend_check:
+            return spend_check
+
+    result = ensure_meteora_dlmm_pool(
+        base["mint"],
+        quote["mint"],
+        create_if_missing=create_if_missing,
+        quote_amount=float(get_pool_creation_cost_sol()) if create_if_missing else 0.0,
+    )
+    if result.get("error"):
+        return result
+
+    result.update(
+        {
+            "base_token": base["symbol"],
+            "quote_token": quote["symbol"],
+            "base_mint": base["mint"],
+            "quote_mint": quote["mint"],
+            "pair": f"{base['symbol']}/{quote['symbol']}",
+        }
+    )
+
+    if create_if_missing and user_wallet and result.get("status") == "created":
+        pool_cost = get_pool_creation_cost_sol()
+        record_user_spend_volume(
+            user_wallet.strip(),
+            quote["symbol"],
+            pool_cost,
+            reference_id=f"pool-create-{base['symbol']}-{quote['symbol']}",
+            signature=result.get("signature"),
+        )
+
+    return result
+
+
 def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
     campaign = find_volume_campaign(campaign_id)
     if not campaign:
@@ -140,9 +200,10 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
         "infrastructure": {**campaign.get("infrastructure", {}), "last_check": infra},
     }
 
-    if infra.get("pool_exists"):
+    if _dlmm_pool_ready(infra):
+        pool_address = infra.get("pool_address")
         updates["pool_exists"] = True
-        updates["pool_address"] = infra.get("pool_address")
+        updates["pool_address"] = pool_address
         updates["status"] = "active" if campaign.get("status") == "provisioning" else campaign.get("status")
         if campaign.get("status") == "provisioning" and not campaign.get("next_execution_at"):
             updates["next_execution_at"] = datetime.now(timezone.utc).isoformat()
@@ -150,7 +211,9 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
         return {
             "status": "reuse_pool",
             "campaign_id": campaign_id,
-            "pool_address": infra.get("pool_address"),
+            "pool_address": pool_address,
+            "source": "meteora",
+            "meteora_url": meteora_pool_app_url(pool_address),
             "message": infra.get("message"),
             "platform_fee_rate": VOLUME_PLATFORM_FEE_RATE,
         }
@@ -256,8 +319,9 @@ def create_volume_campaign(
         return {"error": "user_wallet is required. Connect wallet and sign in first."}
 
     infra = check_pool_infrastructure(base["mint"], quote["mint"])
-    pool_cost = 0.0 if infra.get("pool_exists") else float(infra.get("pool_creation_cost_sol") or get_pool_creation_cost_sol())
-    estimated_budget = _estimate_campaign_budget(trade_amount, max_executions, pool_cost, infra.get("pool_exists", False))
+    dlmm_ready = _dlmm_pool_ready(infra)
+    pool_cost = 0.0 if dlmm_ready else float(infra.get("pool_creation_cost_sol") or get_pool_creation_cost_sol())
+    estimated_budget = _estimate_campaign_budget(trade_amount, max_executions, pool_cost, dlmm_ready)
 
     if total_budget is None:
         total_budget = estimated_budget
@@ -288,7 +352,7 @@ def create_volume_campaign(
         "base_mint": base["mint"],
         "quote_mint": quote["mint"],
         "pool_address": infra.get("pool_address"),
-        "pool_exists": bool(infra.get("pool_exists")),
+        "pool_exists": dlmm_ready,
         "pool_creation_cost_sol": pool_cost,
         "trade_amount": trade_amount,
         "interval": interval,
@@ -299,9 +363,9 @@ def create_volume_campaign(
         "executions_count": 0,
         "slippage_bps": slippage_bps,
         "platform_fee_rate": VOLUME_PLATFORM_FEE_RATE,
-        "status": "active" if infra.get("pool_exists") else "provisioning",
+        "status": "active" if dlmm_ready else "provisioning",
         "created_at": now.isoformat(),
-        "next_execution_at": now.isoformat() if infra.get("pool_exists") else None,
+        "next_execution_at": now.isoformat() if dlmm_ready else None,
         "executions": [],
         "infrastructure": {
             "initial_check": infra,
@@ -310,7 +374,7 @@ def create_volume_campaign(
     }
     insert_volume_campaign(campaign)
 
-    if not infra.get("pool_exists"):
+    if not dlmm_ready:
         provisioned = provision_campaign_infrastructure(campaign["id"])
         campaign = find_volume_campaign(campaign["id"]) or campaign
         if campaign.get("status") == "failed":
@@ -667,7 +731,7 @@ def _format_create_campaign_reply(result: dict[str, Any]) -> str:
         f"- Interval: **{campaign.get('interval')}**",
         f"- Cycles: **{campaign.get('max_executions')}**",
         f"- Status: **{campaign.get('status')}**",
-        f"- Pool: `{campaign.get('pool_address') or 'provisioning…'}`",
+        f"- Pool (Meteora): `{campaign.get('pool_address') or 'not set yet'}`",
         "",
         "Not financial advice. DYOR.",
     ]
@@ -808,16 +872,39 @@ def run_volume_agent_with_actions(
         conversation_history.append({"role": "assistant", "content": reply})
         return reply, conversation_history, actions
 
-    if "pool" in lower and re.search(r"\b(check|status|infra)", lower):
-        args: dict[str, Any] = {}
-        mint_match = re.search(r"[1-9A-HJ-NP-Za-km-z]{32,44}", text)
-        if mint_match:
-            args["token_mint"] = mint_match.group(0)
-            result = check_pool_infrastructure(args["token_mint"])
+    if "pool" in lower and re.search(r"\b(check|status|infra|setup|create)\b", lower):
+        pair_match = re.search(
+            r"(\w+|sol|usdc|usdt|[1-9A-HJ-NP-Za-km-z]{32,44})\s*(?:/|->|→|and|&)\s*(\w+|sol|usdc|usdt|[1-9A-HJ-NP-Za-km-z]{32,44})",
+            lower,
+        )
+        create_pool = bool(re.search(r"\b(create|setup|provision)\b", lower))
+        if pair_match:
+            base_t = pair_match.group(1).upper() if len(pair_match.group(1)) <= 8 else pair_match.group(1)
+            quote_t = pair_match.group(2).upper() if len(pair_match.group(2)) <= 8 else pair_match.group(2)
+            result = ensure_volume_meteora_pool(
+                base_token=base_t,
+                quote_token=quote_t,
+                user_wallet=user_wallet.strip() if user_wallet else None,
+                create_if_missing=create_pool and bool(user_wallet),
+            )
+            args = {"base_token": base_t, "quote_token": quote_t, "create_if_missing": create_pool}
         else:
-            result = {"error": "Provide a token mint address to check DLMM pool infrastructure."}
-        reply = result.get("message") or json.dumps(result)
-        actions.append({"tool": "check_pool_infrastructure", "args": args, "result": json.dumps(result)})
+            mint_match = re.search(r"[1-9A-HJ-NP-Za-km-z]{32,44}", text)
+            if mint_match:
+                args = {"token_mint": mint_match.group(0)}
+                result = check_pool_infrastructure(args["token_mint"])
+            else:
+                result = {"error": "Provide two tokens (e.g. USDC/SOL) to check Meteora DLMM pool."}
+                args = {}
+        if result.get("pool_address"):
+            reply = (
+                f"**Meteora DLMM pool:** `{result['pool_address']}`\n"
+                f"Pair: **{result.get('pair') or result.get('base_token', '—')}/{result.get('quote_token', 'SOL')}**\n"
+                f"View: {result.get('meteora_url') or meteora_pool_app_url(result['pool_address'])}"
+            )
+        else:
+            reply = result.get("message") or result.get("error") or json.dumps(result)
+        actions.append({"tool": "ensure_meteora_dlmm_pool" if pair_match else "check_pool_infrastructure", "args": args, "result": json.dumps(result, default=str)})
         conversation_history.append({"role": "user", "content": text})
         conversation_history.append({"role": "assistant", "content": reply})
         return reply, conversation_history, actions

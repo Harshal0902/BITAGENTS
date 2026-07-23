@@ -158,76 +158,108 @@ def _pair_matches_mints(pair: dict[str, Any], mint_x: str, mint_y: str) -> Optio
     return None
 
 
-def check_jupiter_route_exists(token_mint: str, quote_mint: str = SOL_MINT) -> bool:
-    """
-    Cheap, wallet-free liquidity check: does Jupiter's aggregator already have a
-    route for this pair, regardless of which pool type (DLMM, DAMM v2, DBC, Raydium,
-    etc.) actually holds the liquidity? Most real launched tokens (e.g. EasyA
-    Kickstart tokens) live on DAMM v2/DBC pools, not DLMM, so this is the correct
-    "does tradeable liquidity exist" signal — the DLMM-specific lookup below only
-    catches the narrower case of a dedicated DLMM pool.
-    """
-    try:
-        resp = requests.get(
-            "https://api.jup.ag/swap/v1/quote",
-            params={
-                "inputMint": quote_mint,
-                "outputMint": token_mint,
-                "amount": "10000000",
-                "slippageBps": "500",
-            },
-            timeout=15,
-        )
-        if not resp.ok:
-            return False
-        data = resp.json()
-        return bool(data.get("routePlan"))
-    except Exception as exc:
-        print(f"  Jupiter route check failed: {exc}")
-        return False
+def meteora_pool_app_url(pool_address: str) -> str:
+    """Link to the pool on Meteora's app (on-chain pool address, not our DB)."""
+    return f"https://app.meteora.ag/dlmm/{pool_address.strip()}"
 
 
 def check_pool_infrastructure(token_mint: str, quote_mint: str = SOL_MINT) -> dict[str, Any]:
-    """Agent infrastructure check: reuse existing liquidity or flag pool creation required."""
+    """Live Meteora DLMM lookup for the mint pair (not our database)."""
     existing = find_dlmm_pool(token_mint, quote_mint)
     if existing and existing.get("pool_address"):
+        pool_address = existing["pool_address"]
         return {
             "pool_exists": True,
-            "pool_address": existing["pool_address"],
+            "pool_address": pool_address,
             "action": "reuse_pool",
+            "source": "meteora",
+            "meteora_url": meteora_pool_app_url(pool_address),
             "pool": existing,
             "pool_creation_cost_sol": 0.0,
             "platform_fee_bps": METEORA_DEFAULT_FEE_BPS,
-            "message": f"DLMM pool found. Reusing pool {existing['pool_address']}.",
-        }
-
-    if check_jupiter_route_exists(token_mint, quote_mint):
-        return {
-            "pool_exists": True,
-            "pool_address": None,
-            "action": "reuse_existing_liquidity",
-            "pool": None,
-            "pool_creation_cost_sol": 0.0,
-            "platform_fee_bps": METEORA_DEFAULT_FEE_BPS,
-            "message": (
-                "No dedicated DLMM pool, but Jupiter already routes this pair "
-                "through existing liquidity (e.g. a DAMM v2/DBC pool). Trading "
-                "via Jupiter directly rather than creating a redundant pool."
-            ),
+            "message": f"Meteora DLMM pool found: {pool_address}",
         }
 
     return {
         "pool_exists": False,
         "pool_address": None,
         "action": "create_pool",
+        "source": "meteora",
         "pool": None,
         "pool_creation_cost_sol": get_pool_creation_cost_sol(),
         "platform_fee_bps": METEORA_DEFAULT_FEE_BPS,
         "bin_step": METEORA_DEFAULT_BIN_STEP,
         "message": (
-            f"No DLMM pool found for this pair. Pool creation requires "
+            f"No Meteora DLMM pool for this pair. Creation requires "
             f"~{get_pool_creation_cost_sol()} SOL plus seed liquidity."
         ),
+    }
+
+
+def ensure_meteora_dlmm_pool(
+    token_mint: str,
+    quote_mint: str = SOL_MINT,
+    *,
+    create_if_missing: bool = False,
+    quote_amount: float = 0.0,
+    bin_step: Optional[int] = None,
+    fee_bps: Optional[int] = None,
+) -> dict[str, Any]:
+    """
+    Check Meteora for a DLMM pool; optionally create one on Meteora if missing.
+    Always returns the on-chain Meteora pool address when available.
+    """
+    existing = find_dlmm_pool(token_mint, quote_mint)
+    if existing and existing.get("pool_address"):
+        pool_address = existing["pool_address"]
+        return {
+            "status": "exists",
+            "pool_exists": True,
+            "pool_address": pool_address,
+            "source": "meteora",
+            "meteora_url": meteora_pool_app_url(pool_address),
+            "pool": existing,
+            "message": f"Meteora DLMM pool already exists: {pool_address}",
+        }
+
+    if not create_if_missing:
+        return {
+            "status": "missing",
+            "pool_exists": False,
+            "pool_address": None,
+            "source": "meteora",
+            "pool_creation_cost_sol": get_pool_creation_cost_sol(),
+            "message": "No Meteora DLMM pool for this pair.",
+        }
+
+    created = create_dlmm_pool(
+        token_mint=token_mint,
+        quote_mint=quote_mint,
+        fee_bps=fee_bps or METEORA_DEFAULT_FEE_BPS,
+        bin_step=bin_step,
+        quote_amount=quote_amount,
+    )
+    if created.get("error"):
+        return created
+
+    pool_address = created.get("pool_address") or (created.get("pool") or {}).get("pool_address")
+    if not pool_address:
+        return {"error": "Pool creation finished but no Meteora pool address was returned.", "raw": created}
+
+    verified = find_dlmm_pool(token_mint, quote_mint)
+    if verified and verified.get("pool_address"):
+        pool_address = verified["pool_address"]
+
+    return {
+        "status": created.get("status") or "created",
+        "pool_exists": True,
+        "pool_address": pool_address,
+        "source": "meteora",
+        "meteora_url": meteora_pool_app_url(pool_address),
+        "signature": created.get("signature"),
+        "explorer_url": created.get("explorer_url"),
+        "verified_pool": verified,
+        "message": f"Meteora DLMM pool created: {pool_address}",
     }
 
 

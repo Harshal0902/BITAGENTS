@@ -104,6 +104,7 @@ from volume_agent import (
     VOLUME_MODEL,
     VOLUME_SCHEDULER_POLL_SECONDS,
     create_volume_campaign,
+    ensure_volume_meteora_pool,
     get_volume_history,
     list_volume_campaigns,
     provision_campaign_infrastructure,
@@ -891,6 +892,12 @@ class VolumeCampaignStatusRequest(BaseModel):
     action: str = Field(min_length=3)
 
 
+class VolumePoolEnsureRequest(BaseModel):
+    base_token: str = Field(min_length=1)
+    quote_token: str = Field(default="SOL", min_length=1)
+    create_if_missing: bool = False
+
+
 @app.get("/volume/health")
 def volume_health() -> dict[str, Any]:
     volume_wallet = get_volume_wallet_pubkey()
@@ -981,11 +988,41 @@ def volume_wallet_ledger(
 
 @app.get("/volume/pool/check")
 def volume_pool_check(
-    base_mint: str = Query(..., min_length=32),
-    quote_mint: str = Query(default="So11111111111111111111111111111111111111112", min_length=32),
+    base_token: str = Query(..., min_length=1, description="Base token symbol or mint"),
+    quote_token: str = Query(default="SOL", min_length=1, description="Quote token symbol or mint"),
     _: None = Depends(require_internal_key),
 ) -> dict[str, Any]:
-    return check_pool_infrastructure(base_mint.strip(), quote_mint.strip())
+    base = resolve_token(base_token.strip())
+    quote = resolve_token(quote_token.strip())
+    if "error" in base:
+        raise HTTPException(status_code=400, detail=base["error"])
+    if "error" in quote:
+        raise HTTPException(status_code=400, detail=quote["error"])
+    result = check_pool_infrastructure(base["mint"], quote["mint"])
+    return {
+        **result,
+        "base_token": base["symbol"],
+        "quote_token": quote["symbol"],
+        "base_mint": base["mint"],
+        "quote_mint": quote["mint"],
+        "pair": f"{base['symbol']}/{quote['symbol']}",
+    }
+
+
+@app.post("/volume/pool/ensure")
+def volume_pool_ensure(
+    body: VolumePoolEnsureRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = ensure_volume_meteora_pool(
+        base_token=body.base_token.strip(),
+        quote_token=body.quote_token.strip(),
+        user_wallet=auth_wallet,
+        create_if_missing=body.create_if_missing,
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
 
 
 @app.get("/volume/campaigns")
