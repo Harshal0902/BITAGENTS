@@ -300,9 +300,15 @@ MIGRATION_STATEMENTS = [
         created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         next_execution_at       TIMESTAMPTZ,
         executions              JSONB NOT NULL DEFAULT '[]'::jsonb,
-        infrastructure          JSONB NOT NULL DEFAULT '{}'::jsonb
+        infrastructure          JSONB NOT NULL DEFAULT '{}'::jsonb,
+        consecutive_failures    INTEGER NOT NULL DEFAULT 0,
+        last_error              JSONB
     )
     """,
+    # Migration for tables created before consecutive_failures/last_error existed —
+    # CREATE TABLE IF NOT EXISTS above won't retroactively add columns.
+    "ALTER TABLE volume_campaigns ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE volume_campaigns ADD COLUMN IF NOT EXISTS last_error JSONB",
     "CREATE INDEX IF NOT EXISTS idx_volume_campaigns_user ON volume_campaigns (user_wallet)",
     "CREATE INDEX IF NOT EXISTS idx_volume_campaigns_status ON volume_campaigns (status)",
     """
@@ -1107,7 +1113,9 @@ def update_volume_campaign(campaign_id: str, updates: dict[str, Any]) -> Optiona
                     created_at = %(created_at)s,
                     next_execution_at = %(next_execution_at)s,
                     executions = %(executions)s,
-                    infrastructure = %(infrastructure)s
+                    infrastructure = %(infrastructure)s,
+                    consecutive_failures = %(consecutive_failures)s,
+                    last_error = %(last_error)s
                 WHERE id = %(id)s
                 """,
                 {
@@ -1135,6 +1143,8 @@ def update_volume_campaign(campaign_id: str, updates: dict[str, Any]) -> Optiona
                     "next_execution_at": merged.get("next_execution_at"),
                     "executions": Json(merged.get("executions") or []),
                     "infrastructure": Json(merged.get("infrastructure") or {}),
+                    "consecutive_failures": merged.get("consecutive_failures") or 0,
+                    "last_error": Json(merged["last_error"]) if merged.get("last_error") is not None else None,
                 },
             )
     return find_volume_campaign(campaign_id)

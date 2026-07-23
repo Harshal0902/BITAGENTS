@@ -58,6 +58,7 @@ from volume_ledger import (
     get_volume_agent_wallet_info,
     get_volume_wallet_pubkey,
     load_volume_keypair,
+    reclaim_token_account_rent,
     record_user_spend_volume,
     record_volume_platform_fee,
     validate_volume_trade_amount,
@@ -366,6 +367,8 @@ def update_volume_campaign_status(campaign_id: str, action: str, user_wallet: Op
         return {"error": f"Unknown action '{action}'. Use pause, resume, or cancel."}
     new_status = mapping[action]
     updated = update_volume_campaign(campaign_id, {"status": new_status})
+    if new_status == "cancelled":
+        _maybe_reclaim_after_campaign_end(campaign)
     return {"status": new_status, "campaign": updated}
 
 
@@ -441,7 +444,37 @@ def _record_execution_failure(
             f"(last error: {leg_result.get('error', 'unknown')}). No further retries "
             f"will run until you review and resume it."
         )
+        _maybe_reclaim_after_campaign_end(campaign)
     return result
+
+
+def _maybe_reclaim_after_campaign_end(campaign: dict[str, Any]) -> None:
+    """
+    Best-effort: when a campaign reaches a terminal state, close its base-token
+    account and reclaim the ~0.002 SOL rent — but only if no other active/paused
+    campaign for the same user still trades that same token.
+    """
+    try:
+        user_wallet = (campaign.get("user_wallet") or "").strip()
+        base_mint = campaign.get("base_mint")
+        campaign_id = campaign.get("id")
+        if not user_wallet or not base_mint:
+            return
+        others_still_using_token = any(
+            c.get("id") != campaign_id
+            and c.get("base_mint") == base_mint
+            and c.get("status") in {"active", "paused", "provisioning"}
+            for c in load_all_volume_campaigns(user_wallet)
+        )
+        if others_still_using_token:
+            return
+        result = reclaim_token_account_rent(base_mint)
+        if result.get("status") == "closed":
+            print(f"  💰 Reclaimed {result['reclaimed_sol']} SOL rent for {campaign.get('base_token')} account ({result.get('signature')})")
+        elif result.get("error"):
+            print(f"  ⚠️  Rent reclaim skipped for {campaign.get('base_token')}: {result['error']}")
+    except Exception as exc:
+        print(f"  ⚠️  Rent reclaim check failed: {exc}")
 
 
 def _run_volume_execution(campaign_id: str, *, dry_run: bool = False, force: bool = False) -> dict[str, Any]:
@@ -472,16 +505,20 @@ def _run_volume_execution(campaign_id: str, *, dry_run: bool = False, force: boo
     cycle_cost = per_leg_cost * 2
     if budget is not None and spent + cycle_cost > budget + 1e-12:
         update_volume_campaign(campaign_id, {"status": "completed"})
+        _maybe_reclaim_after_campaign_end(campaign)
         return {"error": "Budget exhausted. Campaign marked completed.", "campaign_id": campaign_id}
     if max_exec and executions_count >= max_exec:
         update_volume_campaign(campaign_id, {"status": "completed"})
+        _maybe_reclaim_after_campaign_end(campaign)
         return {"error": "Max executions reached. Campaign marked completed.", "campaign_id": campaign_id}
 
     if not dry_run and user_wallet:
         check = check_user_can_spend_volume(user_wallet, quote_token, cycle_cost)
         if "error" in check:
-            check["campaign_id"] = campaign_id
-            return check
+            # Route through the same failure/auto-pause tracking as buy/sell-leg
+            # failures — otherwise an underfunded campaign retries forever every
+            # poll with no auto-pause and no clear signal to the user.
+            return _record_execution_failure(campaign_id, campaign, "balance_check", check)
 
     base = resolve_token(base_token)
     quote = resolve_token(quote_token)

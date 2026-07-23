@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from db import insert_ledger_entry, load_ledger_for_user
-from dca_agent import resolve_token, sol_rpc
+from dca_agent import resolve_token, sol_rpc, ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID
 
 VOLUME_PLATFORM_FEE_RATE = float(os.environ.get("VOLUME_PLATFORM_FEE_RATE", "0.0025"))
 
@@ -39,6 +39,97 @@ def validate_volume_trade_amount(trade_amount: float, quote_token: str) -> dict[
             )
         }
     return {}
+
+
+def reclaim_token_account_rent(mint: str) -> dict[str, Any]:
+    """
+    Close the Volume Agent wallet's token account for `mint` and reclaim its
+    ~0.00204 SOL rent, once a campaign trading that token has ended and no other
+    active/paused campaign for the same user still needs the account open.
+
+    Only closes accounts with a zero token balance — if dust remains, this is a
+    no-op rather than risking an unintended forced sale to zero it out.
+    """
+    from dca_agent import HAS_SOLDERS, SOLANA_RPC
+
+    if not HAS_SOLDERS:
+        return {"error": "solders not installed."}
+
+    keypair = load_volume_keypair()
+    if not keypair:
+        return {"error": "Volume agent wallet not configured (VOLUME_AGENT_WALLET_PRIVATE_KEY)."}
+
+    try:
+        from solders.pubkey import Pubkey
+        from solders.instruction import AccountMeta, Instruction
+        from solders.message import MessageV0
+        from solders.hash import Hash
+        from solders.transaction import VersionedTransaction
+        import base64
+    except ImportError as exc:
+        return {"error": f"solders import failed: {exc}"}
+
+    owner = keypair.pubkey()
+    mint_pk = Pubkey.from_string(mint.strip())
+    token_program = Pubkey.from_string(TOKEN_PROGRAM_ID)
+    ata_program = Pubkey.from_string(ASSOCIATED_TOKEN_PROGRAM_ID)
+    ata, _ = Pubkey.find_program_address(
+        [bytes(owner), bytes(token_program), bytes(mint_pk)], ata_program
+    )
+
+    # Check the account actually exists and is empty before attempting to close it.
+    try:
+        balance_resp = sol_rpc("getTokenAccountBalance", [str(ata)])
+    except Exception as exc:
+        # Most common cause: the account was never created (nothing to reclaim).
+        return {"status": "skipped", "reason": f"No token account to close: {exc}"}
+
+    raw_balance = int((balance_resp or {}).get("value", {}).get("amount") or 0)
+    if raw_balance > 0:
+        return {
+            "status": "skipped",
+            "reason": f"Token account still holds a balance ({raw_balance} raw units) — not closing to avoid an unintended forced sale.",
+        }
+
+    # SPL Token "CloseAccount" instruction: opcode 9, no additional data.
+    # Accounts: [account to close (writable), destination for reclaimed lamports (writable), owner (signer)]
+    close_ix = Instruction(
+        token_program,
+        bytes([9]),
+        [
+            AccountMeta(ata, False, True),
+            AccountMeta(owner, False, True),
+            AccountMeta(owner, True, False),
+        ],
+    )
+
+    try:
+        bh_result = sol_rpc("getLatestBlockhash", [{"commitment": "finalized"}])
+        blockhash = Hash.from_string(bh_result["value"]["blockhash"])
+        msg = MessageV0.try_compile(owner, [close_ix], [], blockhash)
+        tx = VersionedTransaction(msg, [keypair])
+        encoded = base64.b64encode(bytes(tx)).decode("utf-8")
+        sig = sol_rpc(
+            "sendTransaction",
+            [encoded, {"encoding": "base64", "skipPreflight": True, "preflightCommitment": "confirmed", "maxRetries": 3}],
+        )
+    except Exception as exc:
+        return {"error": f"Close-account transaction failed: {exc}"}
+
+    from dca_agent import _confirm_transaction, _is_mainnet
+
+    confirm = _confirm_transaction(sig)
+    if not confirm.get("confirmed"):
+        return {"error": f"Close-account transaction did not confirm: {confirm.get('error', 'unknown')}", "signature": sig}
+
+    cluster = "mainnet" if _is_mainnet() else "devnet"
+    return {
+        "status": "closed",
+        "signature": sig,
+        "mint": mint,
+        "reclaimed_sol": ATA_RENT_SOL,
+        "explorer_url": f"https://explorer.solana.com/tx/{sig}?cluster={cluster}",
+    }
 
 
 def load_volume_keypair():
