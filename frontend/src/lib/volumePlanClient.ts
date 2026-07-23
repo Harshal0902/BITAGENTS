@@ -20,6 +20,8 @@ export type VolumeCampaignSummary = {
   pool_creation_cost_sol?: number;
   platform_fee_rate?: number;
   next_execution_at?: string | null;
+  consecutive_failures?: number;
+  last_error?: { leg?: string; error?: string; available?: number } | null;
   infrastructure?: {
     pool_creation_error?: { error?: string };
     last_check?: { message?: string };

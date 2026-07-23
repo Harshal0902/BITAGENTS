@@ -57,9 +57,32 @@ async function main() {
 
   tx.sign(wallet);
   const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true });
-  await connection.confirmTransaction(sig, "confirmed");
+  const confirmation = await connection.confirmTransaction(sig, "confirmed");
+
+  // confirmTransaction resolves once the tx is INCLUDED in a block — that is
+  // NOT the same as succeeding. A reverted instruction still gets "confirmed"
+  // with a non-null value.err. Without this check, the script would report
+  // "created" with a signature and a pool address even when the on-chain
+  // program call actually failed — which is exactly what was happening.
+  if (confirmation.value.err) {
+    throw new Error(
+      `Transaction confirmed but failed on-chain: ${JSON.stringify(confirmation.value.err)} (sig: ${sig})`
+    );
+  }
 
   const poolAddress = DLMM.getLbPairPubkey(binStep, tokenMint, quoteMint, 0);
+
+  // getLbPairPubkey only computes the expected PDA deterministically — it does
+  // not confirm the account actually exists on-chain. Verify before reporting
+  // success, since a failed tx (caught above) would otherwise still pair with
+  // a plausible-looking but nonexistent address.
+  const accountInfo = await connection.getAccountInfo(poolAddress);
+  if (!accountInfo) {
+    throw new Error(
+      `Transaction confirmed successfully but no pool account exists at the expected address ${poolAddress.toBase58()} (sig: ${sig}). The pool was not actually created.`
+    );
+  }
+
   const explorer = `https://explorer.solana.com/tx/${sig}`;
   console.log(
     JSON.stringify({

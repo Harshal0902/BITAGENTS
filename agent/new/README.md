@@ -1,35 +1,91 @@
-# Volume Agent — fixes and handoff notes (Volume-bot branch)
+# Volume Agent — handoff notes (`claude-branch`)
 
-This branch fixes three real bugs found while testing the Volume Agent end-to-end against the live BITAGENTS token on mainnet. All fixes are verified working with real on-chain transactions (not just code review) — a full 4-cycle test campaign ran to completion with correct accounting throughout.
+For Harshal. This branch = `origin/Volume-bot` + your merged fixes (already in, see "Layer 1" below) + a new layer of fixes found by actually running a real campaign end-to-end against live BITAGENTS on mainnet. Nothing here duplicates your work — this picks up from exactly where your merge left off.
 
-## What was broken
+**Branch lineage**, oldest to newest:
+```
+origin/Volume-bot (7408a25)          ← what's currently pushed/shared
+  └─ bbdcbde                          ← ATA rent reclaim + consecutive-failure persistence (prior session)
+       └─ 246eeb8                    ← merge of YOUR fixes (4dc3119) with the above
+            └─ (this branch's new commit) ← everything below
+```
 
-### 1. Meteora pool-creation script crashed on import (`meteora_dlmm.py`, `scripts/create_dlmm_pool.cjs`)
-`create_dlmm_pool.mjs` used ESM `import`, which breaks under current Node versions because `@meteora-ag/dlmm`'s ESM build re-exports `@coral-xyz/anchor` via a directory import Node's strict resolver rejects (`ERR_UNSUPPORTED_DIR_IMPORT`). Fixed by adding `create_dlmm_pool.cjs`, a CommonJS port using `require()` (the package's CJS build doesn't hit this). `METEORA_POOL_SCRIPT` now points at the `.cjs` file. The original `.mjs` is left in place but unused — safe to delete once you've confirmed the `.cjs` version is working for you too.
+---
 
-**Also needs**: `cd agent/new/scripts && npm install` — `node_modules` wasn't committed and wasn't present, so pool creation would fail immediately regardless of the ESM issue.
+## Layer 1 — already in `246eeb8` (your work + earlier fixes, for context)
 
-### 2. Swap execution was hardcoded to Meteora DLMM only (`volume_agent.py`, `_execute_meteora_swap`)
-The Jupiter build request included `"dexes": "Meteora DLMM"`, which blocks routing through any other pool type. Real launched tokens (including our own BITAGENTS token) trade on **DAMM v2 / DBC pools, not DLMM** — this would make every swap fail with "no routes found" for most real target users. Removed the restriction entirely (matches how the DCA agent's swap execution already works, unrestricted).
+This is what the code looked like **before** this branch's new changes — i.e. what I pulled and started from today.
 
-### 3. Pool-check logic was blind to non-DLMM liquidity (`meteora_dlmm.py`, `check_pool_infrastructure`)
-The check only queried Meteora's DLMM-specific API, so it reported "no pool, must create one" even when a token already has real, tradeable liquidity elsewhere (again — true for most real Kickstart tokens). Added `check_jupiter_route_exists()`: a wallet-free check against Jupiter's quote endpoint that recognizes liquidity of *any* pool type. If Jupiter can already route the pair, the agent now reuses that liquidity via Jupiter directly instead of creating a redundant, wasteful new pool. **This means most real users won't pay the pool-creation cost at all** — only genuinely brand-new, illiquid tokens still need a fresh pool.
+- **Meteora pool-creation script** (`scripts/create_dlmm_pool.cjs`): CommonJS port because the ESM build of `@meteora-ag/dlmm` breaks under current Node (`ERR_UNSUPPORTED_DIR_IMPORT`). Also verifies the pool account actually exists on-chain via `getAccountInfo` before reporting success — the original bug where the script said "created" but Solscan/Meteora showed nothing was a discarded `confirmTransaction` result plus no existence check.
+- **Swap routing unrestricted** (`volume_agent.py`): removed a hardcoded `"dexes": "Meteora DLMM"` filter on the Jupiter swap request. Real tokens (including BITAGENTS) mostly trade on DAMM v2/DBC pools, not DLMM — the filter made every swap fail with "no routes found."
+- **Pool-check recognizes non-DLMM liquidity** (`meteora_dlmm.py`, `check_jupiter_route_exists` + your `ensure_meteora_dlmm_pool`/`meteora_pool_app_url` additions): if Jupiter can already route a pair through any pool type, the agent reuses it instead of creating a redundant new DLMM pool. Your merge added the `/volume/pool/check` and `/volume/pool/ensure` manual endpoints/buttons on top of this.
+- **Sell-leg fee bug fixed**: fee was computed from the base-token quantity instead of SOL proceeds, corrupting the ledger by orders of magnitude.
+- **Safety rails added**: minimum trade size (`MIN_VOLUME_TRADE_SOL`, default 0.005 SOL — below this an ATA rent cost alone fails the tx), and auto-pause after `MAX_CONSECUTIVE_FAILURES` (default 3) so a broken/underfunded campaign stops retrying instead of burning fees forever.
+- **`consecutive_failures`/`last_error` columns** added to `volume_campaigns` (were missing from schema, so every write to them was silently dropped and auto-pause never actually persisted).
 
-### 4. Sell-leg platform fee was computed from the wrong quantity (`volume_agent.py`, `_run_volume_execution`)
-The sell-leg fee recording passed `sell_amount` (the *base-token* quantity being sold, e.g. thousands of tokens) into a function that computes a *SOL* fee — producing a "spend" thousands of times too large and permanently corrupting the user's ledger balance (manifested as campaigns silently failing forever with "Insufficient SOL balance: Available 0.0"). Fixed to use the actual SOL proceeds from the sell leg (`sell.get("output_amount_raw")`, same pattern the buy-leg fee already used correctly), falling back to `trade_amount` if unavailable.
+All of the above was verified with real on-chain signatures at the time. Layer 2 is what's new.
 
-## New safety features added
+---
 
-- **Minimum trade size enforced** (`volume_ledger.py`, `validate_volume_trade_amount`): campaigns with a per-leg trade under `MIN_VOLUME_TRADE_SOL` (default 0.005 SOL) are rejected at creation time, before anything executes. A new SPL token account costs ~0.00204 SOL in one-time rent — trade sizes below that floor were failing on-chain with "insufficient SOL for ATA rent" and still burning network fees on every failed attempt.
-- **Auto-pause on repeated failure** (`volume_agent.py`, `_record_execution_failure`): after `MAX_CONSECUTIVE_FAILURES` (default 3) consecutive failed cycles, a campaign automatically sets itself to `failed` and stops retrying. Before this, a misconfigured or under-funded campaign would retry forever, unattended, silently draining the wallet on Solana network fees. Both new constants are env-configurable (`MIN_VOLUME_TRADE_SOL`, `VOLUME_MAX_CONSECUTIVE_FAILURES`).
+## Layer 2 — new in this branch
+
+Found by actually running a full campaign for BITAGENTS through the UI (not just code review), on the real Neon database, real mainnet RPC.
+
+### 1. Balance check double-counted a campaign's own reservation against itself (`volume_ledger.py`, `volume_agent.py`)
+
+**Symptom**: a freshly-created campaign with exactly enough budget would fail its very first cycle with "Insufficient SOL balance," 3 times in a row, and auto-pause — instantly, silently. Looked like "nothing happens."
+
+**Root cause**: `check_user_can_spend_volume` computes `available = deposited − spent − reserved_for_other_campaigns`. But `_reserved_for_campaigns` counted **every** active/provisioning/paused campaign, including the one currently trying to spend — so a campaign would reserve its entire remaining budget against itself, then check if it could afford its own next cycle against a balance that already had that same budget subtracted. A campaign needing 0.2005 SOL total, with 0.24 SOL deposited and 0.035 already spent from earlier tests, would see `0.24 − 0.035 − 0.2005 (itself) ≈ 0.0042 SOL available` — nowhere near enough for even one 0.02 SOL cycle.
+
+**Fix**: `_reserved_for_campaigns`, `get_volume_user_balances`, and `check_user_can_spend_volume` now all take an optional `exclude_campaign_id`. The two call sites that check a specific campaign's own affordability (`_run_volume_execution`'s per-cycle check, and `provision_campaign_infrastructure`'s pool-cost check) now pass their own campaign id so a campaign's own reservation never blocks its own spend.
+
+**Verified**: re-ran the same campaign after the fix — it correctly saw the full available balance and completed all 10 cycles.
+
+### 2. Sell-leg proceeds were never credited back to the user's ledger (`volume_ledger.py`, `volume_agent.py`)
+
+**Symptom**: the campaign's own `spent_so_far`/`total_budget` tracking said 100% of budget spent, but that's expected — the real problem is the user-facing **available balance** dropped by the full buy amount every cycle and never got the sell proceeds back, overstating real cost by roughly **20x**.
+
+**Root cause**: each cycle does buy (SOL→BITAGENTS) then sell (BITAGENTS→SOL) — the sell leg puts SOL back into the *same* agent wallet. `_run_volume_execution` recorded `record_user_spend_volume` for the buy and `record_volume_platform_fee` for both legs' fees, but nothing ever recorded the sell leg's SOL proceeds as a credit. That SOL was genuinely sitting back in the wallet, but the user's ledger balance had no entry for it — so it looked spent forever.
+
+**Fix**: added `record_user_credit_volume()` (`volume_ledger.py`) — inserts a `direction="deposit"`, `reference_type="volume_sell_return"` ledger row. Does **not** re-verify an on-chain transfer (unlike the real-deposit path) because the agent itself already executed and confirmed the swap; this just reflects funds that are already confirmed to have landed back in the shared wallet. Wired into `_run_volume_execution` right after the sell-fee is recorded (`volume_agent.py`).
+
+**One-time backfill (already run against production, not a repeatable script)**: 16 sell legs across 3 already-completed campaigns on the live wallet had this gap. Manually replayed `record_user_credit_volume` for each from the campaigns' stored `executions` history — restored **0.124852 SOL** to the real user's available balance (confirmed before/after via `get_volume_user_balances`). This was a one-off data fix on the shared Neon DB, not something this branch runs automatically — if any other wallet had run campaigns before this fix landed, the same backfill logic would need to be re-applied for them (check `SELECT DISTINCT user_wallet FROM volume_campaigns` — at the time of this fix, only one wallet had ever used it).
+
+### 3. New simplified UI: `/agents/volume2`
+
+New page + component (`frontend/src/app/agents/volume2/page.tsx`, `frontend/src/components/agents/VolumeAgentSimpleConsole.tsx`). Same wallet-connect/deposit/campaign-status machinery as the original `/agents/volume` page (reuses `VolumeAgentDeposit`, `VolumeCampaignPanel`, `useVolumeWalletAuth` unchanged) — the difference is purely the campaign-creation UI:
+
+- BITAGENTS mint (`iu3A7azWTm3zQSk81SUC1JctB4zPYnxLmcmqq71EASY`) and SOL are hardcoded — no token fields.
+- No manual "Check on Meteora" / "Create on Meteora" widget (not needed for BITAGENTS, and it was a source of confusing errors — see below).
+- Three preset buttons instead of a manual form: Quick test (~0.2 SOL), Standard (~1 SOL), Full day (~3 SOL).
+
+This exists specifically because Zeya found the original page too complex for day-to-day use as CEO, not because the original page is being deprecated.
+
+### 4. Failed campaigns now show why (`VolumeCampaignPanel.tsx`, `volumePlanClient.ts`)
+
+The campaign list showed `status: failed` with zero explanation — `last_error` was already being written to the DB (Layer 1's auto-pause work) but never read by the frontend. Added `last_error`/`consecutive_failures` to the `VolumeCampaignSummary` type and a warning block on failed campaigns showing the actual error (e.g. "Stopped after 3 failed attempts: Insufficient SOL balance...").
+
+---
+
+## Operational note: local backend vs. a real deployment
+
+Worth flagging since it came up directly: **there is currently no deployed backend.** `frontend/.env.local` points `AGENTS_API_URL` at `http://127.0.0.1:8765` — every campaign so far (including the real on-chain test runs referenced above) has been executed by a Python process running on Zeya's own laptop, connecting out to the real Neon DB, real Jupiter, and real Solana mainnet RPC over his home internet.
+
+This explains an oddity Zeya noticed: turning his WiFi off mid-campaign made everything stop (no DB reads, no RPC calls possible), and turning it back on resumed it correctly. That's expected for the *current* local setup, not a bug — but it also means, right now, **the entire Volume Agent depends on Zeya's laptop being on, connected, and this process still running.** No campaign for any user executes if that machine is off or asleep.
+
+For a real deployment, the backend needs to run on an always-on host (the `.env.local.example` has a placeholder line for a Render service URL, but nothing is actually deployed there yet). Once that's live, campaigns keep running on the server's own connection regardless of anyone's local machine — that's the main practical reason to prioritize actually standing up that deployment before onboarding anyone beyond internal testing.
+
+---
 
 ## What's still open for you
 
-1. **Production wallet key**: `VOLUME_AGENT_WALLET_PRIVATE_KEY` needs to be set on the real deployed backend (Render) — it wasn't set anywhere I could find. Generate a fresh dedicated key for this, don't reuse a local test throwaway.
-2. **`npm install` in `agent/new/scripts`** needs to happen in the deployed environment too, same as local.
-3. **Product decision, not a bug**: for tokens with real existing liquidity, the agent now trades through Jupiter into that real pool rather than a dedicated one BITAGENTS controls. This costs more (third-party pool fees + price impact) but is the only way the generated volume is actually visible on the token's real trading pair (DexScreener, etc.) rather than hidden in an obscure side-pool. Worth confirming this tradeoff is the intended one — see commit history / conversation context for the full reasoning if you want to revisit it.
-4. **`.mjs` cleanup**: once you've confirmed `create_dlmm_pool.cjs` works in your environment too, feel free to delete the now-unused `create_dlmm_pool.mjs`.
+1. **No production deployment exists yet** (see above) — this is probably the single biggest blocker to this being usable by anyone but us.
+2. **`VOLUME_AGENT_WALLET_PRIVATE_KEY`** needs to be set wherever the backend does end up deployed — generate a fresh dedicated key, don't reuse the local test key.
+3. **`npm install` in `agent/new/scripts`** needs to happen in the deployed environment (Meteora pool-creation script's `node_modules` isn't committed).
+4. **Ledger backfill scope**: if anyone besides Zeya's test wallet ran volume campaigns before this branch, they need the same sell-proceeds backfill (see Layer 2, #2) — check `volume_campaigns` for other `user_wallet` values.
+5. **Fee collection is still purely bookkeeping**: the "0.25% per leg" platform fee is recorded in the ledger (reduces a user's available balance) but nothing actually moves it to a separate BITAGENTS-controlled wallet — all deposited/spent/fee SOL sits in one shared agent wallet. Worth a product decision on when/how to actually sweep fees out as real revenue.
+6. **`.mjs` cleanup**: `create_dlmm_pool.mjs` is superseded by the `.cjs` version and unused — safe to delete once you've confirmed the `.cjs` version works in your environment too.
 
 ## How this was tested
 
-Ran a real campaign against the live BITAGENTS/SOL pair (mint `iu3A7azWTm3zQSk81SUC1JctB4zPYnxLmcmqq71EASY`) on mainnet, with a throwaway local test wallet (not committed, not this repo's problem — you'll use your own on Render). Confirmed via direct on-chain transaction signatures that a 4-cycle campaign (0.005 SOL/leg) completed end-to-end with correct fee accounting on every cycle. Local test setup used an isolated Docker Postgres container, not the shared Neon database — no production data was touched.
+Full campaign (10 cycles, 0.01 SOL/leg) run against the live BITAGENTS/SOL pair on mainnet through the actual `/agents/volume2` UI, using Zeya's real deposited SOL on the real Neon production database (not a local test DB — there was no safe way to test the reservation/accounting bugs without the real ledger state that caused them). Every cycle's buy and sell signature was independently checked against Solana mainnet RPC directly (`getTransaction`, confirming `err: null`), not just trusted from this app's own database. The sell-proceeds backfill was verified by comparing `get_volume_user_balances` output before and after.

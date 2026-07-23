@@ -61,6 +61,7 @@ from volume_ledger import (
     get_volume_wallet_pubkey,
     load_volume_keypair,
     reclaim_token_account_rent,
+    record_user_credit_volume,
     record_user_spend_volume,
     record_volume_platform_fee,
     validate_volume_trade_amount,
@@ -133,8 +134,12 @@ def _estimate_campaign_budget(
 
 
 def _dlmm_pool_ready(infra: dict[str, Any]) -> bool:
-    """True only when Meteora returned a real on-chain DLMM pool address."""
-    return bool(infra.get("pool_exists") and infra.get("pool_address"))
+    """
+    True when tradeable liquidity is available — either a real on-chain DLMM
+    pool address, or Jupiter already routes the pair through non-DLMM
+    liquidity (DAMM v2/DBC/etc). Either way, no pool creation is needed.
+    """
+    return bool(infra.get("pool_exists"))
 
 
 def ensure_volume_meteora_pool(
@@ -212,15 +217,17 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
             "status": "reuse_pool",
             "campaign_id": campaign_id,
             "pool_address": pool_address,
-            "source": "meteora",
-            "meteora_url": meteora_pool_app_url(pool_address),
+            "source": infra.get("source", "meteora"),
+            "meteora_url": meteora_pool_app_url(pool_address) if pool_address else None,
             "message": infra.get("message"),
             "platform_fee_rate": VOLUME_PLATFORM_FEE_RATE,
         }
 
     user_wallet = (campaign.get("user_wallet") or "").strip()
     pool_cost = float(campaign.get("pool_creation_cost_sol") or get_pool_creation_cost_sol())
-    spend_check = check_user_can_spend_volume(user_wallet, campaign.get("quote_token", "SOL"), pool_cost)
+    spend_check = check_user_can_spend_volume(
+        user_wallet, campaign.get("quote_token", "SOL"), pool_cost, exclude_campaign_id=campaign_id
+    )
     if "error" in spend_check:
         return spend_check
 
@@ -577,7 +584,9 @@ def _run_volume_execution(campaign_id: str, *, dry_run: bool = False, force: boo
         return {"error": "Max executions reached. Campaign marked completed.", "campaign_id": campaign_id}
 
     if not dry_run and user_wallet:
-        check = check_user_can_spend_volume(user_wallet, quote_token, cycle_cost)
+        check = check_user_can_spend_volume(
+            user_wallet, quote_token, cycle_cost, exclude_campaign_id=campaign_id
+        )
         if "error" in check:
             # Route through the same failure/auto-pause tracking as buy/sell-leg
             # failures — otherwise an underfunded campaign retries forever every
@@ -633,6 +642,10 @@ def _run_volume_execution(campaign_id: str, *, dry_run: bool = False, force: boo
             sell_out_raw / (10 ** quote["decimals"]) if sell_out_raw > 0 else trade_amount
         )
         record_volume_platform_fee(user_wallet, quote_token, sell_proceeds_sol, reference_id=f"{campaign_id}-sell-fee", signature=sell.get("signature"))
+        # The sell leg returns SOL to this same agent wallet — without crediting it
+        # back, the ledger only ever debited the buy leg and never reflected the
+        # round-trip proceeds, overstating each cycle's real cost by ~20x.
+        record_user_credit_volume(user_wallet, quote_token, sell_proceeds_sol, reference_id=f"{campaign_id}-sell-return", signature=sell.get("signature"))
 
     now = datetime.now(timezone.utc)
     exec_record = {

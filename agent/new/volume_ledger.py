@@ -203,13 +203,17 @@ def _ledger_totals(user_wallet: str, token_symbol: str, rows: list[dict[str, Any
     }
 
 
-def _reserved_for_campaigns(user_wallet: str, token_symbol: str) -> float:
+def _reserved_for_campaigns(
+    user_wallet: str, token_symbol: str, exclude_campaign_id: Optional[str] = None
+) -> float:
     from db import load_all_volume_campaigns
 
     token_symbol = token_symbol.strip().upper()
     reserved = 0.0
     for campaign in load_all_volume_campaigns(user_wallet):
         if campaign.get("status") not in {"active", "provisioning", "paused"}:
+            continue
+        if exclude_campaign_id and campaign.get("id") == exclude_campaign_id:
             continue
         if str(campaign.get("quote_token", "SOL")).upper() != token_symbol:
             continue
@@ -241,7 +245,9 @@ def get_volume_agent_wallet_info() -> dict[str, Any]:
     }
 
 
-def get_volume_user_balances(user_wallet: str) -> dict[str, Any]:
+def get_volume_user_balances(
+    user_wallet: str, exclude_campaign_id: Optional[str] = None
+) -> dict[str, Any]:
     from db import load_all_volume_campaigns
 
     rows = _volume_rows(user_wallet)
@@ -262,7 +268,7 @@ def get_volume_user_balances(user_wallet: str) -> dict[str, Any]:
     balances = []
     for token, meta in sorted(by_token.items()):
         totals = _ledger_totals(user_wallet, token, rows)
-        reserved = _reserved_for_campaigns(user_wallet, token)
+        reserved = _reserved_for_campaigns(user_wallet, token, exclude_campaign_id=exclude_campaign_id)
         deposited = totals["deposited"]
         spent = totals["spent_ledger"]
         withdrawn = totals["withdrawn"]
@@ -287,8 +293,10 @@ def get_volume_user_balances(user_wallet: str) -> dict[str, Any]:
     }
 
 
-def check_user_can_spend_volume(user_wallet: str, token: str, amount: float) -> dict[str, Any]:
-    balances = get_volume_user_balances(user_wallet)
+def check_user_can_spend_volume(
+    user_wallet: str, token: str, amount: float, exclude_campaign_id: Optional[str] = None
+) -> dict[str, Any]:
+    balances = get_volume_user_balances(user_wallet, exclude_campaign_id=exclude_campaign_id)
     token = token.strip().upper()
     amount = float(amount)
     for row in balances.get("balances") or []:
@@ -376,6 +384,47 @@ def record_user_spend_volume(
         }
     )
     return {"ok": True}
+
+
+def record_user_credit_volume(
+    user_wallet: str,
+    token: str,
+    amount: float,
+    *,
+    reference_id: str,
+    signature: Optional[str] = None,
+) -> dict[str, Any]:
+    """Credit SOL/token back to a user's ledger balance without re-verifying an
+    on-chain transfer — used when a swap the agent already executed (e.g. the
+    sell leg of a volume cycle) returns funds to the same agent wallet. Without
+    this, sell proceeds landed back in the wallet but were never reflected in
+    the user's available balance, making every cycle look ~20x more expensive
+    than its real net cost."""
+    if amount <= 0:
+        return {"credited": 0.0}
+    tok = resolve_token(token)
+    if "error" in tok:
+        return tok
+    agent_wallet = get_volume_wallet_pubkey()
+    if not agent_wallet:
+        return {"error": "Volume agent wallet not configured."}
+    insert_ledger_entry(
+        {
+            "id": str(uuid.uuid4())[:8],
+            "user_wallet": user_wallet.strip(),
+            "agent_wallet": agent_wallet,
+            "signature": signature,
+            "token": tok["symbol"],
+            "mint": tok["mint"],
+            "amount": float(amount),
+            "direction": "deposit",
+            "reference_type": "volume_sell_return",
+            "reference_id": reference_id[:128],
+            "status": "confirmed",
+            "verified_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    return {"credited": float(amount), "token": tok["symbol"]}
 
 
 def verify_and_record_volume_deposit(signature: str, user_wallet: str) -> dict[str, Any]:

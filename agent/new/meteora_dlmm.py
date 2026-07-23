@@ -163,6 +163,35 @@ def meteora_pool_app_url(pool_address: str) -> str:
     return f"https://app.meteora.ag/dlmm/{pool_address.strip()}"
 
 
+def check_jupiter_route_exists(token_mint: str, quote_mint: str = SOL_MINT) -> bool:
+    """
+    Cheap, wallet-free liquidity check: does Jupiter's aggregator already have a
+    route for this pair, regardless of which pool type (DLMM, DAMM v2, DBC,
+    Raydium, etc.) actually holds the liquidity? Most real launched tokens
+    (e.g. EasyA Kickstart tokens) live on DAMM v2/DBC pools, not DLMM, so this
+    is the correct "does tradeable liquidity exist" signal — the DLMM-specific
+    lookup above only catches the narrower case of a dedicated DLMM pool.
+    """
+    try:
+        resp = requests.get(
+            "https://api.jup.ag/swap/v1/quote",
+            params={
+                "inputMint": quote_mint,
+                "outputMint": token_mint,
+                "amount": "10000000",
+                "slippageBps": "500",
+            },
+            timeout=15,
+        )
+        if not resp.ok:
+            return False
+        data = resp.json()
+        return bool(data.get("routePlan"))
+    except Exception as exc:
+        print(f"  Jupiter route check failed: {exc}")
+        return False
+
+
 def check_pool_infrastructure(token_mint: str, quote_mint: str = SOL_MINT) -> dict[str, Any]:
     """Live Meteora DLMM lookup for the mint pair (not our database)."""
     existing = find_dlmm_pool(token_mint, quote_mint)
@@ -178,6 +207,22 @@ def check_pool_infrastructure(token_mint: str, quote_mint: str = SOL_MINT) -> di
             "pool_creation_cost_sol": 0.0,
             "platform_fee_bps": METEORA_DEFAULT_FEE_BPS,
             "message": f"Meteora DLMM pool found: {pool_address}",
+        }
+
+    if check_jupiter_route_exists(token_mint, quote_mint):
+        return {
+            "pool_exists": True,
+            "pool_address": None,
+            "action": "reuse_existing_liquidity",
+            "source": "jupiter",
+            "pool": None,
+            "pool_creation_cost_sol": 0.0,
+            "platform_fee_bps": METEORA_DEFAULT_FEE_BPS,
+            "message": (
+                "No dedicated DLMM pool, but Jupiter already routes this pair "
+                "through existing liquidity (e.g. a DAMM v2/DBC pool). Trading "
+                "via Jupiter directly rather than creating a redundant pool."
+            ),
         }
 
     return {
