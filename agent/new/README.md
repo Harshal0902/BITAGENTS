@@ -1,6 +1,6 @@
 # Volume Agent — handoff notes (`claude-branch`)
 
-For Harshal. This branch = `origin/Volume-bot` + your merged fixes (already in, see "Layer 1" below) + a new layer of fixes found by actually running a real campaign end-to-end against live BITAGENTS on mainnet. Nothing here duplicates your work — this picks up from exactly where your merge left off.
+For Harshal. This branch = `origin/Volume-bot` + your merged fixes (already in, see "Layer 1" below) + several layers of fixes found by actually running real campaigns end-to-end against live BITAGENTS on mainnet. Nothing here duplicates your work — this picks up from exactly where your merge left off. **See Layer 4 at the bottom for the exact test we ran and step-by-step instructions to reproduce it yourself.**
 
 **Branch lineage**, oldest to newest:
 ```
@@ -118,3 +118,67 @@ For a real deployment, the backend needs to run on an always-on host (the `.env.
 ## How this was tested
 
 Full campaign (10 cycles, 0.01 SOL/leg) run against the live BITAGENTS/SOL pair on mainnet through the actual `/agents/volume2` UI, using Zeya's real deposited SOL on the real Neon production database (not a local test DB — there was no safe way to test the reservation/accounting bugs without the real ledger state that caused them). Every cycle's buy and sell signature was independently checked against Solana mainnet RPC directly (`getTransaction`, confirming `err: null`), not just trusted from this app's own database. The sell-proceeds backfill was verified by comparing `get_volume_user_balances` output before and after.
+
+---
+
+## Layer 4 — the exact end-to-end test we ran, and how to reproduce it yourself
+
+This is specifically for you, Harshal, to independently confirm all of the above rather than take our word for it. Same principle we've held everything else to: don't trust the app's own database, check Solana and Dexscreener directly.
+
+### What we ran
+
+A 20-cycle campaign against the real BITAGENTS/SOL pair on mainnet, sized so the whole thing needed ~1 SOL:
+
+- **trade_amount**: 0.025 SOL per leg
+- **interval**: 1 minute
+- **max_executions**: 20
+- **total_budget** (auto-computed): 1.0025 SOL (0.025 × 1.0025 platform fee × 2 legs × 20 cycles)
+
+Deposited 0.85 SOL on top of an existing balance to bring available SOL to 1.0747 — comfortably above the 1.0025 needed.
+
+### Results — verified independently, not just from our DB
+
+**Execution**: 20/20 cycles completed, `consecutive_failures: 0`, zero errors. Spot-checked the *last* cycle's buy and sell signatures directly against Solana mainnet RPC (`getTransaction`), not our own database — both confirmed with `err: null`.
+
+**SOL balance**:
+| | Before | After |
+|---|---|---|
+| Available SOL | 1.0747 | 1.0524 |
+
+Net cost: 0.0223 SOL out of 1.0025 SOL used — **97.8% retained**. This is the direct answer to your "2% fee, unsustainable after 50 cycles" concern from the Jul 23 call: at this trade size, on this pool, the real cost across an entire 20-cycle campaign was ~2.2% *total*, not per cycle.
+
+**Dexscreener, before vs. ~25 minutes later (after)**:
+| | Before | After |
+|---|---|---|
+| 1h volume | $19.22 | $73.55 |
+| 1h transactions | 1 buy / 0 sells | 20 buys / 20 sells |
+| Market cap | $27,083 | $27,047 (−0.13%) |
+
+Volume and transaction count moved exactly in line with our 20 cycles; price barely moved. That's the whole point of the agent working correctly — real visible volume, minimal price disruption.
+
+### How to reproduce this yourself
+
+**Option A — through the UI** (closest to how a real user would do it):
+1. Go to `/agents/volume2`, connect your wallet, deposit SOL (the page shows exactly how much you need for whichever preset, or see Option B below for a custom size like ours).
+2. Press one of the preset buttons, or for the *exact* test we ran, use the original `/agents/volume` page's "Quick create" form instead — it lets you set `trade_amount`, `interval`, and `max_executions` directly (0.025 / "1 minute" / 20).
+3. Watch the campaign under "Volume campaigns" — it polls every 30s, so cycles should start appearing within a minute.
+
+**Option B — direct backend call** (what we actually did, useful if you want to skip the UI and verify the backend logic in isolation):
+```python
+from volume_agent import create_volume_campaign
+result = create_volume_campaign(
+    base_token="iu3A7azWTm3zQSk81SUC1JctB4zPYnxLmcmqq71EASY",  # BITAGENTS mint
+    quote_token="SOL",
+    trade_amount=0.025,
+    interval="1 minute",
+    max_executions=20,
+    user_wallet="<your wallet address>",
+    name="Reproduction test",
+)
+```
+Requires your wallet to already have enough SOL deposited (check first with `volume_ledger.get_volume_user_balances("<your wallet>")`).
+
+**Verifying independently, don't trust our DB**:
+- Pull the campaign's `executions` array (via `/volume/campaigns/{id}/executions` or straight from the `volume_campaigns` table) and check any signature directly against Solana: `getTransaction` via `https://api.mainnet-beta.solana.com` RPC, confirm `err` is `null`.
+- Check `volume_ledger.get_volume_user_balances("<wallet>")` before and after for the real available-SOL delta.
+- Check `https://api.dexscreener.com/latest/dex/tokens/iu3A7azWTm3zQSk81SUC1JctB4zPYnxLmcmqq71EASY` before and after for volume/mcap/price impact.
