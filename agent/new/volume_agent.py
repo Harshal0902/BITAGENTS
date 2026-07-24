@@ -134,12 +134,8 @@ def _estimate_campaign_budget(
 
 
 def _dlmm_pool_ready(infra: dict[str, Any]) -> bool:
-    """
-    True when tradeable liquidity is available — either a real on-chain DLMM
-    pool address, or Jupiter already routes the pair through non-DLMM
-    liquidity (DAMM v2/DBC/etc). Either way, no pool creation is needed.
-    """
-    return bool(infra.get("pool_exists"))
+    """True when Meteora returned a real on-chain pool address (DLMM or DAMM v2)."""
+    return bool(infra.get("pool_exists") and infra.get("pool_address"))
 
 
 def ensure_volume_meteora_pool(
@@ -223,7 +219,7 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
             "campaign_id": campaign_id,
             "pool_address": pool_address,
             "source": infra.get("source", "meteora"),
-            "meteora_url": meteora_pool_app_url(pool_address) if pool_address else None,
+            "meteora_url": meteora_pool_app_url(pool_address, infra.get("pool_type") or "dlmm") if pool_address else None,
             "message": infra.get("message"),
             "platform_fee_rate": VOLUME_PLATFORM_FEE_RATE,
         }

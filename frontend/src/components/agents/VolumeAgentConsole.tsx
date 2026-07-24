@@ -557,7 +557,7 @@ export function VolumeAgentConsole() {
                 poolCreateBusy ||
                 !isAuthenticated ||
                 !baseToken.trim() ||
-                Boolean(meteoraPool?.pool_exists && meteoraPool.pool_address)
+                Boolean(meteoraPool?.pool_address)
               }
               className="bg-signal px-4 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -576,7 +576,8 @@ export function VolumeAgentConsole() {
               {meteoraPool.pool_address ? (
                 <div className="space-y-2">
                   <p className="text-signal">
-                    Meteora DLMM pool found · {meteoraPool.pair ?? `${baseToken}/${quoteToken}`}
+                    Meteora {meteoraPool.pool_type === "damm_v2" ? "DAMM v2" : "DLMM"} pool found ·{" "}
+                    {meteoraPool.pair ?? `${baseToken}/${quoteToken}`}
                   </p>
                   <div>
                     <span className="text-muted-foreground">Pool address (Meteora): </span>
@@ -596,9 +597,11 @@ export function VolumeAgentConsole() {
                     </a>
                   )}
                 </div>
+              ) : meteoraPool.pool_exists ? (
+                <p className="text-warn">{meteoraPool.message ?? "Liquidity found but no Meteora pool address."}</p>
               ) : (
                 <p className="text-warn">
-                  No Meteora DLMM pool for this pair. Creation cost ~
+                  No Meteora pool for this pair. DLMM creation cost ~
                   {meteoraPool.pool_creation_cost_sol ?? poolCost} SOL.
                 </p>
               )}

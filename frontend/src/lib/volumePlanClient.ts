@@ -41,6 +41,7 @@ export type VolumePoolCheck = {
   pool_creation_cost_sol?: number;
   message?: string;
   source?: string;
+  pool_type?: string | null;
   meteora_url?: string;
   base_token?: string;
   quote_token?: string;

@@ -1,4 +1,6 @@
-import { ArrowLeftRight, Bot, Clock, Workflow } from "lucide-react";
+"use client";
+
+import { ArrowLeftRight, Bot, Clock, Repeat2 } from "lucide-react";
 
 const cards = [
   {
@@ -7,7 +9,7 @@ const cards = [
     body: "Set up recurring Solana buys from natural language. Schedule swaps, preview quotes, and manage plans without leaving chat.",
   },
   {
-    icon: Workflow,
+    icon: Repeat2,
     title: "On-Chain Automation",
     body: "Deposits, custodial agent wallet flows, and a background scheduler execute DCA plans on mainnet with on-chain proof and ledger tracking.",
   },
