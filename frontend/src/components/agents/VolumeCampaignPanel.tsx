@@ -382,6 +382,12 @@ export function VolumeCampaignPanel({
                 </div>
               )}
 
+              {campaign.status === "failed" && campaign.last_error?.error && (
+                <div className="mt-2 border border-warn/30 bg-warn/10 px-3 py-2 font-mono text-[10px] text-warn">
+                  Stopped after {campaign.consecutive_failures ?? 3} failed attempts: {campaign.last_error.error}
+                </div>
+              )}
+
               <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 font-mono text-[10px] sm:grid-cols-4">
                 <div>
                   <dt className="text-muted-foreground">Trade / leg</dt>
@@ -400,9 +406,20 @@ export function VolumeCampaignPanel({
                   <dd className="text-foreground">{campaign.interval}</dd>
                 </div>
                 <div>
-                  <dt className="text-muted-foreground">Pool</dt>
+                  <dt className="text-muted-foreground">Meteora pool</dt>
                   <dd className="text-foreground">
-                    {campaign.pool_address ? shortAddress(campaign.pool_address) : "pending"}
+                    {campaign.pool_address ? (
+                      <a
+                        href={`https://app.meteora.ag/dlmm/${campaign.pool_address}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="break-all text-signal"
+                      >
+                        {campaign.pool_address}
+                      </a>
+                    ) : (
+                      "pending"
+                    )}
                   </dd>
                 </div>
                 <div>

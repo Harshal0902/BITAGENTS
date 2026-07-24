@@ -14,7 +14,12 @@ import {
   type ParsedTransaction,
   type VolumeAgentHealth,
 } from "@/lib/volumeAgentClient";
-import { checkVolumePool, createVolumeCampaign } from "@/lib/volumePlanClient";
+import {
+  checkVolumePool,
+  createVolumeCampaign,
+  ensureVolumeMeteoraPool,
+  type VolumePoolCheck,
+} from "@/lib/volumePlanClient";
 import { useVolumeWalletAuth } from "@/hooks/useVolumeWalletAuth";
 import { explorerUrlForSignature } from "@/lib/dcaActionResults";
 import { useWallet } from "@solana/wallet-adapter-react";
@@ -160,8 +165,10 @@ export function VolumeAgentConsole() {
   const [campaignBusy, setCampaignBusy] = useState(false);
   const [campaignError, setCampaignError] = useState<string | null>(null);
   const [campaignSuccess, setCampaignSuccess] = useState<string | null>(null);
-  const [poolStatus, setPoolStatus] = useState<string | null>(null);
+  const [meteoraPool, setMeteoraPool] = useState<VolumePoolCheck | null>(null);
+  const [poolError, setPoolError] = useState<string | null>(null);
   const [poolCheckBusy, setPoolCheckBusy] = useState(false);
+  const [poolCreateBusy, setPoolCreateBusy] = useState(false);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const actionsEndRef = useRef<HTMLDivElement>(null);
@@ -254,25 +261,52 @@ export function VolumeAgentConsole() {
     void runCommand(input);
   }
 
-  async function checkPool() {
-    const mint = baseToken.trim();
-    if (mint.length < 2) {
-      setPoolStatus("Enter a valid base token symbol or mint to check pool.");
+  useEffect(() => {
+    setMeteoraPool(null);
+    setPoolError(null);
+  }, [baseToken, quoteToken]);
+
+  async function checkMeteoraPool() {
+    const base = baseToken.trim();
+    const quote = quoteToken.trim() || "SOL";
+    if (!base) {
+      setPoolError("Enter both tokens to check Meteora.");
       return;
     }
     setPoolCheckBusy(true);
-    setPoolStatus(null);
+    setPoolError(null);
+    setMeteoraPool(null);
     try {
-      const result = await checkVolumePool(mint);
-      setPoolStatus(
-        result.pool_exists
-          ? `DLMM pool found · ${result.pool_address ?? "address pending"}`
-          : `No pool found · creation cost ~${result.pool_creation_cost_sol ?? poolCost} SOL`
-      );
+      const result = await checkVolumePool(base, quote);
+      setMeteoraPool(result);
     } catch (err) {
-      setPoolStatus(err instanceof Error ? err.message : "Pool check failed");
+      setPoolError(err instanceof Error ? err.message : "Meteora pool check failed");
     } finally {
       setPoolCheckBusy(false);
+    }
+  }
+
+  async function createMeteoraPool() {
+    if (!token) {
+      setPoolError("Sign in with your wallet first.");
+      return;
+    }
+    const base = baseToken.trim();
+    const quote = quoteToken.trim() || "SOL";
+    if (!base) {
+      setPoolError("Enter both tokens.");
+      return;
+    }
+    setPoolCreateBusy(true);
+    setPoolError(null);
+    try {
+      const result = await ensureVolumeMeteoraPool(base, quote, token, true);
+      setMeteoraPool(result);
+      setRefreshTick((t) => t + 1);
+    } catch (err) {
+      setPoolError(err instanceof Error ? err.message : "Meteora pool creation failed");
+    } finally {
+      setPoolCreateBusy(false);
     }
   }
 
@@ -476,21 +510,121 @@ export function VolumeAgentConsole() {
         </Panel>
       </div>
 
-      <Panel title="Quick create · volume campaign">
-        <form className="space-y-4" onSubmit={(e) => void handleCreateCampaign(e)}>
+      <Panel title="Meteora DLMM pool · live lookup">
+        <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Set pair, trade size, frequency, and cycle count. The agent checks Meteora DLMM pools and reuses
-            existing liquidity when available.
+            Enter your two tokens below. We query <strong className="text-foreground">Meteora directly</strong>{" "}
+            (not our database). If a DLMM pool exists, its on-chain address is shown. If not, you can create
+            one on Meteora (~{poolCost} SOL from your deposit).
           </p>
 
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1 font-mono text-[11px] sm:col-span-2">
-              <span className="text-muted-foreground">Base token (symbol or mint)</span>
+            <label className="space-y-1 font-mono text-[11px]">
+              <span className="text-muted-foreground">Token A (base)</span>
               <input
                 className="w-full border border-grid bg-background px-3 py-2 text-foreground outline-none focus:border-signal"
                 value={baseToken}
                 onChange={(e) => setBaseToken(e.target.value)}
-                placeholder="Your token mint or symbol (e.g. USDC)"
+                placeholder="Symbol or mint (e.g. USDC)"
+              />
+            </label>
+            <label className="space-y-1 font-mono text-[11px]">
+              <span className="text-muted-foreground">Token B (quote)</span>
+              <select
+                className="w-full border border-grid bg-background px-3 py-2 text-foreground outline-none focus:border-signal"
+                value={quoteToken}
+                onChange={(e) => setQuoteToken(e.target.value)}
+              >
+                <option value="SOL">SOL</option>
+                <option value="USDC">USDC</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void checkMeteoraPool()}
+              disabled={poolCheckBusy || !baseToken.trim()}
+              className="border border-grid px-4 py-2 font-mono text-[11px] uppercase tracking-[0.12em] transition hover:border-signal disabled:opacity-50"
+            >
+              {poolCheckBusy ? "Checking Meteora…" : "Check on Meteora"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void createMeteoraPool()}
+              disabled={
+                poolCreateBusy ||
+                !isAuthenticated ||
+                !baseToken.trim() ||
+                Boolean(meteoraPool?.pool_address)
+              }
+              className="bg-signal px-4 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {poolCreateBusy ? "Creating on Meteora…" : "Create on Meteora"}
+            </button>
+          </div>
+
+          {poolError && <p className="font-mono text-[11px] text-warn">{poolError}</p>}
+
+          {meteoraPool && (
+            <div
+              className={`border p-4 font-mono text-[11px] ${
+                meteoraPool.pool_address ? "border-signal/40 bg-signal/5" : "border-warn/40 bg-warn/5"
+              }`}
+            >
+              {meteoraPool.pool_address ? (
+                <div className="space-y-2">
+                  <p className="text-signal">
+                    Meteora {meteoraPool.pool_type === "damm_v2" ? "DAMM v2" : "DLMM"} pool found ·{" "}
+                    {meteoraPool.pair ?? `${baseToken}/${quoteToken}`}
+                  </p>
+                  <div>
+                    <span className="text-muted-foreground">Pool address (Meteora): </span>
+                    <code className="break-all text-foreground">{meteoraPool.pool_address}</code>
+                  </div>
+                  {meteoraPool.pool?.name && (
+                    <p className="text-muted-foreground">Pool name: {meteoraPool.pool.name}</p>
+                  )}
+                  {meteoraPool.meteora_url && (
+                    <a
+                      href={meteoraPool.meteora_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-block text-signal"
+                    >
+                      Open pool on Meteora ↗
+                    </a>
+                  )}
+                </div>
+              ) : meteoraPool.pool_exists ? (
+                <p className="text-warn">{meteoraPool.message ?? "Liquidity found but no Meteora pool address."}</p>
+              ) : (
+                <p className="text-warn">
+                  No Meteora pool for this pair. DLMM creation cost ~
+                  {meteoraPool.pool_creation_cost_sol ?? poolCost} SOL.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </Panel>
+
+      <Panel title="Quick create · volume campaign">
+        <form className="space-y-4" onSubmit={(e) => void handleCreateCampaign(e)}>
+          <p className="text-sm text-muted-foreground">
+            Set trade size, frequency, and cycle count. Use the same token pair as above — the agent reuses
+            the Meteora pool you verified.
+          </p>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1 font-mono text-[11px] sm:col-span-2">
+              <span className="text-muted-foreground">Base token (same as pool setup)</span>
+              <input
+                className="w-full border border-grid bg-background px-3 py-2 text-foreground outline-none focus:border-signal"
+                value={baseToken}
+                onChange={(e) => setBaseToken(e.target.value)}
+                placeholder="Symbol or mint (e.g. USDC)"
                 required
               />
             </label>
@@ -535,19 +669,8 @@ export function VolumeAgentConsole() {
                 required
               />
             </label>
-            <div className="flex items-end">
-              <button
-                type="button"
-                onClick={() => void checkPool()}
-                disabled={poolCheckBusy}
-                className="w-full border border-grid px-3 py-2 font-mono text-[11px] uppercase tracking-[0.12em] transition hover:border-signal disabled:opacity-50"
-              >
-                {poolCheckBusy ? "Checking…" : "Check DLMM pool"}
-              </button>
-            </div>
           </div>
 
-          {poolStatus && <p className="font-mono text-[11px] text-muted-foreground">{poolStatus}</p>}
           {campaignError && <p className="font-mono text-[11px] text-warn">{campaignError}</p>}
           {campaignSuccess && <p className="font-mono text-[11px] text-signal">{campaignSuccess}</p>}
 

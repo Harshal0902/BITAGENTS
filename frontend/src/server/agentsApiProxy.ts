@@ -394,12 +394,25 @@ export async function proxyVolumeWalletLedger(
   });
 }
 
-export async function proxyVolumePoolCheck(baseMint: string, quoteMint?: string): Promise<Response> {
-  const params = new URLSearchParams({ base_mint: baseMint });
-  if (quoteMint) params.set("quote_mint", quoteMint);
+export async function proxyVolumePoolCheck(baseToken: string, quoteToken = "SOL"): Promise<Response> {
+  const params = new URLSearchParams({
+    base_token: baseToken,
+    quote_token: quoteToken,
+  });
   return fetch(`${getAgentsBaseUrl()}/volume/pool/check?${params}`, {
     cache: "no-store",
     headers: buildHeaders(),
+  });
+}
+
+export async function proxyVolumePoolEnsure(
+  body: { base_token: string; quote_token: string; create_if_missing: boolean },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/volume/pool/ensure`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
   });
 }
 

@@ -49,16 +49,22 @@ from meteora_dlmm import (
     METEORA_DEFAULT_FEE_BPS,
     check_pool_infrastructure,
     create_dlmm_pool,
+    ensure_meteora_dlmm_pool,
     get_pool_creation_cost_sol,
+    meteora_pool_app_url,
 )
 from volume_ledger import (
+    MAX_CONSECUTIVE_FAILURES,
     VOLUME_PLATFORM_FEE_RATE,
     check_user_can_spend_volume,
     get_volume_agent_wallet_info,
     get_volume_wallet_pubkey,
     load_volume_keypair,
+    reclaim_token_account_rent,
+    record_user_credit_volume,
     record_user_spend_volume,
     record_volume_platform_fee,
+    validate_volume_trade_amount,
     volume_execution_total_cost,
     volume_platform_fee,
 )
@@ -127,6 +133,69 @@ def _estimate_campaign_budget(
     return round(total, 9)
 
 
+def _dlmm_pool_ready(infra: dict[str, Any]) -> bool:
+    """True when Meteora returned a real on-chain pool address (DLMM or DAMM v2)."""
+    return bool(infra.get("pool_exists") and infra.get("pool_address"))
+
+
+def ensure_volume_meteora_pool(
+    *,
+    base_token: str,
+    quote_token: str = "SOL",
+    user_wallet: Optional[str] = None,
+    create_if_missing: bool = False,
+) -> dict[str, Any]:
+    """Resolve tokens, check Meteora live, optionally create a DLMM pool on Meteora."""
+    base = resolve_token(base_token)
+    quote = resolve_token(quote_token)
+    if "error" in base:
+        return base
+    if "error" in quote:
+        return quote
+
+    if create_if_missing and user_wallet:
+        pool_cost = get_pool_creation_cost_sol()
+        spend_check = check_user_can_spend_volume(user_wallet.strip(), quote["symbol"], pool_cost)
+        if "error" in spend_check:
+            return spend_check
+
+    result = ensure_meteora_dlmm_pool(
+        base["mint"],
+        quote["mint"],
+        create_if_missing=create_if_missing,
+        quote_amount=float(get_pool_creation_cost_sol()) if create_if_missing else 0.0,
+    )
+    if result.get("error"):
+        return result
+
+    result.update(
+        {
+            "base_token": base["symbol"],
+            "quote_token": quote["symbol"],
+            "base_mint": base["mint"],
+            "quote_mint": quote["mint"],
+            "pair": f"{base['symbol']}/{quote['symbol']}",
+        }
+    )
+
+    if (
+        create_if_missing
+        and user_wallet
+        and result.get("status") == "created"
+        and (result.get("liquidity") or {}).get("status") == "seeded"
+    ):
+        pool_cost = get_pool_creation_cost_sol()
+        record_user_spend_volume(
+            user_wallet.strip(),
+            quote["symbol"],
+            pool_cost,
+            reference_id=f"pool-create-{base['symbol']}-{quote['symbol']}",
+            signature=result.get("signature"),
+        )
+
+    return result
+
+
 def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
     campaign = find_volume_campaign(campaign_id)
     if not campaign:
@@ -137,9 +206,10 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
         "infrastructure": {**campaign.get("infrastructure", {}), "last_check": infra},
     }
 
-    if infra.get("pool_exists"):
+    if _dlmm_pool_ready(infra):
+        pool_address = infra.get("pool_address")
         updates["pool_exists"] = True
-        updates["pool_address"] = infra.get("pool_address")
+        updates["pool_address"] = pool_address
         updates["status"] = "active" if campaign.get("status") == "provisioning" else campaign.get("status")
         if campaign.get("status") == "provisioning" and not campaign.get("next_execution_at"):
             updates["next_execution_at"] = datetime.now(timezone.utc).isoformat()
@@ -147,14 +217,19 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
         return {
             "status": "reuse_pool",
             "campaign_id": campaign_id,
-            "pool_address": infra.get("pool_address"),
+            "pool_address": pool_address,
+            "source": infra.get("source", "meteora"),
+            "meteora_url": meteora_pool_app_url(pool_address, infra.get("pool_type") or "dlmm") if pool_address else None,
             "message": infra.get("message"),
             "platform_fee_rate": VOLUME_PLATFORM_FEE_RATE,
         }
 
     user_wallet = (campaign.get("user_wallet") or "").strip()
     pool_cost = float(campaign.get("pool_creation_cost_sol") or get_pool_creation_cost_sol())
-    spend_check = check_user_can_spend_volume(user_wallet, campaign.get("quote_token", "SOL"), pool_cost)
+    seed_token_amount = float(campaign.get("infrastructure", {}).get("seed_token_amount") or 0.0)
+    spend_check = check_user_can_spend_volume(
+        user_wallet, campaign.get("quote_token", "SOL"), pool_cost, exclude_campaign_id=campaign_id
+    )
     if "error" in spend_check:
         updates["status"] = "failed"
         updates["infrastructure"] = {
@@ -170,6 +245,7 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
         quote_mint=campaign["quote_mint"],
         fee_bps=METEORA_DEFAULT_FEE_BPS,
         quote_amount=pool_cost,
+        token_amount=seed_token_amount,
     )
     if created.get("error"):
         updates["status"] = "failed"
@@ -184,6 +260,24 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
     pool_address = created.get("pool_address")
     if created.get("status") == "exists" and not pool_address:
         pool_address = (created.get("pool") or {}).get("pool_address")
+
+    # A pool with no liquidity in it can't fill any swap — an empty pool is
+    # not a usable pool. Only mark the campaign ready to trade once real
+    # liquidity actually landed on-chain, not just the empty pool shell.
+    liquidity = created.get("liquidity") or {}
+    if liquidity.get("status") != "seeded":
+        updates["status"] = "failed"
+        updates["infrastructure"] = {
+            **updates.get("infrastructure", {}),
+            "pool_creation": created,
+            "pool_creation_error": {
+                "error": liquidity.get("error")
+                or "Pool was created but liquidity seeding did not complete, so it cannot fill any swaps yet."
+            },
+            "last_provision_error_at": datetime.now(timezone.utc).isoformat(),
+        }
+        update_volume_campaign(campaign_id, updates)
+        return {"error": updates["infrastructure"]["pool_creation_error"]["error"], "pool_address": pool_address}
 
     updates.update(
         {
@@ -203,9 +297,17 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
             campaign.get("quote_token", "SOL"),
             pool_cost,
             reference_id=f"pool-create-{campaign_id}",
-            signature=created.get("signature"),
+            signature=liquidity.get("signature") or created.get("signature"),
         )
         updates["spent_so_far"] = round(float(campaign.get("spent_so_far") or 0) + pool_cost, 9)
+        if seed_token_amount > 0:
+            record_user_spend_volume(
+                user_wallet,
+                campaign.get("base_token"),
+                seed_token_amount,
+                reference_id=f"pool-create-{campaign_id}-token-seed",
+                signature=liquidity.get("signature"),
+            )
 
     update_volume_campaign(campaign_id, updates)
     return {
@@ -247,6 +349,10 @@ def create_volume_campaign(
     if max_executions <= 0:
         return {"error": "max_executions must be at least 1."}
 
+    size_check = validate_volume_trade_amount(trade_amount, quote["symbol"])
+    if "error" in size_check:
+        return size_check
+
     try:
         interval_minutes = _parse_interval(interval)
     except ValueError as exc:
@@ -256,8 +362,9 @@ def create_volume_campaign(
         return {"error": "user_wallet is required. Connect wallet and sign in first."}
 
     infra = check_pool_infrastructure(base["mint"], quote["mint"])
-    pool_cost = 0.0 if infra.get("pool_exists") else float(infra.get("pool_creation_cost_sol") or get_pool_creation_cost_sol())
-    estimated_budget = _estimate_campaign_budget(trade_amount, max_executions, pool_cost, infra.get("pool_exists", False))
+    dlmm_ready = _dlmm_pool_ready(infra)
+    pool_cost = 0.0 if dlmm_ready else float(infra.get("pool_creation_cost_sol") or get_pool_creation_cost_sol())
+    estimated_budget = _estimate_campaign_budget(trade_amount, max_executions, pool_cost, dlmm_ready)
 
     if total_budget is None:
         total_budget = estimated_budget
@@ -288,7 +395,7 @@ def create_volume_campaign(
         "base_mint": base["mint"],
         "quote_mint": quote["mint"],
         "pool_address": infra.get("pool_address"),
-        "pool_exists": bool(infra.get("pool_exists")),
+        "pool_exists": dlmm_ready,
         "pool_creation_cost_sol": pool_cost,
         "trade_amount": trade_amount,
         "interval": interval,
@@ -299,9 +406,9 @@ def create_volume_campaign(
         "executions_count": 0,
         "slippage_bps": slippage_bps,
         "platform_fee_rate": VOLUME_PLATFORM_FEE_RATE,
-        "status": "active" if infra.get("pool_exists") else "provisioning",
+        "status": "active" if dlmm_ready else "provisioning",
         "created_at": now.isoformat(),
-        "next_execution_at": now.isoformat() if infra.get("pool_exists") else None,
+        "next_execution_at": now.isoformat() if dlmm_ready else None,
         "executions": [],
         "infrastructure": {
             "initial_check": infra,
@@ -310,7 +417,7 @@ def create_volume_campaign(
     }
     insert_volume_campaign(campaign)
 
-    if not infra.get("pool_exists"):
+    if not dlmm_ready:
         provisioned = provision_campaign_infrastructure(campaign["id"])
         campaign = find_volume_campaign(campaign["id"]) or campaign
         if campaign.get("status") == "failed":
@@ -367,6 +474,8 @@ def update_volume_campaign_status(campaign_id: str, action: str, user_wallet: Op
         return {"error": f"Unknown action '{action}'. Use pause, resume, or cancel."}
     new_status = mapping[action]
     updated = update_volume_campaign(campaign_id, {"status": new_status})
+    if new_status == "cancelled":
+        _maybe_reclaim_after_campaign_end(campaign)
     return {"status": new_status, "campaign": updated}
 
 
@@ -400,10 +509,7 @@ def _execute_meteora_swap(
         "computeUnitPricePercentile": "high",
         "maxAccounts": "54",
         "skipUserAccountsRpcCalls": "true",
-        "dexes": "Meteora DLMM",
     }
-    if pool_address:
-        params["excludeDexes"] = ""
 
     try:
         resp = _jupiter_get(JUPITER_BUILD_API, params)
@@ -412,9 +518,70 @@ def _execute_meteora_swap(
         build_data = resp.json()
         if build_data.get("error"):
             return {"error": str(build_data["error"])}
-        return _execute_jupiter_swap_v2(build_data, wallet_pubkey, keypair)
+        result = _execute_jupiter_swap_v2(build_data, wallet_pubkey, keypair)
+        if result.get("status") == "success":
+            out_raw = int(build_data.get("outAmount") or 0)
+            if out_raw > 0:
+                result["output_amount_raw"] = out_raw
+        return result
     except Exception as exc:
         return {"error": str(exc)}
+
+
+def _record_execution_failure(
+    campaign_id: str, campaign: dict[str, Any], leg: str, leg_result: dict[str, Any]
+) -> dict[str, Any]:
+    """
+    Track consecutive failures and auto-pause a campaign rather than letting the
+    scheduler retry forever — an unattended retry loop silently drains the wallet
+    on Solana network fees even when every attempt fails.
+    """
+    failures = int(campaign.get("consecutive_failures") or 0) + 1
+    updates: dict[str, Any] = {"consecutive_failures": failures, "last_error": {"leg": leg, **leg_result}}
+    auto_paused = failures >= MAX_CONSECUTIVE_FAILURES
+    if auto_paused:
+        updates["status"] = "failed"
+    update_volume_campaign(campaign_id, updates)
+
+    result = {"campaign_id": campaign_id, "leg": leg, "consecutive_failures": failures, **leg_result}
+    if auto_paused:
+        result["auto_paused"] = True
+        result["message"] = (
+            f"Campaign auto-paused after {failures} consecutive failed attempts "
+            f"(last error: {leg_result.get('error', 'unknown')}). No further retries "
+            f"will run until you review and resume it."
+        )
+        _maybe_reclaim_after_campaign_end(campaign)
+    return result
+
+
+def _maybe_reclaim_after_campaign_end(campaign: dict[str, Any]) -> None:
+    """
+    Best-effort: when a campaign reaches a terminal state, close its base-token
+    account and reclaim the ~0.002 SOL rent — but only if no other active/paused
+    campaign for the same user still trades that same token.
+    """
+    try:
+        user_wallet = (campaign.get("user_wallet") or "").strip()
+        base_mint = campaign.get("base_mint")
+        campaign_id = campaign.get("id")
+        if not user_wallet or not base_mint:
+            return
+        others_still_using_token = any(
+            c.get("id") != campaign_id
+            and c.get("base_mint") == base_mint
+            and c.get("status") in {"active", "paused", "provisioning"}
+            for c in load_all_volume_campaigns(user_wallet)
+        )
+        if others_still_using_token:
+            return
+        result = reclaim_token_account_rent(base_mint)
+        if result.get("status") == "closed":
+            print(f"  💰 Reclaimed {result['reclaimed_sol']} SOL rent for {campaign.get('base_token')} account ({result.get('signature')})")
+        elif result.get("error"):
+            print(f"  ⚠️  Rent reclaim skipped for {campaign.get('base_token')}: {result['error']}")
+    except Exception as exc:
+        print(f"  ⚠️  Rent reclaim check failed: {exc}")
 
 
 def _run_volume_execution(campaign_id: str, *, dry_run: bool = False, force: bool = False) -> dict[str, Any]:
@@ -445,16 +612,22 @@ def _run_volume_execution(campaign_id: str, *, dry_run: bool = False, force: boo
     cycle_cost = per_leg_cost * 2
     if budget is not None and spent + cycle_cost > budget + 1e-12:
         update_volume_campaign(campaign_id, {"status": "completed"})
+        _maybe_reclaim_after_campaign_end(campaign)
         return {"error": "Budget exhausted. Campaign marked completed.", "campaign_id": campaign_id}
     if max_exec and executions_count >= max_exec:
         update_volume_campaign(campaign_id, {"status": "completed"})
+        _maybe_reclaim_after_campaign_end(campaign)
         return {"error": "Max executions reached. Campaign marked completed.", "campaign_id": campaign_id}
 
     if not dry_run and user_wallet:
-        check = check_user_can_spend_volume(user_wallet, quote_token, cycle_cost)
+        check = check_user_can_spend_volume(
+            user_wallet, quote_token, cycle_cost, exclude_campaign_id=campaign_id
+        )
         if "error" in check:
-            check["campaign_id"] = campaign_id
-            return check
+            # Route through the same failure/auto-pause tracking as buy/sell-leg
+            # failures — otherwise an underfunded campaign retries forever every
+            # poll with no auto-pause and no clear signal to the user.
+            return _record_execution_failure(campaign_id, campaign, "balance_check", check)
 
     base = resolve_token(base_token)
     quote = resolve_token(quote_token)
@@ -478,7 +651,7 @@ def _run_volume_execution(campaign_id: str, *, dry_run: bool = False, force: boo
         quote["mint"], base["mint"], trade_amount, quote["decimals"], slippage_bps, pool_address
     )
     if buy.get("status") != "success":
-        return {"campaign_id": campaign_id, "leg": "buy", **buy}
+        return _record_execution_failure(campaign_id, campaign, "buy", buy)
 
     if user_wallet:
         record_user_spend_volume(user_wallet, quote_token, trade_amount, reference_id=f"{campaign_id}-buy", signature=buy.get("signature"))
@@ -491,10 +664,24 @@ def _run_volume_execution(campaign_id: str, *, dry_run: bool = False, force: boo
         base["mint"], quote["mint"], sell_amount, base["decimals"], slippage_bps, pool_address
     )
     if sell.get("status") != "success":
-        return {"campaign_id": campaign_id, "leg": "sell", "buy": buy, **sell}
+        result = _record_execution_failure(campaign_id, campaign, "sell", sell)
+        result["buy"] = buy
+        return result
 
     if user_wallet:
-        record_volume_platform_fee(user_wallet, quote_token, sell_amount, reference_id=f"{campaign_id}-sell-fee", signature=sell.get("signature"))
+        # Fee must be recorded in quote-currency (SOL) terms — sell_amount above is
+        # the base-token quantity sold, not SOL, and was wrongly passed here before
+        # (produced fee "spends" thousands of times too large, corrupting the ledger).
+        # Use the actual SOL proceeds from the sell leg, falling back to trade_amount.
+        sell_out_raw = int(sell.get("output_amount_raw") or 0)
+        sell_proceeds_sol = (
+            sell_out_raw / (10 ** quote["decimals"]) if sell_out_raw > 0 else trade_amount
+        )
+        record_volume_platform_fee(user_wallet, quote_token, sell_proceeds_sol, reference_id=f"{campaign_id}-sell-fee", signature=sell.get("signature"))
+        # The sell leg returns SOL to this same agent wallet — without crediting it
+        # back, the ledger only ever debited the buy leg and never reflected the
+        # round-trip proceeds, overstating each cycle's real cost by ~20x.
+        record_user_credit_volume(user_wallet, quote_token, sell_proceeds_sol, reference_id=f"{campaign_id}-sell-return", signature=sell.get("signature"))
 
     now = datetime.now(timezone.utc)
     exec_record = {
@@ -515,6 +702,7 @@ def _run_volume_execution(campaign_id: str, *, dry_run: bool = False, force: boo
             "spent_so_far": round(spent + cycle_cost, 9),
             "next_execution_at": next_run.isoformat(),
             "executions": executions[-50:],
+            "consecutive_failures": 0,
         },
     )
     return {
@@ -592,7 +780,7 @@ def _format_create_campaign_reply(result: dict[str, Any]) -> str:
         f"- Interval: **{campaign.get('interval')}**",
         f"- Cycles: **{campaign.get('max_executions')}**",
         f"- Status: **{campaign.get('status')}**",
-        f"- Pool: `{campaign.get('pool_address') or 'provisioning…'}`",
+        f"- Pool (Meteora): `{campaign.get('pool_address') or 'not set yet'}`",
         "",
         "Not financial advice. DYOR.",
     ]
@@ -733,16 +921,39 @@ def run_volume_agent_with_actions(
         conversation_history.append({"role": "assistant", "content": reply})
         return reply, conversation_history, actions
 
-    if "pool" in lower and re.search(r"\b(check|status|infra)", lower):
-        args: dict[str, Any] = {}
-        mint_match = re.search(r"[1-9A-HJ-NP-Za-km-z]{32,44}", text)
-        if mint_match:
-            args["token_mint"] = mint_match.group(0)
-            result = check_pool_infrastructure(args["token_mint"])
+    if "pool" in lower and re.search(r"\b(check|status|infra|setup|create)\b", lower):
+        pair_match = re.search(
+            r"(\w+|sol|usdc|usdt|[1-9A-HJ-NP-Za-km-z]{32,44})\s*(?:/|->|→|and|&)\s*(\w+|sol|usdc|usdt|[1-9A-HJ-NP-Za-km-z]{32,44})",
+            lower,
+        )
+        create_pool = bool(re.search(r"\b(create|setup|provision)\b", lower))
+        if pair_match:
+            base_t = pair_match.group(1).upper() if len(pair_match.group(1)) <= 8 else pair_match.group(1)
+            quote_t = pair_match.group(2).upper() if len(pair_match.group(2)) <= 8 else pair_match.group(2)
+            result = ensure_volume_meteora_pool(
+                base_token=base_t,
+                quote_token=quote_t,
+                user_wallet=user_wallet.strip() if user_wallet else None,
+                create_if_missing=create_pool and bool(user_wallet),
+            )
+            args = {"base_token": base_t, "quote_token": quote_t, "create_if_missing": create_pool}
         else:
-            result = {"error": "Provide a token mint address to check DLMM pool infrastructure."}
-        reply = result.get("message") or json.dumps(result)
-        actions.append({"tool": "check_pool_infrastructure", "args": args, "result": json.dumps(result)})
+            mint_match = re.search(r"[1-9A-HJ-NP-Za-km-z]{32,44}", text)
+            if mint_match:
+                args = {"token_mint": mint_match.group(0)}
+                result = check_pool_infrastructure(args["token_mint"])
+            else:
+                result = {"error": "Provide two tokens (e.g. USDC/SOL) to check Meteora DLMM pool."}
+                args = {}
+        if result.get("pool_address"):
+            reply = (
+                f"**Meteora DLMM pool:** `{result['pool_address']}`\n"
+                f"Pair: **{result.get('pair') or result.get('base_token', '—')}/{result.get('quote_token', 'SOL')}**\n"
+                f"View: {result.get('meteora_url') or meteora_pool_app_url(result['pool_address'])}"
+            )
+        else:
+            reply = result.get("message") or result.get("error") or json.dumps(result)
+        actions.append({"tool": "ensure_meteora_dlmm_pool" if pair_match else "check_pool_infrastructure", "args": args, "result": json.dumps(result, default=str)})
         conversation_history.append({"role": "user", "content": text})
         conversation_history.append({"role": "assistant", "content": reply})
         return reply, conversation_history, actions

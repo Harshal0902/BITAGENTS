@@ -1,3 +1,5 @@
+"use client";
+
 import { Lock } from "lucide-react";
 
 const items = [
