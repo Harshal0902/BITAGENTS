@@ -182,7 +182,12 @@ def ensure_volume_meteora_pool(
         }
     )
 
-    if create_if_missing and user_wallet and result.get("status") == "created":
+    if (
+        create_if_missing
+        and user_wallet
+        and result.get("status") == "created"
+        and (result.get("liquidity") or {}).get("status") == "seeded"
+    ):
         pool_cost = get_pool_creation_cost_sol()
         record_user_spend_volume(
             user_wallet.strip(),
@@ -225,6 +230,7 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
 
     user_wallet = (campaign.get("user_wallet") or "").strip()
     pool_cost = float(campaign.get("pool_creation_cost_sol") or get_pool_creation_cost_sol())
+    seed_token_amount = float(campaign.get("infrastructure", {}).get("seed_token_amount") or 0.0)
     spend_check = check_user_can_spend_volume(
         user_wallet, campaign.get("quote_token", "SOL"), pool_cost, exclude_campaign_id=campaign_id
     )
@@ -236,6 +242,7 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
         quote_mint=campaign["quote_mint"],
         fee_bps=METEORA_DEFAULT_FEE_BPS,
         quote_amount=pool_cost,
+        token_amount=seed_token_amount,
     )
     if created.get("error"):
         updates["status"] = "failed"
@@ -250,6 +257,24 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
     pool_address = created.get("pool_address")
     if created.get("status") == "exists" and not pool_address:
         pool_address = (created.get("pool") or {}).get("pool_address")
+
+    # A pool with no liquidity in it can't fill any swap — an empty pool is
+    # not a usable pool. Only mark the campaign ready to trade once real
+    # liquidity actually landed on-chain, not just the empty pool shell.
+    liquidity = created.get("liquidity") or {}
+    if liquidity.get("status") != "seeded":
+        updates["status"] = "failed"
+        updates["infrastructure"] = {
+            **updates.get("infrastructure", {}),
+            "pool_creation": created,
+            "pool_creation_error": {
+                "error": liquidity.get("error")
+                or "Pool was created but liquidity seeding did not complete, so it cannot fill any swaps yet."
+            },
+            "last_provision_error_at": datetime.now(timezone.utc).isoformat(),
+        }
+        update_volume_campaign(campaign_id, updates)
+        return {"error": updates["infrastructure"]["pool_creation_error"]["error"], "pool_address": pool_address}
 
     updates.update(
         {
@@ -269,9 +294,17 @@ def provision_campaign_infrastructure(campaign_id: str) -> dict[str, Any]:
             campaign.get("quote_token", "SOL"),
             pool_cost,
             reference_id=f"pool-create-{campaign_id}",
-            signature=created.get("signature"),
+            signature=liquidity.get("signature") or created.get("signature"),
         )
         updates["spent_so_far"] = round(float(campaign.get("spent_so_far") or 0) + pool_cost, 9)
+        if seed_token_amount > 0:
+            record_user_spend_volume(
+                user_wallet,
+                campaign.get("base_token"),
+                seed_token_amount,
+                reference_id=f"pool-create-{campaign_id}-token-seed",
+                signature=liquidity.get("signature"),
+            )
 
     update_volume_campaign(campaign_id, updates)
     return {

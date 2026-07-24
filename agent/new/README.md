@@ -67,6 +67,33 @@ The campaign list showed `status: failed` with zero explanation — `last_error`
 
 ---
 
+## Layer 3 — new-token pool creation now actually seeds liquidity
+
+This directly answers what Harshal reported in the "Swaps Infrastructure and DNS Handoff" call (Jul 23): *"it is not creating the pool for the new tokens, and for the existing tokens, it is not depositing the funds."*
+
+**Root cause, confirmed by reading the script line by line**: `create_dlmm_pool.cjs` built a payload including `tokenAmount`/`quoteAmount` (clearly intended as "how much liquidity to seed with"), but the script never read either field — it only created an **empty pool shell** via `createCustomizablePermissionlessLbPair` and stopped. There is no liquidity-provisioning code anywhere else in the repo either. An empty DLMM pool can't fill any swap, so a newly "created" pool looked broken the moment anyone tried to trade against it. This is one bug, not two — both halves of Harshal's report are the same missing feature.
+
+**Fix** (`scripts/create_dlmm_pool.cjs`, `meteora_dlmm.py`, `volume_agent.py`):
+- After the pool-creation transaction is verified on-chain (Layer 1's check), the script now does a second step: opens a DLMM position and deposits real `tokenAmount` + `quoteAmount` liquidity into it (Meteora's `initializePositionAndAddLiquidityByStrategy`, Spot strategy, ±10 bins around the starting price — narrow and simple, since our own trade sizes are small). Same "verify on-chain before reporting success" pattern as the pool-creation check itself: it reads the position back after confirming, and fails loudly if the position doesn't actually exist.
+- `provision_campaign_infrastructure` now reads the campaign's `seed_token_amount` (already existed as a stored field, was never wired to anything) and passes it through as the base-token side of the deposit.
+- **A pool is no longer marked ready to trade unless liquidity actually landed.** If seeding fails, the whole provisioning is marked `failed` (same auto-pause path as any other failure) instead of silently leaving behind a pool address that looks fine but can't fill orders.
+- **Accounting fix to match**: the SOL/token amounts are only charged to the user's ledger if the deposit actually succeeded — previously the full estimated pool cost was charged unconditionally regardless of whether anything real happened on-chain.
+
+**Important, easy to miss**: `seed_token_amount` has to be set to something meaningful when creating a campaign for a genuinely new token. If it's left at 0, the pool creates fine but has no base-token liquidity to sell to buyers — the first buy attempt will fail with no liquidity on that side. This isn't validated in code (kept deliberately simple); it's on whoever creates the campaign to size it sensibly relative to their planned trade volume.
+
+### The 2% fee concern — checked against live data, not guessed
+
+Pulled a live Jupiter quote for BITAGENTS directly: `routePlan[0].swapInfo.label` = **"Meteora DAMM v2"**, `platformFee: null`. Two things this confirms:
+
+1. **BITAGENTS is already trading through a real Meteora pool** — Jupiter's "no dedicated DLMM pool" fallback label was just a detection gap in our own code (see below), not a sign it was avoiding Meteora.
+2. **Jupiter itself charges nothing extra on top.** The `platformFee` field is null because we don't set one, and Jupiter doesn't add its own by default. So switching "to Meteora" wouldn't change BITAGENTS's economics at all — it's already there.
+
+The real number worth watching: a 0.01 SOL test quote showed **~1.35% price impact** — that's the pool's actual depth (~$19.6K TVL at the time), not a fee. That's the correct lever for the "50 cycles" concern: **pool depth**, not which venue routes the trade. This is exactly what the seeding fix above addresses for brand-new pools — seed them with enough real liquidity relative to planned trade sizes and price impact per cycle stays small. For BITAGENTS's *own* existing pool specifically, adding more liquidity to reduce that 1.35% further would require topping up a live DAMM v2 pool — a different Meteora program/SDK than the DLMM pools this branch creates, and a separate, larger task not included here.
+
+**Also fixed** (`meteora_dlmm.py`, `check_jupiter_route_exists`): now reports which venue Jupiter actually routed through and whether it's Meteora, instead of a flat `"source": "jupiter"` label that made it look like Meteora wasn't involved at all. `check_pool_infrastructure` now reports `"source": "meteora (via Jupiter)"` when that's what's actually happening.
+
+---
+
 ## Operational note: local backend vs. a real deployment
 
 Worth flagging since it came up directly: **there is currently no deployed backend.** `frontend/.env.local` points `AGENTS_API_URL` at `http://127.0.0.1:8765` — every campaign so far (including the real on-chain test runs referenced above) has been executed by a Python process running on Zeya's own laptop, connecting out to the real Neon DB, real Jupiter, and real Solana mainnet RPC over his home internet.
@@ -85,6 +112,8 @@ For a real deployment, the backend needs to run on an always-on host (the `.env.
 4. **Ledger backfill scope**: if anyone besides Zeya's test wallet ran volume campaigns before this branch, they need the same sell-proceeds backfill (see Layer 2, #2) — check `volume_campaigns` for other `user_wallet` values.
 5. **Fee collection is still purely bookkeeping**: the "0.25% per leg" platform fee is recorded in the ledger (reduces a user's available balance) but nothing actually moves it to a separate BITAGENTS-controlled wallet — all deposited/spent/fee SOL sits in one shared agent wallet. Worth a product decision on when/how to actually sweep fees out as real revenue.
 6. **`.mjs` cleanup**: `create_dlmm_pool.mjs` is superseded by the `.cjs` version and unused — safe to delete once you've confirmed the `.cjs` version works in your environment too.
+7. **Adding liquidity to BITAGENTS's own existing pool** (not new-pool creation, topping up the live one) is a separate, larger task — that pool is Meteora DAMM v2, a different program/SDK than the DLMM pools this branch creates and seeds. Not started.
+8. **Orca was explicitly ruled out** for this round (Zeya's call) — the branch stays Meteora-only. Don't spend time on the "Ecura"/Orca idea from the Jul 23 call unless that changes.
 
 ## How this was tested
 

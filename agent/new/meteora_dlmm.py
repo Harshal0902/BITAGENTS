@@ -163,7 +163,7 @@ def meteora_pool_app_url(pool_address: str) -> str:
     return f"https://app.meteora.ag/dlmm/{pool_address.strip()}"
 
 
-def check_jupiter_route_exists(token_mint: str, quote_mint: str = SOL_MINT) -> bool:
+def check_jupiter_route_exists(token_mint: str, quote_mint: str = SOL_MINT) -> dict[str, Any]:
     """
     Cheap, wallet-free liquidity check: does Jupiter's aggregator already have a
     route for this pair, regardless of which pool type (DLMM, DAMM v2, DBC,
@@ -171,6 +171,12 @@ def check_jupiter_route_exists(token_mint: str, quote_mint: str = SOL_MINT) -> b
     (e.g. EasyA Kickstart tokens) live on DAMM v2/DBC pools, not DLMM, so this
     is the correct "does tradeable liquidity exist" signal — the DLMM-specific
     lookup above only catches the narrower case of a dedicated DLMM pool.
+
+    Also reports which venue Jupiter's route actually goes through and the
+    price impact for a small test trade — Jupiter itself does not add a fee
+    on top (confirmed: `platformFee` is null unless we set one, which we
+    don't), so any real cost above our own 0.25%/leg is either the venue's
+    own pool fee or price impact from thin liquidity, not an aggregator tax.
     """
     try:
         resp = requests.get(
@@ -184,12 +190,21 @@ def check_jupiter_route_exists(token_mint: str, quote_mint: str = SOL_MINT) -> b
             timeout=15,
         )
         if not resp.ok:
-            return False
+            return {"exists": False}
         data = resp.json()
-        return bool(data.get("routePlan"))
+        route = data.get("routePlan") or []
+        if not route:
+            return {"exists": False}
+        venues = sorted({(leg.get("swapInfo") or {}).get("label") for leg in route if leg.get("swapInfo")})
+        return {
+            "exists": True,
+            "venues": [v for v in venues if v],
+            "is_meteora": any("meteora" in (v or "").lower() for v in venues),
+            "price_impact_pct": data.get("priceImpactPct"),
+        }
     except Exception as exc:
         print(f"  Jupiter route check failed: {exc}")
-        return False
+        return {"exists": False}
 
 
 def check_pool_infrastructure(token_mint: str, quote_mint: str = SOL_MINT) -> dict[str, Any]:
@@ -209,19 +224,25 @@ def check_pool_infrastructure(token_mint: str, quote_mint: str = SOL_MINT) -> di
             "message": f"Meteora DLMM pool found: {pool_address}",
         }
 
-    if check_jupiter_route_exists(token_mint, quote_mint):
+    jupiter_route = check_jupiter_route_exists(token_mint, quote_mint)
+    if jupiter_route.get("exists"):
+        venues = jupiter_route.get("venues") or []
+        source = "meteora (via Jupiter)" if jupiter_route.get("is_meteora") else "jupiter"
+        venue_note = f" Routing through: {', '.join(venues)}." if venues else ""
         return {
             "pool_exists": True,
             "pool_address": None,
             "action": "reuse_existing_liquidity",
-            "source": "jupiter",
+            "source": source,
             "pool": None,
             "pool_creation_cost_sol": 0.0,
             "platform_fee_bps": METEORA_DEFAULT_FEE_BPS,
+            "price_impact_pct": jupiter_route.get("price_impact_pct"),
             "message": (
                 "No dedicated DLMM pool, but Jupiter already routes this pair "
-                "through existing liquidity (e.g. a DAMM v2/DBC pool). Trading "
-                "via Jupiter directly rather than creating a redundant pool."
+                f"through existing liquidity.{venue_note} Trading via Jupiter "
+                "directly rather than creating a redundant pool — Jupiter adds "
+                "no fee of its own on top."
             ),
         }
 
@@ -247,6 +268,7 @@ def ensure_meteora_dlmm_pool(
     *,
     create_if_missing: bool = False,
     quote_amount: float = 0.0,
+    token_amount: float = 0.0,
     bin_step: Optional[int] = None,
     fee_bps: Optional[int] = None,
 ) -> dict[str, Any]:
@@ -283,6 +305,7 @@ def ensure_meteora_dlmm_pool(
         fee_bps=fee_bps or METEORA_DEFAULT_FEE_BPS,
         bin_step=bin_step,
         quote_amount=quote_amount,
+        token_amount=token_amount,
     )
     if created.get("error"):
         return created
@@ -304,6 +327,7 @@ def ensure_meteora_dlmm_pool(
         "signature": created.get("signature"),
         "explorer_url": created.get("explorer_url"),
         "verified_pool": verified,
+        "liquidity": created.get("liquidity") or {"status": "skipped"},
         "message": f"Meteora DLMM pool created: {pool_address}",
     }
 
@@ -382,6 +406,7 @@ def create_dlmm_pool(
                 "signature": result.get("signature"),
                 "explorer_url": result.get("explorer_url"),
                 "verified_pool": verified,
+                "liquidity": result.get("liquidity") or {"status": "skipped"},
                 "message": f"Meteora DLMM pool created at {pool_address}.",
             }
         return {"error": "Pool creation script returned no pool address.", "raw": result}
