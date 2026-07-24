@@ -103,7 +103,7 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     volumeSol: "-",
     rating: 4.8,
     iconId: "swap",
-    available: false,
+    available: true,
     model: "meta-llama/llama-3.1-8b-instruct",
     cluster: "mainnet",
   },
