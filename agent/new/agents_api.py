@@ -99,6 +99,10 @@ from kickstart_copilot_agent import (
     list_verified_kickstart_tokens,
     run_kickstart_agent,
 )
+from whale_tracking_agent import WHALE_MODEL, run_whale_tracking_agent
+from token_research_agent import TOKEN_RESEARCH_MODEL, run_token_research_agent
+from wallet_monitoring_agent import WALLET_MONITORING_MODEL, run_wallet_monitoring_agent
+from due_diligence_agent import DUE_DILIGENCE_MODEL, run_due_diligence_agent
 from meteora_dlmm import check_pool_infrastructure, get_pool_creation_cost_sol
 from volume_agent import (
     VOLUME_MODEL,
@@ -1107,6 +1111,128 @@ def volume_campaign_provision(
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+# ─── Research agents (Whale, Token Research, Wallet Monitoring, Due Diligence) ─
+
+def _run_research_chat(
+    runner,
+    body: KickstartChatRequest,
+    auth_wallet: str,
+) -> ChatResponse:
+    session_id = body.session_id or str(uuid.uuid4())
+    history = _normalize_chat_history(body.history)
+    user_message = body.message.strip()
+    try:
+        reply, _, actions = runner(
+            user_message,
+            history,
+            user_wallet=auth_wallet,
+            session_id=session_id,
+        )
+    except requests.exceptions.ConnectionError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Cannot reach LLM API. Check CAPIX_API_URL or HOSTED_OLLAMA_URL and network.",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return ChatResponse(reply=reply, session_id=session_id, actions=actions)
+
+
+@app.get("/whale-tracking/health")
+def whale_tracking_health() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "agent": "Whale Tracking Agent",
+        "model": WHALE_MODEL,
+        "llm": llm_provider(),
+        "llm_configured": llm_configured(),
+        "auth_required": True,
+        "cluster": SOLANA_CLUSTER,
+        "pricing": "free · wallet sign-in required",
+    }
+
+
+@app.post("/whale-tracking/chat", response_model=ChatResponse)
+def whale_tracking_chat(
+    body: KickstartChatRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> ChatResponse:
+    return _run_research_chat(run_whale_tracking_agent, body, auth_wallet)
+
+
+@app.get("/token-research/health")
+def token_research_health() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "agent": "Token Research Agent",
+        "model": TOKEN_RESEARCH_MODEL,
+        "llm": llm_provider(),
+        "llm_configured": llm_configured(),
+        "auth_required": True,
+        "data_source": "easy_screener",
+        "easy_screener_configured": screener_configured(),
+        "cache_ttl_seconds": CACHE_TTL_SECONDS,
+        "cluster": SOLANA_CLUSTER,
+        "pricing": "free · wallet sign-in required",
+    }
+
+
+@app.post("/token-research/chat", response_model=ChatResponse)
+def token_research_chat(
+    body: KickstartChatRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> ChatResponse:
+    return _run_research_chat(run_token_research_agent, body, auth_wallet)
+
+
+@app.get("/wallet-monitoring/health")
+def wallet_monitoring_health() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "agent": "Wallet Monitoring Agent",
+        "model": WALLET_MONITORING_MODEL,
+        "llm": llm_provider(),
+        "llm_configured": llm_configured(),
+        "auth_required": True,
+        "cluster": SOLANA_CLUSTER,
+        "pricing": "free · wallet sign-in required",
+    }
+
+
+@app.post("/wallet-monitoring/chat", response_model=ChatResponse)
+def wallet_monitoring_chat(
+    body: KickstartChatRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> ChatResponse:
+    return _run_research_chat(run_wallet_monitoring_agent, body, auth_wallet)
+
+
+@app.get("/due-diligence/health")
+def due_diligence_health() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "agent": "Due Diligence Agent",
+        "model": DUE_DILIGENCE_MODEL,
+        "llm": llm_provider(),
+        "llm_configured": llm_configured(),
+        "auth_required": True,
+        "data_source": "easy_screener + solana_rpc",
+        "easy_screener_configured": screener_configured(),
+        "cluster": SOLANA_CLUSTER,
+        "pricing": "free · wallet sign-in required",
+    }
+
+
+@app.post("/due-diligence/chat", response_model=ChatResponse)
+def due_diligence_chat(
+    body: KickstartChatRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> ChatResponse:
+    return _run_research_chat(run_due_diligence_agent, body, auth_wallet)
 
 
 if __name__ == "__main__":

@@ -82,6 +82,29 @@ export async function proxyKickstartChat(
   });
 }
 
+export async function proxyResearchAgentHealth(slug: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/${slug}/health`, {
+    cache: "no-store",
+    headers: buildHeaders(),
+  });
+}
+
+export async function proxyResearchAgentChat(
+  slug: string,
+  body: {
+    message: string;
+    session_id?: string;
+    history?: { role: "user" | "assistant"; content: string }[];
+  },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/${slug}/chat`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
 export async function proxyKickstartWalletAgent(): Promise<Response> {
   return fetch(`${getAgentsBaseUrl()}/kickstart/wallet/agent`, {
     cache: "no-store",

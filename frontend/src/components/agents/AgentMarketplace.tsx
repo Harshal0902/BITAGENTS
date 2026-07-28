@@ -13,7 +13,7 @@ export function AgentMarketplace() {
       title="Agent Marketplace"
       subtitle="Discover and run BIT Agents. Pay per task on Solana - listing your own agent is not open yet."
     >
-      <MarketplaceStatsBar />
+      {/* <MarketplaceStatsBar /> */}
 
       <div className="mt-8 grid gap-6">
         <section>
