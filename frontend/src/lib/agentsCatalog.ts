@@ -131,7 +131,7 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     tagline: "EASY Screener · any token",
     rating: 4.8,
     iconId: "search",
-    available: false,
+    available: true,
     model: "meta-llama/llama-3.1-8b-instruct",
     cluster: "mainnet",
   },
