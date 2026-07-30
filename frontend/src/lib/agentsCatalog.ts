@@ -127,8 +127,8 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     name: "Token Research Agent",
     category: "Research",
     description:
-      "Research any Solana token via EASY Screener — price, liquidity, holders, health scores, and comparisons.",
-    tagline: "EASY Screener · any token",
+      "Research any Solana token using on-chain RPC data, Jupiter prices, and Meteora pool metrics.",
+    tagline: "On-chain RPC · Jupiter · Meteora",
     rating: 4.8,
     iconId: "search",
     available: true,

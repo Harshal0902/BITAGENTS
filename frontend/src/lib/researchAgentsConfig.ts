@@ -35,9 +35,9 @@ export const RESEARCH_AGENTS: Record<ResearchAgentSlug, ResearchAgentConfig> = {
   "token-research": {
     slug: "token-research",
     name: "Token Research Agent",
-    tagline: "EASY Screener · any token",
+    tagline: "On-chain RPC · Jupiter · Meteora",
     description:
-      "Research any Solana token via EASY Screener — price, liquidity, holders, health scores, and comparisons.",
+      "Research any Solana token using on-chain RPC data, Jupiter prices, and Meteora pool metrics.",
     model: "meta-llama/llama-3.1-8b-instruct",
     cluster: "mainnet",
     assistantLabel: "Research Agent",

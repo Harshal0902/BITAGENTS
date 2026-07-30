@@ -100,6 +100,7 @@ from kickstart_copilot_agent import (
     run_kickstart_agent,
 )
 from whale_tracking_agent import WHALE_MODEL, run_whale_tracking_agent
+from solana_token_onchain import TOKEN_RESEARCH_CACHE_TTL_SECONDS, get_token_research_cache_stats
 from token_research_agent import TOKEN_RESEARCH_MODEL, run_token_research_agent
 from wallet_monitoring_agent import WALLET_MONITORING_MODEL, run_wallet_monitoring_agent
 from due_diligence_agent import DUE_DILIGENCE_MODEL, run_due_diligence_agent
@@ -1173,9 +1174,10 @@ def token_research_health() -> dict[str, Any]:
         "llm": llm_provider(),
         "llm_configured": llm_configured(),
         "auth_required": True,
-        "data_source": "easy_screener",
+        "data_source": "solana_rpc + jupiter + meteora_datapi",
         "easy_screener_configured": screener_configured(),
-        "cache_ttl_seconds": CACHE_TTL_SECONDS,
+        "metrics_cache_ttl_seconds": TOKEN_RESEARCH_CACHE_TTL_SECONDS,
+        "metrics_cache": get_token_research_cache_stats(),
         "cluster": SOLANA_CLUSTER,
         "pricing": "free · wallet sign-in required",
     }

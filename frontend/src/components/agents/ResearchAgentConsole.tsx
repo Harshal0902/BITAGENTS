@@ -138,7 +138,7 @@ export function ResearchAgentConsole({ config }: Props) {
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Panel title={config.name} className="lg:col-span-2">
-          <div className="flex max-h-[420px] flex-col gap-4 overflow-y-auto pr-1">
+          <div className="flex max-h-105 flex-col gap-4 overflow-y-auto pr-1">
             {messages.length === 0 && (
               <p className="text-sm text-muted-foreground">
                 Try an example prompt or ask a question in natural language.
@@ -207,7 +207,7 @@ export function ResearchAgentConsole({ config }: Props) {
 
           {actions.length > 0 && (
             <Panel title="Tool results">
-              <div className="max-h-[320px] space-y-3 overflow-y-auto font-mono text-[11px]">
+              <div className="max-h-80 space-y-3 overflow-y-auto font-mono text-[11px]">
                 {actions.map((action, idx) => (
                   <div key={`${action.tool}-${idx}`} className="border border-grid bg-surface/30 p-3">
                     <div className="mb-1 text-signal">{action.tool}</div>
