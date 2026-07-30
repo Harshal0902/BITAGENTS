@@ -105,6 +105,13 @@ export async function proxyResearchAgentChat(
   });
 }
 
+export async function proxyHedgeFundFees(): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/fees`, {
+    cache: "no-store",
+    headers: buildHeaders(),
+  });
+}
+
 export async function proxyKickstartWalletAgent(): Promise<Response> {
   return fetch(`${getAgentsBaseUrl()}/kickstart/wallet/agent`, {
     cache: "no-store",

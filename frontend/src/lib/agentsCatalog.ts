@@ -145,7 +145,7 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     tagline: "Portfolio snapshot · trade ideas",
     rating: 4.9,
     iconId: "wallet",
-    available: false,
+    available: true,
     model: "meta-llama/llama-3.1-8b-instruct",
     cluster: "mainnet",
   },

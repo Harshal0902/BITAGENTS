@@ -104,6 +104,8 @@ from solana_token_onchain import TOKEN_RESEARCH_CACHE_TTL_SECONDS, get_token_res
 from token_research_agent import TOKEN_RESEARCH_MODEL, run_token_research_agent
 from wallet_monitoring_agent import WALLET_MONITORING_MODEL, run_wallet_monitoring_agent
 from due_diligence_agent import DUE_DILIGENCE_MODEL, run_due_diligence_agent
+from hedge_fund_agent import HEDGE_FUND_MODEL, run_hedge_fund_agent
+from hedge_fund_core import get_fee_structure
 from meteora_dlmm import check_pool_infrastructure, get_pool_creation_cost_sol
 from volume_agent import (
     VOLUME_MODEL,
@@ -1235,6 +1237,37 @@ def due_diligence_chat(
     auth_wallet: str = Depends(require_wallet_session),
 ) -> ChatResponse:
     return _run_research_chat(run_due_diligence_agent, body, auth_wallet)
+
+
+@app.get("/hedge-fund/health")
+def hedge_fund_health() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "agent": "Hedge Fund Agent",
+        "model": HEDGE_FUND_MODEL,
+        "llm": llm_provider(),
+        "llm_configured": llm_configured(),
+        "auth_required": True,
+        "fee_model": "1/10",
+        "management_fee_annual_pct": 1.0,
+        "performance_fee_pct": 10.0,
+        "cluster": SOLANA_CLUSTER,
+        "pricing": "1% AUM + 10% performance (vs 2/20)",
+        "governance": "covenant-inspired deterministic risk + LLM macro",
+    }
+
+
+@app.get("/hedge-fund/fees")
+def hedge_fund_fees() -> dict[str, Any]:
+    return get_fee_structure()
+
+
+@app.post("/hedge-fund/chat", response_model=ChatResponse)
+def hedge_fund_chat(
+    body: KickstartChatRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> ChatResponse:
+    return _run_research_chat(run_hedge_fund_agent, body, auth_wallet)
 
 
 if __name__ == "__main__":

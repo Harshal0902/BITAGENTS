@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthToken, proxyResearchAgentChat } from "@/server/agentsApiProxy";
-import type { ResearchAgentSlug } from "@/lib/researchAgentsConfig";
 
-export async function handleResearchAgentChat(request: Request, slug: ResearchAgentSlug) {
+export async function handleResearchAgentChat(request: Request, slug: string) {
   const authToken = getAuthToken(request);
   if (!authToken) {
     return NextResponse.json({ error: "Wallet sign-in required" }, { status: 401 });
