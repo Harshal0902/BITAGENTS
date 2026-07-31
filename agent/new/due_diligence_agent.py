@@ -1,20 +1,30 @@
-"""Due Diligence Agent - token and smart contract risk assessment on Solana."""
+"""Due Diligence Agent — on-chain token risk assessment on Solana."""
 
 from __future__ import annotations
 
+import json
 import os
+import re
+import threading
+import time
 from typing import Any, Optional
 
 from agent_tool_runner import run_tool_agent
-from hosted_llm import CAPIX_MODEL, DEFAULT_LLM_MODEL, use_capix
-from kickstart_copilot_agent import (
-    detect_token_risks,
-    get_token_analytics,
-    get_token_overview,
-    get_top_token_holders,
-    search_tokens,
+from hosted_llm import CAPIX_MODEL, DEFAULT_LLM_MODEL, call_llm, use_capix
+from kickstart_copilot_agent import search_tokens
+from solana_token_diligence import (
+    extract_diligence_query,
+    format_due_diligence_reply,
+    get_mint_authorities,
+    run_due_diligence_report,
 )
-from solana_token_diligence import get_mint_authorities, run_due_diligence_report
+from solana_token_onchain import (
+    TOKEN_RESEARCH_CACHE_TTL_SECONDS,
+    format_unresolved_token_reply,
+    get_onchain_mint_info,
+    get_token_research_cache_stats,
+    has_min_onchain_data,
+)
 
 DUE_DILIGENCE_MODEL = (
     CAPIX_MODEL
@@ -25,59 +35,102 @@ DUE_DILIGENCE_MODEL = (
     )
 )
 
+DILIGENCE_INTENT_RE = re.compile(
+    r"\b("
+    r"due diligence|diligence|vet|audit|risk score|risk assessment|"
+    r"mint authority|freeze authority|safe to buy|is it safe|"
+    r"holder concentration|top holders|concentration"
+    r")\b",
+    re.I,
+)
+
+_analysis_lock = threading.Lock()
+_diligence_analysis_cache: dict[str, dict[str, Any]] = {}
+
+
+def _analysis_cache_get(mint: str) -> Optional[str]:
+    with _analysis_lock:
+        entry = _diligence_analysis_cache.get(mint)
+        if not entry or entry.get("expires_at", 0) <= time.time():
+            return None
+        return entry.get("text")
+
+
+def _analysis_cache_set(mint: str, text: str) -> None:
+    with _analysis_lock:
+        _diligence_analysis_cache[mint] = {
+            "expires_at": time.time() + TOKEN_RESEARCH_CACHE_TTL_SECONDS,
+            "text": text,
+        }
+
+
+def _generate_diligence_analysis(report: dict[str, Any]) -> str:
+    mint = str(report.get("mint") or "")
+    if not mint:
+        return ""
+
+    cached = _analysis_cache_get(mint)
+    if cached:
+        return cached
+
+    payload = {
+        "symbol": report.get("symbol"),
+        "mint": mint,
+        "due_diligence_score": report.get("due_diligence_score"),
+        "grade": report.get("grade"),
+        "findings": report.get("findings"),
+        "risks": report.get("risks"),
+        "authorities": report.get("authorities"),
+        "analytics": report.get("analytics"),
+        "top3_holder_pct": report.get("top3_holder_pct"),
+    }
+    try:
+        response = call_llm(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a Solana token due diligence analyst. Given JSON from Solana RPC, write a "
+                        "**Due Diligence Assessment** with: Summary, Authority risks, Liquidity/holder risks, "
+                        "Grade rationale, Conditional recommendation. Use ONLY provided data. Under 250 words. "
+                        "Never call a token 'safe'. Not financial advice."
+                    ),
+                },
+                {"role": "user", "content": json.dumps(payload, indent=2, default=str)},
+            ],
+            model=DUE_DILIGENCE_MODEL,
+            temperature=0.35,
+            app_suffix="Due Diligence Analysis",
+        )
+        text = ((response.get("message") or {}).get("content") or "").strip()
+    except Exception as exc:
+        text = f"_Analysis unavailable ({exc}). Review the on-chain report above._"
+
+    if text:
+        _analysis_cache_set(mint, text)
+    return text
+
+
+def build_full_diligence_reply(report: dict[str, Any]) -> str:
+    metrics = format_due_diligence_reply(report)
+    if report.get("error") or report.get("needs_mint_address"):
+        return metrics
+    analysis = _generate_diligence_analysis(report)
+    return f"{metrics}\n\n---\n\n**Due Diligence Assessment**\n\n{analysis}"
+
+
 TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "search_tokens",
-            "description": "Find a token on EASY Screener before running diligence.",
-            "parameters": {
-                "type": "object",
-                "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "run_due_diligence_report",
-            "description": "Full due diligence: authorities, holders, liquidity, risk score.",
-            "parameters": {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_mint_authorities",
-            "description": "Check mint and freeze authority on-chain.",
-            "parameters": {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_token_overview",
-            "description": "Token metadata and links from EASY Screener.",
-            "parameters": {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_token_analytics",
-            "description": "Liquidity, volume, mcap for exit-risk assessment.",
-            "parameters": {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_top_token_holders",
-            "description": "Whale concentration check via Solana RPC.",
+            "description": (
+                "PRIMARY tool. Full on-chain due diligence: authorities, holders, liquidity, risk score. "
+                "Uses shared 15-minute cache per mint (same data as Token Research Agent)."
+            ),
             "parameters": {
                 "type": "object",
-                "properties": {"token": {"type": "string"}, "limit": {"type": "integer"}},
+                "properties": {"token": {"type": "string"}, "holder_limit": {"type": "integer"}},
                 "required": ["token"],
             },
         },
@@ -85,34 +138,91 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "detect_token_risks",
-            "description": "EASY Screener risk flags.",
+            "name": "get_mint_authorities",
+            "description": "Mint and freeze authority from Solana RPC.",
             "parameters": {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_onchain_mint_info",
+            "description": "Mint account details: supply, decimals, authorities.",
+            "parameters": {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_tokens",
+            "description": "Search tokens to resolve ambiguous symbols to a mint.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+                "required": ["query"],
+            },
         },
     },
 ]
 
 TOOL_REGISTRY = {
-    "search_tokens": search_tokens,
     "run_due_diligence_report": run_due_diligence_report,
     "get_mint_authorities": get_mint_authorities,
-    "get_token_overview": get_token_overview,
-    "get_token_analytics": get_token_analytics,
-    "get_top_token_holders": get_top_token_holders,
-    "detect_token_risks": detect_token_risks,
+    "get_onchain_mint_info": get_onchain_mint_info,
+    "search_tokens": search_tokens,
 }
 
-SYSTEM_PROMPT = """You are **Due Diligence Agent** on Solana.
+SYSTEM_PROMPT = f"""You are **Due Diligence Agent** on Solana.
 
-Perform due diligence on tokens and SPL mints before users interact or trade: mint/freeze authorities, holder concentration, liquidity, verification status, and composite risk score.
+On-chain token data is cached **{TOKEN_RESEARCH_CACHE_TTL_SECONDS // 60} minutes** per mint (shared with Token Research Agent).
 
 Rules:
-- Start with `run_due_diligence_report` when user asks to vet a specific token.
-- Highlight **high severity** risks first (active mint/freeze authority, low liquidity, concentration).
-- This is not a formal audit — clarify limitations and recommend professional review for large allocations.
-- Attribute market data to EASY Screener; on-chain authority data from Solana RPC.
-- Never approve a token as "safe" — use graded assessments (A-D) and conditional language.
+- Always call `run_due_diligence_report` first when vetting a specific token.
+- If the tool returns `needs_mint_address: true`, ask for the **Solana mint address** and stop.
+- Never fabricate mint addresses, authorities, liquidity, or holder percentages.
+- Use graded assessments (A-D) — never approve a token as "safe".
+- This is not a formal audit.
 """
+
+
+def _diligence_action(token: str, report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "tool": "run_due_diligence_report",
+        "args": {"token": token},
+        "result": json.dumps(report, indent=2, default=str),
+    }
+
+
+def _try_diligence_shortcut(user_input: str) -> Optional[tuple[str, list[dict[str, Any]]]]:
+    if not DILIGENCE_INTENT_RE.search(user_input):
+        return None
+
+    token = extract_diligence_query(user_input)
+    if not token:
+        return None
+
+    report = run_due_diligence_report(token)
+    action = _diligence_action(token, report)
+    if report.get("error") or report.get("needs_mint_address"):
+        reply = format_unresolved_token_reply(token, report)
+    else:
+        reply = build_full_diligence_reply(report)
+    return reply, [action]
+
+
+def _reply_from_diligence_actions(actions: list[dict[str, Any]], llm_reply: str) -> str:
+    for action in reversed(actions):
+        if action.get("tool") != "run_due_diligence_report":
+            continue
+        try:
+            data = json.loads(action.get("result") or "{}")
+        except json.JSONDecodeError:
+            continue
+        if data.get("error") or data.get("needs_mint_address"):
+            query = str(data.get("query") or (action.get("args") or {}).get("token") or "this token")
+            return format_unresolved_token_reply(query, data)
+        return build_full_diligence_reply(data)
+    return llm_reply
 
 
 def run_due_diligence_agent(
@@ -121,8 +231,17 @@ def run_due_diligence_agent(
     user_wallet: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> tuple[str, list, list[dict[str, Any]]]:
-    return run_tool_agent(
-        user_input,
+    prompt = user_input.strip()
+
+    shortcut = _try_diligence_shortcut(prompt)
+    if shortcut:
+        reply, actions = shortcut
+        conversation_history.append({"role": "user", "content": prompt})
+        conversation_history.append({"role": "assistant", "content": reply})
+        return reply, conversation_history, actions
+
+    reply, history, actions = run_tool_agent(
+        prompt,
         conversation_history,
         system_prompt=SYSTEM_PROMPT,
         tools=TOOLS,
@@ -132,3 +251,13 @@ def run_due_diligence_agent(
         user_wallet=user_wallet,
         session_id=session_id,
     )
+
+    synthesized = _reply_from_diligence_actions(actions, reply)
+    if synthesized != reply:
+        history[-1] = {"role": "assistant", "content": synthesized}
+        reply = synthesized
+    return reply, history, actions
+
+
+def get_due_diligence_cache_stats() -> dict[str, Any]:
+    return get_token_research_cache_stats()

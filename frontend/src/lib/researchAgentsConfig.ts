@@ -53,15 +53,15 @@ export const RESEARCH_AGENTS: Record<ResearchAgentSlug, ResearchAgentConfig> = {
     name: "Wallet Monitoring Agent",
     tagline: "Portfolio snapshot · trade ideas",
     description:
-      "Monitor your connected wallet — SOL balance, SPL holdings, recent activity, and informational trade suggestions.",
+      "On-chain wallet analysis for any Solana address — SOL balance, SPL holdings, recent activity, and informational trade suggestions. Results cached 15 minutes.",
     model: "meta-llama/llama-3.1-8b-instruct",
     cluster: "mainnet",
     assistantLabel: "Wallet Agent",
     examplePrompts: [
       "Analyze my connected wallet",
-      "What tokens do I hold?",
+      "Analyze wallet 5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
+      "What tokens does this wallet hold?",
       "Suggest trades for my portfolio",
-      "How is my SOL balance looking?",
     ],
   },
   "due-diligence": {
@@ -69,15 +69,15 @@ export const RESEARCH_AGENTS: Record<ResearchAgentSlug, ResearchAgentConfig> = {
     name: "Due Diligence Agent",
     tagline: "Mint authority · risk score",
     description:
-      "Due diligence on tokens and SPL mints before you interact — authorities, holder concentration, liquidity, and graded risk.",
+      "On-chain due diligence for any Solana token — authorities, holder concentration, liquidity, and graded risk score. Shares a 15-minute cache with Token Research.",
     model: "meta-llama/llama-3.1-8b-instruct",
     cluster: "mainnet",
     assistantLabel: "Diligence Agent",
     examplePrompts: [
-      "Run due diligence on JUP",
-      "Check mint and freeze authority for this token",
-      "Is this token safe to buy?",
+      "Run due diligence on BITAGENTS: iu3A7azWTm3zQSk81SUC1JctB4zPYnxLmcmqq71EASY",
+      "Check mint and freeze authority for JUP",
       "Show top holders and concentration risk",
+      "Is this token safe to buy?",
     ],
   },
 };

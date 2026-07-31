@@ -159,7 +159,7 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     tagline: "Mint authority · risk score",
     rating: 4.7,
     iconId: "bot",
-    available: false,
+    available: true,
     model: "meta-llama/llama-3.1-8b-instruct",
     cluster: "mainnet",
   }

@@ -12,7 +12,6 @@ from typing import Any, Optional
 from dca_agent import SOLANA_CLUSTER, get_token_price, resolve_token, sol_rpc
 from kickstart_copilot_agent import get_top_token_holders
 from meteora_dlmm import find_damm_v2_pool, find_dlmm_pool, meteora_pool_app_url
-from solana_token_diligence import get_mint_authorities
 
 TOKEN_RESEARCH_CACHE_TTL_SECONDS = int(
     os.environ.get("TOKEN_RESEARCH_CACHE_TTL_SECONDS", str(15 * 60))
@@ -172,6 +171,45 @@ def _pool_market_snapshot(pool: dict[str, Any]) -> dict[str, Any]:
         "market_cap_usd": token_x.get("market_cap"),
         "holder_count_indexed": token_x.get("holders"),
         "launchpad": raw.get("launchpad"),
+    }
+
+
+def get_mint_authorities(token: str) -> dict[str, Any]:
+    resolved = resolve_token(token)
+    if "error" in resolved:
+        return resolved
+    mint = resolved["mint"]
+    info = sol_rpc(
+        "getAccountInfo",
+        [mint, {"encoding": "jsonParsed", "commitment": "confirmed"}],
+    )
+    value = (info or {}).get("value")
+    if not value:
+        return {"error": "Mint account not found on-chain.", "mint": mint}
+    parsed = ((value.get("data") or {}).get("parsed") or {}).get("info") or {}
+    mint_authority = parsed.get("mintAuthority")
+    freeze_authority = parsed.get("freezeAuthority")
+    supply = parsed.get("supply")
+    decimals = parsed.get("decimals")
+    flags: list[str] = []
+    if mint_authority:
+        flags.append("mint_authority_active")
+    else:
+        flags.append("mint_authority_renounced")
+    if freeze_authority:
+        flags.append("freeze_authority_active")
+    else:
+        flags.append("freeze_authority_renounced")
+    return {
+        "symbol": resolved.get("symbol"),
+        "mint": mint,
+        "mint_authority": mint_authority,
+        "freeze_authority": freeze_authority,
+        "supply": supply,
+        "decimals": decimals,
+        "flags": flags,
+        "cluster": SOLANA_CLUSTER,
+        "source": "solana_rpc",
     }
 
 
@@ -355,6 +393,7 @@ def extract_token_query(user_input: str) -> Optional[str]:
         return mint_match.group(1)
 
     patterns = [
+        r"\b(?:due diligence|diligence)\s+(?:for|on|of)\s+\$?([A-Za-z][A-Za-z0-9]{1,24})\b",
         r"\b(?:token\s+)?(?:analysis|research|overview|profile|report)\s+(?:for|of|on)\s+\$?([A-Za-z][A-Za-z0-9]{1,24})\b",
         r"\b(?:of|for|about|on)\s+\$?([A-Za-z][A-Za-z0-9]{1,24})\b",
         r"\b(?:research|analyze|analyse|check|review|assess)\s+\$?([A-Za-z][A-Za-z0-9]{1,24})\b",
