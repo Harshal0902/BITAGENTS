@@ -5,11 +5,10 @@ from __future__ import annotations
 import json
 import os
 import re
-import threading
-import time
 from typing import Any, Optional
 
 from agent_tool_runner import run_tool_agent
+from cache_store import get_json, set_json
 from hosted_llm import CAPIX_MODEL, DEFAULT_LLM_MODEL, call_llm, use_capix
 from kickstart_copilot_agent import search_tokens
 from solana_token_diligence import (
@@ -44,24 +43,20 @@ DILIGENCE_INTENT_RE = re.compile(
     re.I,
 )
 
-_analysis_lock = threading.Lock()
-_diligence_analysis_cache: dict[str, dict[str, Any]] = {}
+_DILIGENCE_ANALYSIS_PREFIX = "diligence:analysis:"
 
 
 def _analysis_cache_get(mint: str) -> Optional[str]:
-    with _analysis_lock:
-        entry = _diligence_analysis_cache.get(mint)
-        if not entry or entry.get("expires_at", 0) <= time.time():
-            return None
-        return entry.get("text")
+    value = get_json(f"{_DILIGENCE_ANALYSIS_PREFIX}{mint.strip()}")
+    return value if isinstance(value, str) else None
 
 
 def _analysis_cache_set(mint: str, text: str) -> None:
-    with _analysis_lock:
-        _diligence_analysis_cache[mint] = {
-            "expires_at": time.time() + TOKEN_RESEARCH_CACHE_TTL_SECONDS,
-            "text": text,
-        }
+    set_json(
+        f"{_DILIGENCE_ANALYSIS_PREFIX}{mint.strip()}",
+        text,
+        TOKEN_RESEARCH_CACHE_TTL_SECONDS,
+    )
 
 
 def _generate_diligence_analysis(report: dict[str, Any]) -> str:

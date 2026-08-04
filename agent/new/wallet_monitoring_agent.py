@@ -15,11 +15,13 @@ from solana_wallet_tools import (
     analyze_wallet_profile,
     extract_wallet_query,
     format_wallet_snapshot_reply,
+    get_wallet_analysis_cached,
     get_wallet_cache_stats,
     get_wallet_recent_activity,
     get_wallet_snapshot,
     get_wallet_sol_balance,
     get_wallet_token_balances,
+    set_wallet_analysis_cached,
 )
 
 WALLET_MONITORING_MODEL = (
@@ -39,8 +41,13 @@ WALLET_INTENT_RE = re.compile(
     re.I,
 )
 
-_analysis_cache: dict[str, dict[str, Any]] = {}
-_analysis_lock = __import__("threading").Lock()
+
+def _analysis_cache_get(address: str) -> Optional[str]:
+    return get_wallet_analysis_cached(address)
+
+
+def _analysis_cache_set(address: str, text: str) -> None:
+    set_wallet_analysis_cached(address, text)
 
 
 def _resolve_wallet_address(address: Optional[str] = None, user_wallet: Optional[str] = None) -> Optional[str]:
@@ -255,26 +262,6 @@ Rules:
 - Never fabricate SOL amounts, token lists, or signatures — only report tool JSON output.
 - Trade suggestions are informational only, not financial advice.
 """
-
-
-def _analysis_cache_get(address: str) -> Optional[str]:
-    import time
-
-    with _analysis_lock:
-        entry = _analysis_cache.get(address)
-        if not entry or entry.get("expires_at", 0) <= time.time():
-            return None
-        return entry.get("text")
-
-
-def _analysis_cache_set(address: str, text: str) -> None:
-    import time
-
-    with _analysis_lock:
-        _analysis_cache[address] = {
-            "expires_at": time.time() + WALLET_SNAPSHOT_CACHE_TTL_SECONDS,
-            "text": text,
-        }
 
 
 def _generate_wallet_analysis(snapshot: dict[str, Any]) -> str:

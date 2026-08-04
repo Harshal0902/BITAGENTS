@@ -1,0 +1,17 @@
+__pycache__
+*.pyc
+.env
+.env.*
+!.env.example
+.venv
+venv
+*.json
+!scripts/package.json
+!scripts/package-lock.json
+dca_plans.json
+user_deposits.json
+.git
+.gitignore
+.pytest_cache
+*.md
+!DEPLOY.md

@@ -10,9 +10,9 @@ export const HEDGE_FUND = {
   managementFeePct: 1,
   performanceFeePct: 10,
   examplePrompts: [
-    "Analyze portfolio SOL JUP BITAGENTS with $10,000",
-    "Run portfolio analysis on BONK WIF with 5k capital",
+    "You have 10000 USD and can trade stocks or crypto between 2025-12-01 and 2026-06-30. Name assets, allocation, buys/sells, and PnL",
+    "Backtest AAPL MSFT NVDA BTC ETH from 2025-12-01 to 2026-04-30 with $10,000",
+    "Analyze portfolio SOL JUP with $10,000",
     "What is the 1/10 fee structure?",
-    "Analyze BITAGENTS for a $25k allocation",
   ],
 } as const;

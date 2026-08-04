@@ -113,6 +113,7 @@ from due_diligence_agent import (
     get_due_diligence_cache_stats,
     run_due_diligence_agent,
 )
+from cache_store import cache_backend
 from hedge_fund_agent import HEDGE_FUND_MODEL, run_hedge_fund_agent
 from hedge_fund_core import get_fee_structure
 from meteora_dlmm import check_pool_infrastructure, get_pool_creation_cost_sol
@@ -147,25 +148,54 @@ from wallet_auth import (
     verify_internal_api_key,
 )
 
-API_HOST = os.environ.get(
-    "AGENTS_API_HOST",
-    os.environ.get("DCA_API_HOST", "127.0.0.1"),
-)
-API_PORT = int(
-    os.environ.get(
-        "AGENTS_API_PORT",
-        os.environ.get("DCA_API_PORT", "8765"),
+def _resolve_api_host() -> str:
+    explicit = os.environ.get("AGENTS_API_HOST") or os.environ.get("DCA_API_HOST")
+    if explicit:
+        return explicit
+    # Render (and similar) inject PORT — bind all interfaces in that case.
+    if os.environ.get("PORT"):
+        return "0.0.0.0"
+    return "127.0.0.1"
+
+
+def _resolve_api_port() -> int:
+    if os.environ.get("PORT"):
+        return int(os.environ["PORT"])
+    return int(
+        os.environ.get(
+            "AGENTS_API_PORT",
+            os.environ.get("DCA_API_PORT", "8765"),
+        )
     )
-)
+
+
+def _cors_allow_origins() -> list[str]:
+    defaults = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+    raw = (os.environ.get("CORS_ALLOW_ORIGINS") or "").strip()
+    if not raw:
+        return defaults
+    extra = [o.strip() for o in raw.split(",") if o.strip()]
+    # Preserve order, dedupe
+    seen: set[str] = set()
+    out: list[str] = []
+    for origin in defaults + extra:
+        if origin not in seen:
+            seen.add(origin)
+            out.append(origin)
+    return out
+
+
+API_HOST = _resolve_api_host()
+API_PORT = _resolve_api_port()
 
 app = FastAPI(title="BIT Agents API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=_cors_allow_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -291,6 +321,7 @@ def _startup() -> None:
         print(f"  📈 EasyA limit-order scheduler started (every {EASYA_ORDER_POLL_SECONDS}s)")
     if start_volume_scheduler():
         print(f"  📊 Volume Agent scheduler started (every {VOLUME_SCHEDULER_POLL_SECONDS}s)")
+    print(f"  🗄️  Cache backend: {cache_backend()}")
     print("  🤖 Agents: DCA, Kickstart Token Copilot, Volume Agent")
 
 
@@ -329,6 +360,7 @@ def health(ping_llm: bool = Query(False)) -> dict[str, Any]:
         "dca_model": MODEL,
         "kickstart_model": KICKSTART_MODEL,
         "database": "neon_postgres" if db_configured() else "unconfigured",
+        "cache_backend": cache_backend(),
         "auth": "wallet_signature",
         "internal_api_key_required": internal_api_configured(),
         "cluster": SOLANA_CLUSTER,

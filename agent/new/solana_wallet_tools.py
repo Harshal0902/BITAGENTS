@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import copy
 import os
 import re
-import threading
 import time
 from typing import Any, Optional
 
+from cache_store import cache_backend, cache_stats, clear_prefix, get_json, set_json
 from dca_agent import SOLANA_CLUSTER, get_token_price, resolve_token, sol_rpc
 
 TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
@@ -19,8 +18,8 @@ WALLET_SNAPSHOT_CACHE_TTL_SECONDS = int(
 )
 MAX_TOKEN_ACCOUNT_ROWS = int(os.environ.get("WALLET_MAX_TOKEN_ACCOUNT_ROWS", "25000"))
 
-_cache_lock = threading.Lock()
-_wallet_cache: dict[str, dict[str, Any]] = {}
+_WALLET_SNAPSHOT_PREFIX = "wallet:snapshot:"
+_WALLET_ANALYSIS_PREFIX = "wallet:analysis:"
 
 SOLANA_WHALE_REGISTRY: dict[str, dict[str, str]] = {
     "smart_money": {
@@ -68,37 +67,39 @@ def _wallet_label(address: str) -> Optional[str]:
 
 
 def _cache_get(address: str) -> Optional[dict[str, Any]]:
-    now = time.time()
-    key = address.strip()
-    with _cache_lock:
-        entry = _wallet_cache.get(key)
-        if not entry:
-            return None
-        if entry.get("expires_at", 0) <= now:
-            _wallet_cache.pop(key, None)
-            return None
-        return copy.deepcopy(entry.get("snapshot"))
+    return get_json(f"{_WALLET_SNAPSHOT_PREFIX}{address.strip()}")
 
 
 def _cache_set(address: str, snapshot: dict[str, Any]) -> None:
-    key = address.strip()
-    with _cache_lock:
-        _wallet_cache[key] = {
-            "expires_at": time.time() + WALLET_SNAPSHOT_CACHE_TTL_SECONDS,
-            "snapshot": copy.deepcopy(snapshot),
-        }
+    set_json(
+        f"{_WALLET_SNAPSHOT_PREFIX}{address.strip()}",
+        snapshot,
+        WALLET_SNAPSHOT_CACHE_TTL_SECONDS,
+    )
 
 
 def clear_wallet_snapshot_cache() -> None:
-    with _cache_lock:
-        _wallet_cache.clear()
+    clear_prefix(_WALLET_SNAPSHOT_PREFIX)
+    clear_prefix(_WALLET_ANALYSIS_PREFIX)
 
 
 def get_wallet_cache_stats() -> dict[str, Any]:
-    now = time.time()
-    with _cache_lock:
-        active = sum(1 for e in _wallet_cache.values() if e.get("expires_at", 0) > now)
-    return {"ttl_seconds": WALLET_SNAPSHOT_CACHE_TTL_SECONDS, "active_entries": active}
+    stats = cache_stats(_WALLET_SNAPSHOT_PREFIX, WALLET_SNAPSHOT_CACHE_TTL_SECONDS)
+    stats["backend"] = cache_backend()
+    return stats
+
+
+def get_wallet_analysis_cached(address: str) -> Optional[str]:
+    value = get_json(f"{_WALLET_ANALYSIS_PREFIX}{address.strip()}")
+    return value if isinstance(value, str) else None
+
+
+def set_wallet_analysis_cached(address: str, text: str) -> None:
+    set_json(
+        f"{_WALLET_ANALYSIS_PREFIX}{address.strip()}",
+        text,
+        WALLET_SNAPSHOT_CACHE_TTL_SECONDS,
+    )
 
 
 def list_tracked_wallets(category: str = "all") -> dict[str, Any]:
@@ -333,16 +334,23 @@ def _build_trade_suggestions(snapshot: dict[str, Any], risk_profile: str = "bala
 
 
 def _fetch_wallet_snapshot_uncached(address: str) -> dict[str, Any]:
+    from concurrent.futures import ThreadPoolExecutor
+
     address = (address or "").strip()
-    balance = get_wallet_sol_balance(address)
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        fut_balance = pool.submit(get_wallet_sol_balance, address)
+        fut_tokens = pool.submit(get_wallet_token_balances, address, 30)
+        fut_activity = pool.submit(get_wallet_recent_activity, address, 12)
+        balance = fut_balance.result()
+        tokens_payload = fut_tokens.result()
+        activity = fut_activity.result()
+
     if balance.get("error"):
         return {**balance, "needs_valid_address": True}
-
-    tokens_payload = get_wallet_token_balances(address, limit=30)
     if tokens_payload.get("error"):
         return tokens_payload
 
-    activity = get_wallet_recent_activity(address, limit=12)
     tokens = tokens_payload.get("tokens") or []
     enriched = _enrich_holdings_with_prices(tokens)
 

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import copy
 import os
 import re
-import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 
+from cache_store import cache_backend, cache_stats, clear_prefix, get_json, set_json
 from dca_agent import SOLANA_CLUSTER, get_token_price, resolve_token, sol_rpc
 from kickstart_copilot_agent import get_top_token_holders
 from meteora_dlmm import find_damm_v2_pool, find_dlmm_pool, meteora_pool_app_url
@@ -17,8 +17,8 @@ TOKEN_RESEARCH_CACHE_TTL_SECONDS = int(
     os.environ.get("TOKEN_RESEARCH_CACHE_TTL_SECONDS", str(15 * 60))
 )
 
-_cache_lock = threading.Lock()
-_profile_cache: dict[str, dict[str, Any]] = {}
+_PROFILE_KEY_PREFIX = "token:profile:"
+_ANALYSIS_KEY_PREFIX = "token:analysis:"
 
 RESEARCH_INTENT_RE = re.compile(
     r"\b("
@@ -88,60 +88,40 @@ def _cache_key(mint: str, holder_limit: int) -> str:
     return f"{mint.strip()}:{int(holder_limit)}"
 
 
-def _cache_get(key: str) -> Optional[dict[str, Any]]:
-    now = time.time()
-    with _cache_lock:
-        entry = _profile_cache.get(key)
-        if not entry:
-            return None
-        if entry.get("expires_at", 0) <= now:
-            _profile_cache.pop(key, None)
-            return None
-        return copy.deepcopy(entry.get("profile"))
+def _profile_cache_key(mint: str, holder_limit: int) -> str:
+    return f"{_PROFILE_KEY_PREFIX}{_cache_key(mint, holder_limit)}"
 
 
-def _cache_set(key: str, profile: dict[str, Any]) -> None:
-    with _cache_lock:
-        existing = _profile_cache.get(key)
-        analysis = existing.get("analysis") if existing else None
-        _profile_cache[key] = {
-            "expires_at": time.time() + TOKEN_RESEARCH_CACHE_TTL_SECONDS,
-            "profile": copy.deepcopy(profile),
-            "analysis": analysis,
-        }
+def _analysis_cache_key(mint: str, holder_limit: int) -> str:
+    return f"{_ANALYSIS_KEY_PREFIX}{_cache_key(mint, holder_limit)}"
+
+
+def _cache_get(mint: str, holder_limit: int) -> Optional[dict[str, Any]]:
+    return get_json(_profile_cache_key(mint, holder_limit))
+
+
+def _cache_set(mint: str, holder_limit: int, profile: dict[str, Any]) -> None:
+    set_json(_profile_cache_key(mint, holder_limit), profile, TOKEN_RESEARCH_CACHE_TTL_SECONDS)
 
 
 def cache_get_analysis(mint: str, holder_limit: int = 10) -> Optional[str]:
-    key = _cache_key(mint, holder_limit)
-    now = time.time()
-    with _cache_lock:
-        entry = _profile_cache.get(key)
-        if not entry or entry.get("expires_at", 0) <= now:
-            return None
-        return entry.get("analysis")
+    value = get_json(_analysis_cache_key(mint, holder_limit))
+    return value if isinstance(value, str) else None
 
 
 def cache_set_analysis(mint: str, holder_limit: int, analysis: str) -> None:
-    key = _cache_key(mint, holder_limit)
-    with _cache_lock:
-        entry = _profile_cache.get(key)
-        if entry and entry.get("expires_at", 0) > time.time():
-            entry["analysis"] = analysis
+    set_json(_analysis_cache_key(mint, holder_limit), analysis, TOKEN_RESEARCH_CACHE_TTL_SECONDS)
 
 
 def clear_token_research_cache() -> None:
-    with _cache_lock:
-        _profile_cache.clear()
+    clear_prefix(_PROFILE_KEY_PREFIX)
+    clear_prefix(_ANALYSIS_KEY_PREFIX)
 
 
 def get_token_research_cache_stats() -> dict[str, Any]:
-    now = time.time()
-    with _cache_lock:
-        active = sum(1 for e in _profile_cache.values() if e.get("expires_at", 0) > now)
-    return {
-        "ttl_seconds": TOKEN_RESEARCH_CACHE_TTL_SECONDS,
-        "active_entries": active,
-    }
+    stats = cache_stats(_PROFILE_KEY_PREFIX, TOKEN_RESEARCH_CACHE_TTL_SECONDS)
+    stats["backend"] = cache_backend()
+    return stats
 
 
 def _best_meteora_pool(mint: str) -> Optional[dict[str, Any]]:
@@ -238,18 +218,82 @@ def get_onchain_mint_info(token: str) -> dict[str, Any]:
 
 
 def _fetch_onchain_token_research(token: str, holder_limit: int = 10) -> dict[str, Any]:
-    """Fetch fresh on-chain research (no cache)."""
+    """Fetch fresh on-chain research (no cache). Parallelizes independent I/O."""
     resolved = resolve_token(token)
     if "error" in resolved:
         return {**resolved, "query": token, "needs_mint_address": True}
 
-    mint_info = get_onchain_mint_info(token)
+    mint = resolved["mint"]
+
+    mint_info: dict[str, Any] = {}
+    price: dict[str, Any] = {}
+    holders: dict[str, Any] = {}
+    pool: Optional[dict[str, Any]] = None
+    easya_overlay = None
+
+    def _load_mint_info() -> dict[str, Any]:
+        return get_onchain_mint_info(token)
+
+    def _load_price() -> dict[str, Any]:
+        return get_token_price(token)
+
+    def _load_holders() -> dict[str, Any]:
+        return get_top_token_holders(token, limit=holder_limit)
+
+    def _load_pool() -> Optional[dict[str, Any]]:
+        return _best_meteora_pool(mint)
+
+    def _load_easya() -> Optional[dict[str, Any]]:
+        try:
+            from easya_screener_client import get_token_bundle, screener_configured
+
+            if not screener_configured():
+                return None
+            bundle = get_token_bundle(token)
+            if bundle.get("error"):
+                return None
+            row = bundle.get("token") or {}
+            return {
+                "verified": row.get("is_verified"),
+                "liquidity_usd": row.get("liquidity_usd"),
+                "volume_24h_usd": row.get("volume_24h_usd"),
+                "holder_count": row.get("holder_count"),
+                "tags": row.get("tags") or [],
+                "note": "Supplementary EASY Screener data — prefer on-chain fields above when they conflict.",
+            }
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=5) as pool_exec:
+        futures = {
+            pool_exec.submit(_load_mint_info): "mint_info",
+            pool_exec.submit(_load_price): "price",
+            pool_exec.submit(_load_holders): "holders",
+            pool_exec.submit(_load_pool): "pool",
+            pool_exec.submit(_load_easya): "easya",
+        }
+        for fut in as_completed(futures):
+            label = futures[fut]
+            try:
+                result = fut.result()
+            except Exception as exc:
+                if label == "mint_info":
+                    return {"error": f"On-chain mint fetch failed: {exc}", "query": token, "needs_mint_address": True}
+                continue
+            if label == "mint_info":
+                mint_info = result or {}
+            elif label == "price":
+                price = result or {}
+            elif label == "holders":
+                holders = result or {}
+            elif label == "pool":
+                pool = result
+            elif label == "easya":
+                easya_overlay = result
+
     if mint_info.get("error"):
         return mint_info
 
-    price = get_token_price(token)
-    holders = get_top_token_holders(token, limit=holder_limit)
-    pool = _best_meteora_pool(resolved["mint"])
     pool_snapshot = _pool_market_snapshot(pool) if pool else None
 
     price_usd = price.get("price_usd")
@@ -269,6 +313,8 @@ def _fetch_onchain_token_research(token: str, holder_limit: int = 10) -> dict[st
     holder_count = None
     if pool_snapshot and pool_snapshot.get("holder_count_indexed") is not None:
         holder_count = pool_snapshot.get("holder_count_indexed")
+    if holder_count is None and easya_overlay and easya_overlay.get("holder_count") is not None:
+        holder_count = easya_overlay.get("holder_count")
 
     top_holders = holders.get("top_holders") or []
     top3_pct = None
@@ -313,30 +359,11 @@ def _fetch_onchain_token_research(token: str, holder_limit: int = 10) -> dict[st
             }
         )
 
-    easya_overlay = None
-    try:
-        from easya_screener_client import screener_configured, get_token_bundle
-
-        if screener_configured():
-            bundle = get_token_bundle(token)
-            if not bundle.get("error"):
-                row = bundle.get("token") or {}
-                easya_overlay = {
-                    "verified": row.get("is_verified"),
-                    "liquidity_usd": row.get("liquidity_usd"),
-                    "volume_24h_usd": row.get("volume_24h_usd"),
-                    "holder_count": row.get("holder_count"),
-                    "tags": row.get("tags") or [],
-                    "note": "Supplementary EASY Screener data — prefer on-chain fields above when they conflict.",
-                }
-    except Exception:
-        pass
-
     fetched_at = time.time()
     return {
         "symbol": resolved.get("symbol"),
         "name": resolved.get("name") or mint_info.get("name"),
-        "mint": resolved["mint"],
+        "mint": mint,
         "cluster": SOLANA_CLUSTER,
         "price_usd": price_usd,
         "price_source": price.get("source"),
@@ -352,7 +379,7 @@ def _fetch_onchain_token_research(token: str, holder_limit: int = 10) -> dict[st
         "primary_pool": pool_snapshot,
         "risks": risks,
         "easya_overlay": easya_overlay,
-        "explorer_url": f"https://solscan.io/token/{resolved['mint']}",
+        "explorer_url": f"https://solscan.io/token/{mint}",
         "data_sources": ["solana_rpc", "jupiter", "meteora_datapi"],
         "attribution": "On-chain data via Solana RPC; price via Jupiter; pool metrics via Meteora datapi.",
         "fetched_at_unix": fetched_at,
@@ -366,14 +393,14 @@ def get_onchain_token_research(token: str, holder_limit: int = 10) -> dict[str, 
     if "error" in resolved:
         return {**resolved, "query": token, "needs_mint_address": True}
 
-    key = _cache_key(resolved["mint"], holder_limit)
-    cached = _cache_get(key)
+    mint = resolved["mint"]
+    cached = _cache_get(mint, holder_limit)
     if cached is not None:
         return {**cached, "cached": True}
 
     profile = _fetch_onchain_token_research(token, holder_limit=holder_limit)
     if not profile.get("error") and has_min_onchain_data(profile):
-        _cache_set(key, profile)
+        _cache_set(mint, holder_limit, profile)
         profile = {**profile, "cached": False}
     return profile
 
