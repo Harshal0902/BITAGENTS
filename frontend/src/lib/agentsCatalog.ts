@@ -163,6 +163,24 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     model: "meta-llama/llama-3.1-8b-instruct",
     cluster: "mainnet",
   }
+  ,
+  {
+    id: "hedge-fund",
+    slug: "hedge-fund",
+    name: "Hedge Fund Agent",
+    category: "Trading",
+    description:
+      "A managed hedge fund strategy agent — portfolio construction, risk targeting, automated rebalancing, and simulated paper trading backtests.",
+    tagline: "Automated strategies · risk-managed",
+    pricePerTask: "1% Fee & 10% Profit",
+    runs: "-",
+    volumeSol: "-",
+    rating: 4.9,
+    iconId: "bot",
+    available: true,
+    model: "meta-llama/llama-3.1-8b-instruct",
+    cluster: "mainnet",
+  }
 ];
 
 export function getAgentBySlug(slug: string): MarketplaceAgent | undefined {
