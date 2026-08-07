@@ -20,6 +20,15 @@ from hedge_fund_core import (
     run_mock_backtest,
     run_portfolio_analysis,
 )
+from hedge_fund_paper import (
+    HF_MONITOR_INTERVAL_SECONDS,
+    create_strategy,
+    list_strategies,
+    monitor_cycle,
+    paper_dashboard,
+    run_strategy_backtest,
+    update_strategy_rules,
+)
 from yahoo_market_data import DEFAULT_STOCK_CRYPTO_BOOK, KNOWN_STOCK_TICKERS, YAHOO_TICKER_MAP
 
 HEDGE_FUND_MODEL = (
@@ -77,26 +86,95 @@ _MONTHS = {
     "december": 12,
 }
 
+PAPER_INTENT_RE = re.compile(
+    r"\b(paper\s*trad|start\s+(?:a\s+)?(?:paper\s+)?(?:fund|strategy|portfolio)|"
+    r"create\s+strategy|monitor|dashboard|tp\b|sl\b|take[\s-]?profit|stop[\s-]?loss|"
+    r"my\s+(?:positions|strategy|strategies|trades|decisions))\b",
+    re.I,
+)
+
 TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "create_paper_strategy",
+            "description": (
+                "Create a PAPER trading strategy. Omit tokens for agent-picked default stock+crypto book. "
+                "Pass user TP/SL in rules (take_profit_pct, stop_loss_pct). Saves to DB; 4h monitor evaluates it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tokens": {"type": "array", "items": {"type": "string"}},
+                    "name": {"type": "string"},
+                    "mode": {"type": "string", "description": "agent | user | hybrid"},
+                    "take_profit_pct": {"type": "number"},
+                    "stop_loss_pct": {"type": "number"},
+                    "capital_usd": {"type": "number"},
+                    "notes": {"type": "string"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_paper_strategy",
+            "description": "Edit paper strategy rules (TP/SL), symbols, name, or status (active/paused/closed).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "strategy_id": {"type": "string"},
+                    "take_profit_pct": {"type": "number"},
+                    "stop_loss_pct": {"type": "number"},
+                    "tokens": {"type": "array", "items": {"type": "string"}},
+                    "name": {"type": "string"},
+                    "status": {"type": "string"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["strategy_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_paper_dashboard",
+            "description": "Paper portfolio, positions, strategies, recent decisions/trades, shared market snapshots.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_strategy_backtest",
+            "description": "Backtest a saved strategy or symbol list for period 1w|1m|3m|6m|1y using Yahoo Finance.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "period": {"type": "string"},
+                    "strategy_id": {"type": "string"},
+                    "tokens": {"type": "array", "items": {"type": "string"}},
+                    "capital_usd": {"type": "number"},
+                },
+                "required": [],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
             "name": "run_mock_backtest",
             "description": (
-                "PRIMARY for historical/mock trading and PnL. Uses Yahoo Finance daily prices + news. "
-                "Supports stocks (AAPL, MSFT, NVDA…) and crypto (BTC, ETH, SOL). "
-                "If tokens omitted / open mandate, uses a default diversified stock+crypto book."
+                "Ad-hoc historical simulation (not tied to a saved strategy). Yahoo Finance prices + news."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "tokens": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Tickers e.g. AAPL, BTC. Empty = default book.",
-                    },
-                    "start_date": {"type": "string", "description": "YYYY-MM-DD"},
-                    "end_date": {"type": "string", "description": "YYYY-MM-DD"},
+                    "tokens": {"type": "array", "items": {"type": "string"}},
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
                     "capital_usd": {"type": "number"},
                     "include_news": {"type": "boolean"},
                 },
@@ -108,10 +186,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "run_portfolio_analysis",
-            "description": (
-                "Live Covenant-style portfolio analysis on Solana tokens: "
-                "quant/value analyst signals, risk limits, suggested allocations."
-            ),
+            "description": "Live Solana on-chain portfolio analysis (not paper trading).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -126,7 +201,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "analyze_token_for_portfolio",
-            "description": "Single-token analyst signals + position limit for a given portfolio size.",
+            "description": "Single Solana token analyst signals.",
             "parameters": {
                 "type": "object",
                 "properties": {"token": {"type": "string"}, "portfolio_value_usd": {"type": "number"}},
@@ -138,7 +213,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "calculate_fees",
-            "description": "Calculate 1/10 fees (1% mgmt + 10% performance) for given AUM and profit.",
+            "description": "Calculate 1/10 fees.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -155,31 +230,101 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_fee_structure",
-            "description": "Return the hedge fund 1/10 fee model and comparison to 2/20.",
+            "description": "Return the hedge fund 1/10 fee model.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
 ]
 
-TOOL_REGISTRY = {
-    "run_mock_backtest": run_mock_backtest,
-    "run_portfolio_analysis": run_portfolio_analysis,
-    "analyze_token_for_portfolio": analyze_token_for_portfolio,
-    "calculate_fees": calculate_fees,
-    "get_fee_structure": get_fee_structure,
-}
 
-SYSTEM_PROMPT = f"""You are **Hedge Fund Agent** — Covenant-inspired fund manager with a **1/10** fee model
-({MANAGEMENT_FEE_RATE*100:.0f}% annual management + {PERFORMANCE_FEE_RATE*100:.0f}% performance).
+def _paper_tools(user_wallet: Optional[str] = None):
+    wallet = (user_wallet or "").strip()
 
-Rules:
-- For historical / mock trading / PnL / backtests (stocks or crypto, date ranges), call `run_mock_backtest`.
-- Prices and news come from **Yahoo Finance**. Crypto tickers: BTC, ETH, SOL. Stocks: AAPL, MSFT, etc.
-- If the user gives an open mandate ("whatever", "stocks or crypto") and no tickers, omit `tokens` so the default book is used.
-- For live Solana token allocation research, call `run_portfolio_analysis`.
-- Never invent prices or PnL — only report tool JSON.
-- Dates must be YYYY-MM-DD. Default capital $10,000 if unspecified.
-- Not financial advice. Mock trades are simulations.
+    def create_paper_strategy(**kwargs):
+        if not wallet:
+            return {"error": "Wallet sign-in required for paper trading"}
+        rules = {
+            "take_profit_pct": kwargs.get("take_profit_pct", 15),
+            "stop_loss_pct": kwargs.get("stop_loss_pct", 8),
+            "notes": kwargs.get("notes") or "",
+            "objective": "max_profit",
+        }
+        tokens = kwargs.get("tokens")
+        created_by = "user" if tokens else "agent"
+        mode = kwargs.get("mode") or ("user" if tokens else "agent")
+        return create_strategy(
+            user_wallet=wallet,
+            symbols=tokens,
+            name=kwargs.get("name") or "",
+            mode=mode,
+            rules=rules,
+            capital_usd=kwargs.get("capital_usd"),
+            created_by=created_by,
+        )
+
+    def update_paper_strategy(**kwargs):
+        if not wallet:
+            return {"error": "Wallet sign-in required"}
+        rules = {}
+        if kwargs.get("take_profit_pct") is not None:
+            rules["take_profit_pct"] = kwargs["take_profit_pct"]
+        if kwargs.get("stop_loss_pct") is not None:
+            rules["stop_loss_pct"] = kwargs["stop_loss_pct"]
+        if kwargs.get("notes") is not None:
+            rules["notes"] = kwargs["notes"]
+        return update_strategy_rules(
+            strategy_id=kwargs.get("strategy_id", ""),
+            user_wallet=wallet,
+            rules=rules or None,
+            symbols=kwargs.get("tokens"),
+            name=kwargs.get("name"),
+            status=kwargs.get("status"),
+        )
+
+    def get_paper_dashboard(**_kwargs):
+        if not wallet:
+            return {"error": "Wallet sign-in required"}
+        return paper_dashboard(wallet)
+
+    def run_strategy_backtest_tool(**kwargs):
+        if not wallet:
+            return {"error": "Wallet sign-in required"}
+        return run_strategy_backtest(
+            user_wallet=wallet,
+            period=kwargs.get("period") or "6m",
+            strategy_id=kwargs.get("strategy_id"),
+            symbols=kwargs.get("tokens"),
+            capital_usd=float(kwargs.get("capital_usd") or 10_000),
+        )
+
+    return {
+        "create_paper_strategy": create_paper_strategy,
+        "update_paper_strategy": update_paper_strategy,
+        "get_paper_dashboard": get_paper_dashboard,
+        "run_strategy_backtest": run_strategy_backtest_tool,
+        "run_mock_backtest": run_mock_backtest,
+        "run_portfolio_analysis": run_portfolio_analysis,
+        "analyze_token_for_portfolio": analyze_token_for_portfolio,
+        "calculate_fees": calculate_fees,
+        "get_fee_structure": get_fee_structure,
+    }
+
+
+TOOL_REGISTRY = _paper_tools()  # default without wallet; run_* rebuilds per request
+
+SYSTEM_PROMPT = f"""You are **Hedge Fund Agent** in **PAPER TRADING** mode (1/10 fees:
+{MANAGEMENT_FEE_RATE*100:.0f}% mgmt + {PERFORMANCE_FEE_RATE*100:.0f}% performance).
+
+Capabilities:
+- `create_paper_strategy` — user picks tickers OR omit tokens for agent default book (AAPL/MSFT/NVDA/AMZN/BTC/ETH/SOL).
+  Store TP/SL via take_profit_pct / stop_loss_pct. Market is monitored every {HF_MONITOR_INTERVAL_SECONDS // 3600}h (shared snapshots).
+- `update_paper_strategy` — edit TP/SL, symbols, pause/close.
+- `get_paper_dashboard` — positions, decisions, trades, market.
+- `run_strategy_backtest` — backtest saved strategy or symbols for 1w/1m/3m/6m/1y.
+- `run_mock_backtest` — ad-hoc date-range simulation.
+- Solana live research tools remain available for on-chain tokens.
+
+Rules: never invent fills/PnL — use tools. Paper only — no real orders. Not financial advice.
 """
 
 
@@ -559,6 +704,196 @@ def _try_portfolio_shortcut(user_input: str) -> Optional[tuple[str, list[dict[st
     return reply, actions
 
 
+def _extract_tp_sl(text: str) -> tuple[Optional[float], Optional[float]]:
+    tp = None
+    sl = None
+    m_tp = re.search(r"\b(?:tp|take[\s-]?profit)\s*[:=]?\s*(-?\d+(?:\.\d+)?)\s*%?", text, re.I)
+    m_sl = re.search(r"\b(?:sl|stop[\s-]?loss)\s*[:=]?\s*(-?\d+(?:\.\d+)?)\s*%?", text, re.I)
+    if m_tp:
+        try:
+            tp = abs(float(m_tp.group(1)))
+        except ValueError:
+            pass
+    if m_sl:
+        try:
+            sl = abs(float(m_sl.group(1)))
+        except ValueError:
+            pass
+    return tp, sl
+
+
+def _format_paper_dashboard(dash: dict[str, Any]) -> str:
+    if dash.get("error"):
+        return f"**Paper dashboard error:** {dash['error']}"
+    port = dash.get("portfolio") or {}
+    positions = port.get("positions") or dash.get("positions") or []
+    lines = [
+        "**Paper Trading Dashboard**",
+        f"Mode: paper · Monitor every {HF_MONITOR_INTERVAL_SECONDS // 3600}h · Shared market cache",
+        f"Cash: ${_fmt(port.get('cash_usd'))} · Equity: ${_fmt(port.get('equity_usd'))} · "
+        f"PnL: ${_fmt(port.get('pnl_usd') or port.get('unrealized_pnl_usd'))} "
+        f"({port.get('pnl_pct', 0)}%)",
+        "",
+        "**Strategies**",
+    ]
+    for s in dash.get("strategies") or []:
+        rules = s.get("rules") or {}
+        lines.append(
+            f"- `{s.get('id')}` **{s.get('name')}** [{s.get('mode')}/{s.get('status')}] "
+            f"· {', '.join(s.get('symbols') or [])} "
+            f"· TP {rules.get('take_profit_pct')}% / SL {rules.get('stop_loss_pct')}%"
+        )
+    lines.append("")
+    lines.append("**Positions**")
+    if not positions:
+        lines.append("- none yet (monitor will allocate on next cycle)")
+    for p in positions:
+        lines.append(
+            f"- **{p.get('symbol')}** {p.get('side') or 'long'}: "
+            f"{p.get('units') or p.get('qty')} @ ${_fmt(p.get('avg_entry_usd') or p.get('avg_price_usd'))} "
+            f"· mkt ${_fmt(p.get('mark_price_usd') or p.get('mark_usd'))} · "
+            f"PnL ${_fmt(p.get('unrealized_pnl_usd'))}"
+        )
+    lines.extend(["", "**Recent decisions**"])
+    for d in (dash.get("decisions") or [])[:8]:
+        lines.append(
+            f"- {str(d.get('created_at', ''))[:16]} `{d.get('action')}` {d.get('symbol') or ''} — {d.get('rationale') or ''}"
+        )
+    lines.append("\nAsk me to create/update strategies, run a backtest (1w/6m/1y), or edit TP/SL.")
+    return "\n".join(lines)
+
+
+def _try_paper_shortcut(
+    user_input: str, user_wallet: Optional[str]
+) -> Optional[tuple[str, list[dict[str, Any]]]]:
+    if not PAPER_INTENT_RE.search(user_input) and not re.search(
+        r"\b(create|start).{0,20}(paper|strategy|fund)\b", user_input, re.I
+    ):
+        return None
+    if not user_wallet:
+        return (
+            "Sign in with your wallet to use paper trading (strategies are saved per wallet).",
+            [],
+        )
+
+    # Dashboard / monitor / positions
+    if re.search(r"\b(dashboard|positions|decisions|my\s+strateg|monitor\s+status)\b", user_input, re.I):
+        dash = paper_dashboard(user_wallet)
+        return _format_paper_dashboard(dash), [
+            {"tool": "get_paper_dashboard", "args": {}, "result": json.dumps(dash, default=str)}
+        ]
+
+    # Period backtest on saved strategy or tokens
+    period_m = re.search(r"\b(1w|1m|3m|6m|1y|1\s*week|1\s*month|6\s*months?|1\s*year)\b", user_input, re.I)
+    if period_m and re.search(r"\bbacktest\b", user_input, re.I):
+        raw = period_m.group(1).lower().replace(" ", "")
+        period_map = {
+            "1week": "1w",
+            "1month": "1m",
+            "6month": "6m",
+            "6months": "6m",
+            "1year": "1y",
+        }
+        period = period_map.get(raw, raw if raw in ("1w", "1m", "3m", "6m", "1y") else "6m")
+        tokens = _extract_tokens(user_input)
+        sid_m = re.search(r"\b(str_[a-f0-9]+|[a-f0-9]{8})\b", user_input, re.I)
+        result = run_strategy_backtest(
+            user_wallet=user_wallet,
+            period=period,
+            strategy_id=sid_m.group(1) if sid_m else None,
+            symbols=tokens or None,
+            capital_usd=_extract_capital(user_input),
+        )
+        # Prefer mock backtest formatting if nested
+        bt = result.get("result") or result
+        reply = _format_backtest_reply(bt if isinstance(bt, dict) else result)
+        return reply, [
+            {
+                "tool": "run_strategy_backtest",
+                "args": {"period": period, "tokens": tokens},
+                "result": json.dumps(result, default=str),
+            }
+        ]
+
+    # Create strategy (agent or user symbols)
+    if re.search(r"\b(create|start|new|set\s*up)\b", user_input, re.I) or OPEN_MANDATE_RE.search(
+        user_input
+    ):
+        tokens = _extract_tokens(user_input)
+        tp, sl = _extract_tp_sl(user_input)
+        rules = {
+            "take_profit_pct": tp if tp is not None else 15,
+            "stop_loss_pct": sl if sl is not None else 8,
+            "objective": "max_profit",
+            "notes": user_input[:500],
+        }
+        created_by = "user" if tokens else "agent"
+        mode = "user" if tokens else "agent"
+        result = create_strategy(
+            user_wallet=user_wallet,
+            symbols=tokens or None,
+            name="",
+            mode=mode,
+            rules=rules,
+            capital_usd=_extract_capital(user_input),
+            created_by=created_by,
+        )
+        if result.get("error"):
+            return f"**Could not create strategy:** {result['error']}", [
+                {"tool": "create_paper_strategy", "args": {}, "result": json.dumps(result, default=str)}
+            ]
+        # Kick one monitor pass so user sees initial decisions sooner
+        try:
+            monitor_cycle(force_prices=False)
+        except Exception:
+            pass
+        dash = paper_dashboard(user_wallet)
+        reply = (
+            f"**Paper strategy created** `{result.get('id')}`\n"
+            f"- Mode: {result.get('mode')} · Symbols: {', '.join(result.get('symbols') or [])}\n"
+            f"- TP {rules['take_profit_pct']}% / SL {rules['stop_loss_pct']}%\n"
+            f"- Market monitor runs every {HF_MONITOR_INTERVAL_SECONDS // 3600}h "
+            f"(shared quotes across users).\n\n"
+            + _format_paper_dashboard(dash)
+        )
+        return reply, [
+            {
+                "tool": "create_paper_strategy",
+                "args": {"tokens": tokens, "mode": mode},
+                "result": json.dumps(result, default=str),
+            }
+        ]
+
+    # Update TP/SL
+    if re.search(r"\b(update|edit|change|set)\b.*\b(tp|sl|take|stop|strategy)\b", user_input, re.I):
+        strategies = list_strategies(user_wallet)
+        if not strategies:
+            return "No strategies yet — say e.g. `create paper strategy with BTC ETH TP 20 SL 10`.", []
+        sid_m = re.search(r"\b(str_[a-f0-9]+|[a-f0-9]{8})\b", user_input, re.I)
+        strategy_id = sid_m.group(1) if sid_m else strategies[0].get("id")
+        tp, sl = _extract_tp_sl(user_input)
+        rules = {}
+        if tp is not None:
+            rules["take_profit_pct"] = tp
+        if sl is not None:
+            rules["stop_loss_pct"] = sl
+        if not rules:
+            return "Specify TP/SL like `set TP 20 SL 8` for your strategy.", []
+        result = update_strategy_rules(strategy_id=strategy_id, user_wallet=user_wallet, rules=rules)
+        return (
+            f"**Updated** `{strategy_id}` → {rules}\n\n" + _format_paper_dashboard(paper_dashboard(user_wallet)),
+            [{"tool": "update_paper_strategy", "args": {"strategy_id": strategy_id, **rules}, "result": json.dumps(result, default=str)}],
+        )
+
+    # Generic paper → dashboard
+    if PAPER_INTENT_RE.search(user_input):
+        dash = paper_dashboard(user_wallet)
+        return _format_paper_dashboard(dash), [
+            {"tool": "get_paper_dashboard", "args": {}, "result": json.dumps(dash, default=str)}
+        ]
+    return None
+
+
 def run_hedge_fund_agent(
     user_input: str,
     conversation_history: list,
@@ -566,6 +901,7 @@ def run_hedge_fund_agent(
     session_id: Optional[str] = None,
 ) -> tuple[str, list, list[dict[str, Any]]]:
     prompt = user_input.strip()
+    tools = _paper_tools(user_wallet)
 
     if re.search(r"\b(fee|fees|pricing|1/10|2/20|management fee|performance fee)\b", prompt, re.I):
         if not BACKTEST_INTENT_RE.search(prompt) and not re.search(r"\b(BTC|ETH|SOL|backtest|mock)\b", prompt, re.I):
@@ -585,8 +921,16 @@ def run_hedge_fund_agent(
             conversation_history.append({"role": "assistant", "content": reply})
             return reply, conversation_history, [{"tool": "get_fee_structure", "args": {}, "result": json.dumps(fees)}]
 
+    paper = _try_paper_shortcut(prompt, user_wallet)
+    if paper:
+        reply, actions = paper
+        conversation_history.append({"role": "user", "content": prompt})
+        conversation_history.append({"role": "assistant", "content": reply})
+        return reply, conversation_history, actions
+
+    # Prefer saved-strategy period backtests before ad-hoc date backtests when user says paper/strategy
     backtest = _try_backtest_shortcut(prompt)
-    if backtest:
+    if backtest and not PAPER_INTENT_RE.search(prompt):
         reply, actions = backtest
         conversation_history.append({"role": "user", "content": prompt})
         conversation_history.append({"role": "assistant", "content": reply})
@@ -604,23 +948,35 @@ def run_hedge_fund_agent(
         conversation_history,
         system_prompt=SYSTEM_PROMPT,
         tools=TOOLS,
-        tool_registry=TOOL_REGISTRY,
+        tool_registry=tools,
         model=HEDGE_FUND_MODEL,
         app_suffix="Hedge Fund",
         user_wallet=user_wallet,
         session_id=session_id,
     )
 
-    # If tools returned a backtest, prefer formatted report over raw LLM prose
     for action in reversed(actions):
-        if action.get("tool") != "run_mock_backtest":
+        tool = action.get("tool")
+        if tool not in ("run_mock_backtest", "run_strategy_backtest", "get_paper_dashboard", "create_paper_strategy"):
             continue
         try:
             data = json.loads(action.get("result") or "{}")
         except json.JSONDecodeError:
             break
-        formatted = _format_backtest_reply(data)
-        history[-1] = {"role": "assistant", "content": formatted}
-        return formatted, history, actions
+        if tool == "get_paper_dashboard" or tool == "create_paper_strategy":
+            if tool == "create_paper_strategy" and not data.get("error"):
+                formatted = (
+                    f"**Paper strategy `{data.get('id')}` created**\n\n"
+                    + _format_paper_dashboard(paper_dashboard(user_wallet or ""))
+                )
+            else:
+                formatted = _format_paper_dashboard(data if tool == "get_paper_dashboard" else paper_dashboard(user_wallet or ""))
+            history[-1] = {"role": "assistant", "content": formatted}
+            return formatted, history, actions
+        bt = data.get("result") if tool == "run_strategy_backtest" else data
+        if isinstance(bt, dict):
+            formatted = _format_backtest_reply(bt)
+            history[-1] = {"role": "assistant", "content": formatted}
+            return formatted, history, actions
 
     return reply, history, actions

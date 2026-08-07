@@ -116,6 +116,17 @@ from due_diligence_agent import (
 from cache_store import cache_backend
 from hedge_fund_agent import HEDGE_FUND_MODEL, run_hedge_fund_agent
 from hedge_fund_core import get_fee_structure
+from hedge_fund_paper import (
+    HF_MONITOR_INTERVAL_SECONDS,
+    create_strategy as hf_create_strategy,
+    list_strategies as hf_list_strategies,
+    monitor_cycle as hf_monitor_cycle,
+    paper_dashboard as hf_paper_dashboard,
+    run_strategy_backtest as hf_run_strategy_backtest,
+    scheduler_status as hf_scheduler_status,
+    start_hedge_fund_scheduler,
+    update_strategy_rules as hf_update_strategy_rules,
+)
 from meteora_dlmm import check_pool_infrastructure, get_pool_creation_cost_sol
 from volume_agent import (
     VOLUME_MODEL,
@@ -321,8 +332,13 @@ def _startup() -> None:
         print(f"  📈 EasyA limit-order scheduler started (every {EASYA_ORDER_POLL_SECONDS}s)")
     if start_volume_scheduler():
         print(f"  📊 Volume Agent scheduler started (every {VOLUME_SCHEDULER_POLL_SECONDS}s)")
+    if start_hedge_fund_scheduler():
+        print(
+            f"  📈 Hedge Fund paper monitor started "
+            f"(every {HF_MONITOR_INTERVAL_SECONDS // 3600}h, poll 60s)"
+        )
     print(f"  🗄️  Cache backend: {cache_backend()}")
-    print("  🤖 Agents: DCA, Kickstart Token Copilot, Volume Agent")
+    print("  🤖 Agents: DCA, Kickstart Token Copilot, Volume Agent, Hedge Fund")
 
 
 @app.get("/health")
@@ -1285,6 +1301,34 @@ def due_diligence_chat(
     return _run_research_chat(run_due_diligence_agent, body, auth_wallet)
 
 
+class HfPaperStrategyCreate(BaseModel):
+    tokens: Optional[list[str]] = None
+    name: str = ""
+    mode: str = "agent"
+    take_profit_pct: Optional[float] = 15.0
+    stop_loss_pct: Optional[float] = 8.0
+    capital_usd: Optional[float] = None
+    notes: str = ""
+    allocation_pct: Optional[dict[str, float]] = None
+
+
+class HfPaperStrategyUpdate(BaseModel):
+    take_profit_pct: Optional[float] = None
+    stop_loss_pct: Optional[float] = None
+    tokens: Optional[list[str]] = None
+    name: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    allocation_pct: Optional[dict[str, float]] = None
+
+
+class HfPaperBacktestRequest(BaseModel):
+    period: str = "6m"
+    strategy_id: Optional[str] = None
+    tokens: Optional[list[str]] = None
+    capital_usd: float = 10_000.0
+
+
 @app.get("/hedge-fund/health")
 def hedge_fund_health() -> dict[str, Any]:
     return {
@@ -1300,6 +1344,9 @@ def hedge_fund_health() -> dict[str, Any]:
         "cluster": SOLANA_CLUSTER,
         "pricing": "1% AUM + 10% performance (vs 2/20)",
         "governance": "covenant-inspired deterministic risk + LLM macro",
+        "paper_trading": True,
+        "monitor_interval_seconds": HF_MONITOR_INTERVAL_SECONDS,
+        "scheduler": hf_scheduler_status(),
     }
 
 
@@ -1314,6 +1361,99 @@ def hedge_fund_chat(
     auth_wallet: str = Depends(require_wallet_session),
 ) -> ChatResponse:
     return _run_research_chat(run_hedge_fund_agent, body, auth_wallet)
+
+
+@app.get("/hedge-fund/paper/dashboard")
+def hedge_fund_paper_dashboard(
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    return hf_paper_dashboard(auth_wallet)
+
+
+@app.get("/hedge-fund/paper/strategies")
+def hedge_fund_paper_strategies(
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    return {"strategies": hf_list_strategies(auth_wallet)}
+
+
+@app.post("/hedge-fund/paper/strategies")
+def hedge_fund_paper_create_strategy(
+    body: HfPaperStrategyCreate,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    tokens = body.tokens
+    created_by = "user" if tokens else "agent"
+    mode = body.mode if body.mode in ("agent", "user", "hybrid") else ("user" if tokens else "agent")
+    rules = {
+        "take_profit_pct": body.take_profit_pct if body.take_profit_pct is not None else 15,
+        "stop_loss_pct": body.stop_loss_pct if body.stop_loss_pct is not None else 8,
+        "notes": body.notes or "",
+        "objective": "max_profit",
+    }
+    return hf_create_strategy(
+        user_wallet=auth_wallet,
+        symbols=tokens,
+        name=body.name or "",
+        mode=mode,
+        rules=rules,
+        allocation_pct=body.allocation_pct,
+        capital_usd=body.capital_usd,
+        created_by=created_by,
+    )
+
+
+@app.patch("/hedge-fund/paper/strategies/{strategy_id}")
+def hedge_fund_paper_update_strategy(
+    strategy_id: str,
+    body: HfPaperStrategyUpdate,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    rules: dict[str, Any] = {}
+    if body.take_profit_pct is not None:
+        rules["take_profit_pct"] = body.take_profit_pct
+    if body.stop_loss_pct is not None:
+        rules["stop_loss_pct"] = body.stop_loss_pct
+    if body.notes is not None:
+        rules["notes"] = body.notes
+    return hf_update_strategy_rules(
+        strategy_id=strategy_id,
+        user_wallet=auth_wallet,
+        rules=rules or None,
+        symbols=body.tokens,
+        allocation_pct=body.allocation_pct,
+        name=body.name,
+        status=body.status,
+    )
+
+
+@app.post("/hedge-fund/paper/monitor")
+def hedge_fund_paper_monitor(
+    force: bool = Query(False),
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    # Auth-gated manual trigger (shared market refresh + all active strategies)
+    _ = auth_wallet
+    return hf_monitor_cycle(force_prices=force)
+
+
+@app.post("/hedge-fund/paper/backtest")
+def hedge_fund_paper_backtest(
+    body: HfPaperBacktestRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    return hf_run_strategy_backtest(
+        user_wallet=auth_wallet,
+        period=body.period,
+        strategy_id=body.strategy_id,
+        symbols=body.tokens,
+        capital_usd=body.capital_usd,
+    )
+
+
+@app.get("/hedge-fund/paper/scheduler")
+def hedge_fund_paper_scheduler() -> dict[str, Any]:
+    return hf_scheduler_status()
 
 
 if __name__ == "__main__":

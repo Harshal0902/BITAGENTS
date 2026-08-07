@@ -15,6 +15,8 @@ export type HedgeFundHealth = {
   performance_fee_pct?: number;
   pricing?: string;
   auth_required: boolean;
+  paper_trading?: boolean;
+  monitor_interval_seconds?: number;
 };
 
 export type HedgeFundFeeStructure = {
@@ -30,6 +32,92 @@ export type HedgeFundFeeStructure = {
     net_profit_after_fees_usd: number;
   };
 };
+
+export type PaperPosition = {
+  id?: string;
+  symbol: string;
+  side?: string;
+  units: number;
+  avg_entry_usd?: number;
+  mark_price_usd?: number;
+  market_value_usd?: number;
+  unrealized_pnl_usd?: number;
+  strategy_id?: string;
+};
+
+export type PaperStrategy = {
+  id: string;
+  name: string;
+  mode: string;
+  status: string;
+  symbols: string[];
+  rules?: {
+    take_profit_pct?: number;
+    stop_loss_pct?: number;
+    notes?: string;
+    objective?: string;
+  };
+  created_by?: string;
+  updated_at?: string;
+};
+
+export type PaperDecision = {
+  id?: string;
+  strategy_id?: string;
+  symbol?: string;
+  action?: string;
+  rationale?: string;
+  created_at?: string;
+};
+
+export type PaperTrade = {
+  id?: string;
+  symbol?: string;
+  side?: string;
+  notional_usd?: number;
+  price_usd?: number;
+  created_at?: string;
+  reason?: string;
+};
+
+export type PaperDashboard = {
+  mode: string;
+  monitor_interval_seconds: number;
+  last_market_refresh_at?: string | null;
+  portfolio: {
+    cash_usd?: number;
+    equity_usd?: number;
+    pnl_usd?: number;
+    pnl_pct?: number;
+    positions?: PaperPosition[];
+    portfolio?: Record<string, unknown>;
+  };
+  strategies: PaperStrategy[];
+  decisions: PaperDecision[];
+  trades: PaperTrade[];
+  backtests?: Record<string, unknown>[];
+  market?: { symbol: string; price_usd?: number; change_24h_pct?: number }[];
+  news?: { symbol?: string; title?: string; publisher?: string }[];
+};
+
+async function authFetch(path: string, authToken: string, init?: RequestInit) {
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${authToken}`,
+      ...(init?.headers || {}),
+    },
+    cache: "no-store",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail =
+      typeof data.detail === "string" ? data.detail : data.error ?? "Request failed";
+    throw new Error(detail);
+  }
+  return data;
+}
 
 export async function fetchHedgeFundHealth(): Promise<HedgeFundHealth | null> {
   try {
@@ -73,6 +161,61 @@ export async function sendHedgeFundMessage(
   }
 
   return data as HedgeFundChatResponse;
+}
+
+export async function fetchPaperDashboard(authToken: string): Promise<PaperDashboard> {
+  return (await authFetch("/api/agents/hedge-fund/paper/dashboard", authToken)) as PaperDashboard;
+}
+
+export async function createPaperStrategy(
+  authToken: string,
+  body: {
+    tokens?: string[];
+    name?: string;
+    mode?: string;
+    take_profit_pct?: number;
+    stop_loss_pct?: number;
+    capital_usd?: number;
+    notes?: string;
+  }
+) {
+  return authFetch("/api/agents/hedge-fund/paper/strategies", authToken, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updatePaperStrategy(
+  authToken: string,
+  strategyId: string,
+  body: {
+    take_profit_pct?: number;
+    stop_loss_pct?: number;
+    tokens?: string[];
+    name?: string;
+    status?: string;
+    notes?: string;
+  }
+) {
+  return authFetch(`/api/agents/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}`, authToken, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function runPaperMonitor(authToken: string, force = false) {
+  const qs = force ? "?force=true" : "";
+  return authFetch(`/api/agents/hedge-fund/paper/monitor${qs}`, authToken, { method: "POST" });
+}
+
+export async function runPaperBacktest(
+  authToken: string,
+  body: { period?: string; strategy_id?: string; tokens?: string[]; capital_usd?: number }
+) {
+  return authFetch("/api/agents/hedge-fund/paper/backtest", authToken, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export function mapHedgeFundActions(actions: HedgeFundChatResponse["actions"]): AgentAction[] {

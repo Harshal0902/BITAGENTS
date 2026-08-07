@@ -315,6 +315,116 @@ MIGRATION_STATEMENTS = [
     CREATE INDEX IF NOT EXISTS idx_volume_campaigns_next_execution ON volume_campaigns (next_execution_at)
         WHERE status = 'active'
     """,
+    # ── Hedge Fund paper trading ──────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS hf_market_snapshots (
+        symbol              VARCHAR(32) PRIMARY KEY,
+        yahoo_symbol        VARCHAR(32) NOT NULL,
+        asset_class         VARCHAR(16) NOT NULL DEFAULT 'equity',
+        price_usd           DOUBLE PRECISION,
+        change_24h_pct      DOUBLE PRECISION,
+        volume              DOUBLE PRECISION,
+        raw                 JSONB NOT NULL DEFAULT '{}'::jsonb,
+        fetched_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS hf_paper_portfolios (
+        id                  VARCHAR(16) PRIMARY KEY,
+        user_wallet         VARCHAR(64) NOT NULL,
+        name                TEXT NOT NULL DEFAULT 'Paper Book',
+        cash_usd            DOUBLE PRECISION NOT NULL DEFAULT 10000,
+        starting_capital    DOUBLE PRECISION NOT NULL DEFAULT 10000,
+        status              VARCHAR(20) NOT NULL DEFAULT 'active',
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_hf_paper_portfolios_user ON hf_paper_portfolios (user_wallet)",
+    """
+    CREATE TABLE IF NOT EXISTS hf_strategies (
+        id                  VARCHAR(16) PRIMARY KEY,
+        portfolio_id        VARCHAR(16) NOT NULL REFERENCES hf_paper_portfolios(id) ON DELETE CASCADE,
+        user_wallet         VARCHAR(64) NOT NULL,
+        name                TEXT NOT NULL,
+        mode                VARCHAR(24) NOT NULL DEFAULT 'agent',
+        status              VARCHAR(20) NOT NULL DEFAULT 'active',
+        symbols             JSONB NOT NULL DEFAULT '[]'::jsonb,
+        allocation_pct      JSONB NOT NULL DEFAULT '{}'::jsonb,
+        rules               JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_by          VARCHAR(16) NOT NULL DEFAULT 'agent',
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_evaluated_at   TIMESTAMPTZ
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_hf_strategies_user ON hf_strategies (user_wallet)",
+    "CREATE INDEX IF NOT EXISTS idx_hf_strategies_status ON hf_strategies (status)",
+    """
+    CREATE TABLE IF NOT EXISTS hf_paper_positions (
+        id                  VARCHAR(16) PRIMARY KEY,
+        portfolio_id        VARCHAR(16) NOT NULL REFERENCES hf_paper_portfolios(id) ON DELETE CASCADE,
+        strategy_id         VARCHAR(16) REFERENCES hf_strategies(id) ON DELETE SET NULL,
+        symbol              VARCHAR(32) NOT NULL,
+        units               DOUBLE PRECISION NOT NULL DEFAULT 0,
+        avg_entry_usd       DOUBLE PRECISION NOT NULL DEFAULT 0,
+        mark_price_usd      DOUBLE PRECISION,
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (portfolio_id, symbol)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_hf_paper_positions_portfolio ON hf_paper_positions (portfolio_id)",
+    """
+    CREATE TABLE IF NOT EXISTS hf_paper_trades (
+        id                  VARCHAR(16) PRIMARY KEY,
+        portfolio_id        VARCHAR(16) NOT NULL,
+        strategy_id         VARCHAR(16),
+        user_wallet         VARCHAR(64) NOT NULL,
+        symbol              VARCHAR(32) NOT NULL,
+        side                VARCHAR(8) NOT NULL,
+        units               DOUBLE PRECISION NOT NULL,
+        price_usd           DOUBLE PRECISION NOT NULL,
+        notional_usd        DOUBLE PRECISION NOT NULL,
+        reason              TEXT,
+        decision            VARCHAR(16),
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_hf_paper_trades_portfolio ON hf_paper_trades (portfolio_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_hf_paper_trades_user ON hf_paper_trades (user_wallet, created_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS hf_decisions (
+        id                  VARCHAR(16) PRIMARY KEY,
+        strategy_id         VARCHAR(16) NOT NULL,
+        portfolio_id        VARCHAR(16) NOT NULL,
+        user_wallet         VARCHAR(64) NOT NULL,
+        symbol              VARCHAR(32) NOT NULL,
+        action              VARCHAR(16) NOT NULL,
+        confidence          DOUBLE PRECISION,
+        rationale           TEXT,
+        price_usd           DOUBLE PRECISION,
+        executed            BOOLEAN NOT NULL DEFAULT FALSE,
+        trade_id            VARCHAR(16),
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_hf_decisions_strategy ON hf_decisions (strategy_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_hf_decisions_user ON hf_decisions (user_wallet, created_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS hf_backtest_runs (
+        id                  VARCHAR(16) PRIMARY KEY,
+        strategy_id         VARCHAR(16),
+        user_wallet         VARCHAR(64) NOT NULL,
+        period_label        VARCHAR(16) NOT NULL,
+        start_date          DATE NOT NULL,
+        end_date            DATE NOT NULL,
+        symbols             JSONB NOT NULL DEFAULT '[]'::jsonb,
+        rules               JSONB NOT NULL DEFAULT '{}'::jsonb,
+        result              JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_hf_backtest_runs_user ON hf_backtest_runs (user_wallet, created_at DESC)",
 ]
 
 

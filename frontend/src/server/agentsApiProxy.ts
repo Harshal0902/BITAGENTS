@@ -112,6 +112,68 @@ export async function proxyHedgeFundFees(): Promise<Response> {
   });
 }
 
+export async function proxyHedgeFundPaperDashboard(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/paper/dashboard`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyHedgeFundPaperStrategies(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/paper/strategies`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyHedgeFundPaperCreateStrategy(
+  body: Record<string, unknown>,
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/paper/strategies`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyHedgeFundPaperUpdateStrategy(
+  strategyId: string,
+  body: Record<string, unknown>,
+  authToken: string
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}`,
+    {
+      method: "PATCH",
+      headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+export async function proxyHedgeFundPaperMonitor(
+  authToken: string,
+  force = false
+): Promise<Response> {
+  const params = force ? "?force=true" : "";
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/paper/monitor${params}`, {
+    method: "POST",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyHedgeFundPaperBacktest(
+  body: Record<string, unknown>,
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/paper/backtest`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
 export async function proxyKickstartWalletAgent(): Promise<Response> {
   return fetch(`${getAgentsBaseUrl()}/kickstart/wallet/agent`, {
     cache: "no-store",
