@@ -51,11 +51,14 @@ export type PaperStrategy = {
   mode: string;
   status: string;
   symbols: string[];
+  horizon_days?: number;
+  horizon_label?: string;
   rules?: {
     take_profit_pct?: number;
     stop_loss_pct?: number;
     notes?: string;
     objective?: string;
+    horizon_days?: number;
   };
   created_by?: string;
   updated_at?: string;
@@ -68,10 +71,13 @@ export type PaperDecision = {
   action?: string;
   rationale?: string;
   created_at?: string;
+  signals?: Record<string, unknown>[];
+  decision_graph?: Record<string, unknown>;
 };
 
 export type PaperTrade = {
   id?: string;
+  strategy_id?: string;
   symbol?: string;
   side?: string;
   notional_usd?: number;
@@ -80,10 +86,23 @@ export type PaperTrade = {
   reason?: string;
 };
 
+export type StrategyBlock = {
+  strategy: PaperStrategy;
+  positions: PaperPosition[];
+  sleeve_value_usd?: number;
+  trades: PaperTrade[];
+  decisions: PaperDecision[];
+  symbols: string[];
+  horizon_days?: number;
+  horizon_label?: string;
+};
+
 export type PaperDashboard = {
   mode: string;
   monitor_interval_seconds: number;
   last_market_refresh_at?: string | null;
+  governance?: string;
+  llm_required?: boolean;
   portfolio: {
     cash_usd?: number;
     equity_usd?: number;
@@ -93,6 +112,8 @@ export type PaperDashboard = {
     portfolio?: Record<string, unknown>;
   };
   strategies: PaperStrategy[];
+  by_strategy?: StrategyBlock[];
+  overlapping_assets?: Record<string, string[]>;
   decisions: PaperDecision[];
   trades: PaperTrade[];
   backtests?: Record<string, unknown>[];
@@ -177,6 +198,7 @@ export async function createPaperStrategy(
     stop_loss_pct?: number;
     capital_usd?: number;
     notes?: string;
+    horizon_days?: number;
   }
 ) {
   return authFetch("/api/agents/hedge-fund/paper/strategies", authToken, {

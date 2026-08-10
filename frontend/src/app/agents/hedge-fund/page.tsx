@@ -13,7 +13,7 @@ export default function HedgeFundPage() {
   return (
     <AppShell
       title={HEDGE_FUND.name}
-      subtitle={`${HEDGE_FUND.tagline} · Covenant-inspired Solana portfolio analysis`}
+      subtitle={`${HEDGE_FUND.tagline} · stocks & crypto paper trading`}
     >
       <HedgeFundConsole />
     </AppShell>

@@ -21,16 +21,8 @@ export function HedgeFundPricingPage() {
         <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-signal">Fee schedule</p>
         <h2 className="mt-2 text-2xl font-semibold text-foreground">1/10 Model</h2>
         <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          BIT Agents Hedge Fund uses a simplified fee stack inspired by{" "}
-          <a
-            href="https://github.com/asalsali/covenant-hedge-fund"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-signal underline"
-          >
-            Covenant Hedge Fund
-          </a>
-          . Half the traditional 2/20 — 1% management and 10% performance.
+          BIT Agents Hedge Fund uses a simplified fee stack — half the traditional 2/20: 1% management
+          and 10% performance.
         </p>
         <Link
           href="/agents/hedge-fund"
@@ -100,7 +92,7 @@ export function HedgeFundPricingPage() {
       </Panel>
 
       <p className="font-mono text-xs text-muted-foreground">
-        Not financial advice. Past backtests in Covenant Hedge Fund do not guarantee future results.
+        Not financial advice. Past backtests do not guarantee future results.
       </p>
     </div>
   );

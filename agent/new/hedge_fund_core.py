@@ -11,7 +11,6 @@ from typing import Any, Literal, Optional
 
 from solana_token_onchain import get_onchain_token_research
 from yahoo_market_data import (
-    DEFAULT_STOCK_CRYPTO_BOOK,
     KNOWN_STOCK_TICKERS,
     fetch_yahoo_daily_prices,
     fetch_yahoo_news,
@@ -435,15 +434,30 @@ def run_mock_backtest(
     capital_usd: float = 10_000.0,
     strategy: str = "equal_weight_quarterly_rebalance",
     include_news: bool = True,
+    horizon_days: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Equal-weight mock backtest using Yahoo Finance daily closes + optional news."""
+    """Equal-weight mock backtest using Yahoo Finance + SPY benchmark metrics."""
     from datetime import datetime, timezone
+
+    from covenant_pipeline import build_equity_curve_from_marks, compute_performance_metrics
+    from covenant_picker import parse_horizon_days, select_assets_for_horizon
 
     capital = max(100.0, _safe_float(capital_usd, 10_000.0))
     selected = [t.strip() for t in (tokens or []) if t and str(t).strip()]
+    picker_note = None
     if not selected:
-        selected = list(DEFAULT_STOCK_CRYPTO_BOOK)
-        strategy_note = "Open mandate — selected default stock+crypto book"
+        days = horizon_days or parse_horizon_days("", None)
+        # Infer horizon from date window when possible
+        try:
+            sdt = datetime.strptime(start_date[:10], "%Y-%m-%d")
+            edt = datetime.strptime(end_date[:10], "%Y-%m-%d")
+            days = max(1, (edt - sdt).days)
+        except Exception:
+            pass
+        pick = select_assets_for_horizon(horizon_days=days)
+        selected = list(pick.get("symbols") or [])
+        picker_note = pick.get("note")
+        strategy_note = picker_note or "Covenant horizon picker selected assets"
     else:
         strategy_note = "User-specified tickers"
 
@@ -491,18 +505,16 @@ def run_mock_backtest(
         return {
             "error": "No assets with historical prices on Yahoo Finance.",
             "errors": errors,
-            "hint": "Pass stock tickers (AAPL, MSFT, NVDA…) or crypto (BTC, ETH, SOL). Or leave blank for the default book.",
+            "hint": "Pass tickers or omit them for Covenant horizon-based selection.",
         }
 
     n = len(assets)
     target_weight = 1.0 / n
-    # holdings: units per asset index
     units = [0.0] * n
     trades: list[dict[str, Any]] = []
     buy_count = 0
     sell_count = 0
 
-    # Initial buys
     alloc_each = capital * target_weight
     for i, asset in enumerate(assets):
         u = alloc_each / asset["entry_price"] if asset["entry_price"] else 0.0
@@ -520,7 +532,6 @@ def run_mock_backtest(
             }
         )
 
-    # Quarterly rebalance (sell overweight / buy underweight)
     marks = []
     for mark_dt in _month_starts(start_dt, end_dt)[1:]:
         mark_ms = mark_dt.timestamp() * 1000
@@ -538,7 +549,6 @@ def run_mock_backtest(
             }
         )
 
-        # Rebalance only on quarter starts (Feb/May/Aug/Nov already skipped — use month in {1,4,7,10} after start)
         if strategy == "equal_weight_quarterly_rebalance" and mark_dt.month in (1, 4, 7, 10) and mark_dt.date() != end_dt.date():
             if total <= 0:
                 continue
@@ -567,7 +577,6 @@ def run_mock_backtest(
                     }
                 )
 
-    # Final sells
     positions = []
     end_value = 0.0
     for i, asset in enumerate(assets):
@@ -609,6 +618,35 @@ def run_mock_backtest(
     fees = calculate_fees(aum_usd=capital, profit_usd=max(0.0, gross_pnl), months=months)
     net_pnl = gross_pnl - fees["total_fees_usd"]
 
+    # SPY benchmark + risk metrics
+    spy_hist = fetch_yahoo_daily_prices("SPY", start_date[:10], end_date[:10])
+    spy_curve = None
+    if not spy_hist.get("error"):
+        spy_prices = spy_hist.get("prices") or []
+        spy_curve = []
+        for m in marks:
+            from datetime import datetime as _dt
+            try:
+                ms = _dt.strptime(m["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000
+            except Exception:
+                continue
+            px = _price_on_or_before(spy_prices, ms) or _price_on_or_after(spy_prices, ms)
+            if px:
+                spy_curve.append(px[1])
+        if spy_prices:
+            sp_entry = _price_on_or_after(spy_prices, start_ms)
+            sp_exit = _price_on_or_before(spy_prices, end_ms) or _price_on_or_after(spy_prices, end_ms)
+            if sp_entry and sp_exit:
+                # normalize spy curve to capital units
+                if spy_curve:
+                    scale = capital / sp_entry[1] if sp_entry[1] else 1.0
+                    spy_curve = [capital] + [p * scale for p in spy_curve]
+                else:
+                    spy_curve = [capital, capital * (sp_exit[1] / sp_entry[1])]
+
+    equity_curve = build_equity_curve_from_marks(capital, marks, end_value)
+    metrics = compute_performance_metrics(equity_curve, spy_curve=spy_curve, periods_per_year=12.0)
+
     news = fetch_yahoo_news([a["symbol"] for a in assets]) if include_news else []
 
     return {
@@ -634,12 +672,15 @@ def run_mock_backtest(
         "fees": fees,
         "net_pnl_usd": round(net_pnl, 2),
         "net_pnl_pct": round((net_pnl / capital) * 100, 2) if capital else 0,
+        "metrics": metrics,
+        "benchmark": "SPY",
         "positions": positions,
         "monthly_marks": marks,
         "mock_trades": trades,
         "news": news,
         "errors": errors,
         "data_source": "yahoo_finance",
+        "llm_required": False,
         "disclaimer": "Mock / historical simulation using Yahoo Finance closes — not live trading. Not financial advice.",
     }
 

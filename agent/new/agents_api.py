@@ -1309,6 +1309,7 @@ class HfPaperStrategyCreate(BaseModel):
     stop_loss_pct: Optional[float] = 8.0
     capital_usd: Optional[float] = None
     notes: str = ""
+    horizon_days: Optional[int] = None
     allocation_pct: Optional[dict[str, float]] = None
 
 
@@ -1343,8 +1344,10 @@ def hedge_fund_health() -> dict[str, Any]:
         "performance_fee_pct": 10.0,
         "cluster": SOLANA_CLUSTER,
         "pricing": "1% AUM + 10% performance (vs 2/20)",
-        "governance": "covenant-inspired deterministic risk + LLM macro",
+        "governance": "Covenant 18-analyst deterministic (LLM optional)",
         "paper_trading": True,
+        "analysts": 18,
+        "llm_required_for_trades": False,
         "monitor_interval_seconds": HF_MONITOR_INTERVAL_SECONDS,
         "scheduler": hf_scheduler_status(),
     }
@@ -1400,6 +1403,8 @@ def hedge_fund_paper_create_strategy(
         allocation_pct=body.allocation_pct,
         capital_usd=body.capital_usd,
         created_by=created_by,
+        horizon_days=body.horizon_days,
+        horizon_text=body.notes or "",
     )
 
 

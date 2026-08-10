@@ -14,7 +14,6 @@ from psycopg2.extras import Json
 from db import get_conn, init_db
 from hedge_fund_core import run_mock_backtest
 from yahoo_market_data import (
-    DEFAULT_STOCK_CRYPTO_BOOK,
     fetch_yahoo_daily_prices,
     fetch_yahoo_news,
     resolve_yahoo_asset,
@@ -272,30 +271,83 @@ def create_strategy(
     allocation_pct: Optional[dict[str, float]] = None,
     capital_usd: Optional[float] = None,
     created_by: str = "agent",
+    horizon_days: Optional[int] = None,
+    horizon_text: str = "",
 ) -> dict[str, Any]:
-    """Create paper strategy. Empty symbols => agent default book."""
+    """Create paper strategy. Empty symbols => Covenant horizon picker (not a fixed book)."""
+    from covenant_picker import horizon_preset, parse_horizon_days, select_assets_for_horizon
+
     portfolio = get_or_create_portfolio(user_wallet, capital_usd or DEFAULT_PAPER_CAPITAL)
-    syms = [s.strip().upper() for s in (symbols or []) if s and str(s).strip()]
+    # If user specifies capital and book is unused, resize paper cash to match
+    if capital_usd is not None:
+        try:
+            cap = max(100.0, float(capital_usd))
+            init_db()
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT id, cash_usd, starting_capital FROM hf_paper_portfolios
+                        WHERE id = %s
+                        """,
+                        (portfolio["id"],),
+                    )
+                    row = cur.fetchone()
+                    cur.execute(
+                        "SELECT COUNT(*) AS n FROM hf_paper_positions WHERE portfolio_id = %s AND units > 0",
+                        (portfolio["id"],),
+                    )
+                    n_pos = int((cur.fetchone() or {}).get("n") or 0)
+                    if row and n_pos == 0 and abs(float(row["cash_usd"]) - float(row["starting_capital"])) < 0.01:
+                        cur.execute(
+                            """
+                            UPDATE hf_paper_portfolios
+                            SET cash_usd = %s, starting_capital = %s, updated_at = NOW()
+                            WHERE id = %s
+                            RETURNING *
+                            """,
+                            (cap, cap, portfolio["id"]),
+                        )
+                        portfolio = _row(cur.fetchone()) or portfolio
+        except Exception:
+            pass
+
+    days = parse_horizon_days(horizon_text, horizon_days)
+    preset = horizon_preset(days)
+    pick_meta: dict[str, Any] = {}
+
+    syms = [str(s).strip() for s in (symbols or []) if s and str(s).strip()]
     if not syms:
-        syms = list(DEFAULT_STOCK_CRYPTO_BOOK)
+        pick_meta = select_assets_for_horizon(horizon_days=days)
+        syms = list(pick_meta.get("symbols") or [])
         created_by = created_by or "agent"
         mode = mode if mode in ("agent", "user", "hybrid") else "agent"
-    # Validate symbols via Yahoo
+        if not name:
+            name = f"Agent {preset['key']} {days}d"
+
+    # Validate symbols via Yahoo (aliases + live probe for any Yahoo asset)
     valid = []
     errors = []
     for s in syms[:10]:
-        r = resolve_yahoo_asset(s)
+        r = resolve_yahoo_asset(s, probe=True)
         if r.get("error"):
             errors.append(r["error"])
         else:
             valid.append(r["symbol"])
     if not valid:
-        return {"error": "No valid symbols", "errors": errors}
+        return {
+            "error": "No valid symbols",
+            "errors": errors,
+            "hint": "Use Yahoo tickers e.g. XRP, SPY (S&P500), AAPL, BTC-USD, ^GSPC",
+            "picker": pick_meta,
+        }
 
     if not allocation_pct:
         w = round(100.0 / len(valid), 4)
         allocation_pct = {s: w for s in valid}
     rules_final = _default_rules(rules)
+    rules_final["horizon_days"] = days
+    rules_final["horizon_label"] = preset["key"]
     sid = _new_id("hs")
     init_db()
     with get_conn() as conn:
@@ -303,8 +355,9 @@ def create_strategy(
             cur.execute(
                 """
                 INSERT INTO hf_strategies (
-                    id, portfolio_id, user_wallet, name, mode, status, symbols, allocation_pct, rules, created_by
-                ) VALUES (%s,%s,%s,%s,%s,'active',%s,%s,%s,%s) RETURNING *
+                    id, portfolio_id, user_wallet, name, mode, status, symbols, allocation_pct,
+                    rules, created_by, horizon_days, horizon_label
+                ) VALUES (%s,%s,%s,%s,%s,'active',%s,%s,%s,%s,%s,%s) RETURNING *
                 """,
                 (
                     sid,
@@ -316,13 +369,13 @@ def create_strategy(
                     Json(allocation_pct),
                     Json(rules_final),
                     created_by if created_by in ("agent", "user") else "agent",
+                    days,
+                    preset["key"],
                 ),
             )
             strategy = _row(cur.fetchone())
 
-    # Warm shared market cache
     refresh_symbols(valid, force=False)
-    # Initial equal-weight paper buys from cash (deploy allocation)
     deploy = _deploy_initial_allocations(portfolio["id"], sid, user_wallet, valid, allocation_pct)
     return {
         **strategy,
@@ -331,6 +384,9 @@ def create_strategy(
         "errors": errors,
         "mode": strategy.get("mode") or mode,
         "paper": True,
+        "picker": pick_meta,
+        "horizon_days": days,
+        "horizon_label": preset["key"],
     }
 
 
@@ -469,10 +525,23 @@ def execute_paper_trade(
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM hf_paper_positions WHERE portfolio_id = %s AND symbol = %s FOR UPDATE",
-                (portfolio_id, symbol.upper()),
-            )
+            if strategy_id:
+                cur.execute(
+                    """
+                    SELECT * FROM hf_paper_positions
+                    WHERE portfolio_id = %s AND symbol = %s AND strategy_id = %s FOR UPDATE
+                    """,
+                    (portfolio_id, symbol.upper(), strategy_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT * FROM hf_paper_positions
+                    WHERE portfolio_id = %s AND symbol = %s
+                    ORDER BY updated_at DESC LIMIT 1 FOR UPDATE
+                    """,
+                    (portfolio_id, symbol.upper()),
+                )
             pos = cur.fetchone()
             cash = float(portfolio["cash_usd"])
 
@@ -606,6 +675,8 @@ def _record_decision(
     confidence: float = 0.5,
     executed: bool = False,
     trade_id: Optional[str] = None,
+    signals: Optional[list] = None,
+    decision_graph: Optional[dict] = None,
 ) -> dict[str, Any]:
     init_db()
     did = _new_id("hd")
@@ -615,8 +686,8 @@ def _record_decision(
                 """
                 INSERT INTO hf_decisions (
                     id, strategy_id, portfolio_id, user_wallet, symbol, action,
-                    confidence, rationale, price_usd, executed, trade_id
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *
+                    confidence, rationale, price_usd, executed, trade_id, signals, decision_graph
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *
                 """,
                 (
                     did,
@@ -630,13 +701,28 @@ def _record_decision(
                     price_usd,
                     executed,
                     trade_id,
+                    Json(signals or []),
+                    Json(decision_graph or {}),
                 ),
             )
             return _row(cur.fetchone())
 
 
+def list_positions_for_strategy(strategy_id: str) -> list[dict[str, Any]]:
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM hf_paper_positions WHERE strategy_id = %s AND units > 0 ORDER BY symbol",
+                (strategy_id,),
+            )
+            return [_row(r) for r in cur.fetchall()]
+
+
 def evaluate_strategy(strategy_id: str, execute: bool = True) -> dict[str, Any]:
-    """Apply TP/SL + simple momentum rules; optionally execute paper trades."""
+    """Covenant 18-analyst decisions + user TP/SL overrides. Auditable signal graph."""
+    from covenant_pipeline import analyze_yahoo_asset
+
     strategy = get_strategy(strategy_id)
     if not strategy or strategy.get("status") != "active":
         return {"error": "Strategy not active", "strategy_id": strategy_id}
@@ -645,85 +731,90 @@ def evaluate_strategy(strategy_id: str, execute: bool = True) -> dict[str, Any]:
     rules = strategy.get("rules") or {}
     tp = float(rules.get("take_profit_pct") or 0)
     sl = float(rules.get("stop_loss_pct") or 0)
+    horizon = int(strategy.get("horizon_days") or rules.get("horizon_days") or 90)
+    lookback = max(90, min(500, horizon * 2))
     portfolio_id = strategy["portfolio_id"]
     user_wallet = strategy["user_wallet"]
 
     refresh_symbols(symbols, force=False)
-    positions = {p["symbol"]: p for p in list_positions(portfolio_id)}
+    positions = {p["symbol"]: p for p in list_positions_for_strategy(strategy_id)}
+    portfolio = get_portfolio(portfolio_id)
+    cash = float((portfolio or {}).get("cash_usd") or 0)
+    # Mark equity for this strategy sleeve + shared cash
     snaps = {s["symbol"]: s for s in get_market_snapshots(symbols)}
+    sleeve_value = 0.0
+    marked_positions = []
+    for sym, pos in positions.items():
+        mark = float((snaps.get(sym) or {}).get("price_usd") or pos.get("mark_price_usd") or pos.get("avg_entry_usd") or 0)
+        mv = float(pos["units"]) * mark
+        sleeve_value += mv
+        marked_positions.append({**pos, "market_value_usd": mv, "mark_price_usd": mark})
+    equity = cash + sleeve_value
 
     decisions = []
     for sym in symbols:
-        snap = snaps.get(sym) or {}
-        price = float(snap.get("price_usd") or 0)
-        if not price:
-            continue
         pos = positions.get(sym)
-        change = float(snap.get("change_24h_pct") or 0)
-        action = "hold"
-        rationale = "No signal"
-        confidence = 0.4
+        price = float((snaps.get(sym) or {}).get("price_usd") or 0)
+        analysis = analyze_yahoo_asset(
+            sym,
+            lookback_days=lookback,
+            equity_usd=equity,
+            cash_usd=cash,
+            existing_positions=marked_positions,
+        )
+        if analysis.get("error"):
+            dec = _record_decision(
+                strategy_id, portfolio_id, user_wallet, sym, "hold",
+                f"Analysis error: {analysis['error']}", price or 0, 10, False, None, [], {"error": analysis["error"]},
+            )
+            decisions.append(dec)
+            continue
 
-        if pos and float(pos.get("units") or 0) > 0:
+        action = analysis.get("action") or "hold"
+        synthesis = analysis.get("synthesis") or {}
+        rationale = (
+            f"Covenant 18-analyst composite {synthesis.get('composite_score')} → {action} "
+            f"(domains {synthesis.get('domain_scores')})"
+        )
+        confidence = float(synthesis.get("confidence") or 50)
+        signals = analysis.get("analyst_signals") or []
+        graph = analysis.get("decision_graph") or {}
+
+        # User TP/SL overrides (compliance R15)
+        if pos and float(pos.get("units") or 0) > 0 and price:
             entry = float(pos.get("avg_entry_usd") or price)
             pnl_pct = ((price - entry) / entry) * 100 if entry else 0
             if tp and pnl_pct >= tp:
                 action = "sell"
-                rationale = f"Take-profit hit: +{pnl_pct:.2f}% >= TP {tp}%"
-                confidence = 0.85
+                rationale = f"Take-profit hit: +{pnl_pct:.2f}% >= TP {tp}% (overrides signals)"
+                confidence = max(confidence, 85)
+                graph["override"] = "take_profit"
             elif sl and pnl_pct <= -abs(sl):
                 action = "sell"
-                rationale = f"Stop-loss hit: {pnl_pct:.2f}% <= -SL {abs(sl)}%"
-                confidence = 0.9
-            elif change <= -5 and strategy.get("mode") in ("agent", "hybrid"):
-                action = "buy"
-                rationale = f"Agent dip-buy: 24h change {change:.2f}%"
-                confidence = 0.55
-            elif change >= 8 and strategy.get("mode") in ("agent", "hybrid") and pnl_pct > 5:
-                action = "hold"
-                rationale = f"Momentum extended (+{change:.2f}% 24h); hold winners"
-                confidence = 0.5
-            else:
-                action = "hold"
-                rationale = f"Position PnL {pnl_pct:.2f}% within TP/SL band"
-                confidence = 0.45
-        else:
-            # Flat — agent may initiate buy on mild weakness / user mode waits
-            if strategy.get("mode") in ("agent", "hybrid") and change <= -3:
-                action = "buy"
-                rationale = f"Agent entry: weakness {change:.2f}% with cash available"
-                confidence = 0.5
-            else:
-                action = "hold"
-                rationale = "No open position; waiting for entry criteria"
-                confidence = 0.35
+                rationale = f"Stop-loss hit: {pnl_pct:.2f}% <= -SL {abs(sl)}% (overrides signals)"
+                confidence = max(confidence, 90)
+                graph["override"] = "stop_loss"
 
         trade_id = None
         executed = False
         if execute and action in ("buy", "sell"):
-            portfolio = get_portfolio(portfolio_id)
-            cash = float((portfolio or {}).get("cash_usd") or 0)
-            if action == "buy" and cash >= 25:
-                max_pct = float(rules.get("max_position_pct") or 25) / 100.0
-                equity_est = cash  # approximate; fine for paper
-                for p in positions.values():
-                    equity_est += float(p.get("units") or 0) * float(
-                        (snaps.get(p["symbol"]) or {}).get("price_usd") or p.get("avg_entry_usd") or 0
+            if action == "buy":
+                notional = float(analysis.get("suggested_notional_usd") or 0)
+                if notional >= 25 and cash >= 25:
+                    result = execute_paper_trade(
+                        portfolio_id=portfolio_id,
+                        strategy_id=strategy_id,
+                        user_wallet=user_wallet,
+                        symbol=sym,
+                        side="BUY",
+                        notional_usd=notional,
+                        reason=rationale[:240],
+                        decision="buy",
                     )
-                notional = min(cash * 0.2, equity_est * max_pct)
-                result = execute_paper_trade(
-                    portfolio_id=portfolio_id,
-                    strategy_id=strategy_id,
-                    user_wallet=user_wallet,
-                    symbol=sym,
-                    side="BUY",
-                    notional_usd=notional,
-                    reason=rationale,
-                    decision="buy",
-                )
-                if result.get("trade"):
-                    executed = True
-                    trade_id = result["trade"]["id"]
+                    if result.get("trade"):
+                        executed = True
+                        trade_id = result["trade"]["id"]
+                        cash = float(result.get("cash_usd") or cash)
             elif action == "sell" and pos:
                 result = execute_paper_trade(
                     portfolio_id=portfolio_id,
@@ -732,24 +823,28 @@ def evaluate_strategy(strategy_id: str, execute: bool = True) -> dict[str, Any]:
                     symbol=sym,
                     side="SELL",
                     units=float(pos["units"]),
-                    reason=rationale,
+                    reason=rationale[:240],
                     decision="sell",
                 )
                 if result.get("trade"):
                     executed = True
                     trade_id = result["trade"]["id"]
+                    cash = float(result.get("cash_usd") or cash)
 
+        price = price or float((analysis.get("features") or {}).get("price") or 0)
         dec = _record_decision(
             strategy_id,
             portfolio_id,
             user_wallet,
             sym,
             action,
-            rationale,
+            rationale[:500],
             price,
-            confidence,
+            confidence / 100.0 if confidence > 1 else confidence,
             executed,
             trade_id,
+            signals,
+            graph,
         )
         decisions.append(dec)
 
@@ -763,8 +858,11 @@ def evaluate_strategy(strategy_id: str, execute: bool = True) -> dict[str, Any]:
 
     return {
         "strategy_id": strategy_id,
+        "horizon_days": horizon,
         "decisions": decisions,
         "count": len(decisions),
+        "analysts": 18,
+        "llm_required": False,
         "evaluated_at": _now().isoformat(),
     }
 
@@ -819,19 +917,30 @@ def run_strategy_backtest(
     symbols: Optional[list[str]] = None,
     capital_usd: float = DEFAULT_PAPER_CAPITAL,
 ) -> dict[str, Any]:
+    from covenant_picker import select_assets_for_horizon
+
     label = (period or "6m").lower().strip()
     days = PERIOD_DAYS.get(label)
     if not days:
         return {"error": f"Unknown period '{period}'. Use 1w, 1m, 3m, 6m, 1y."}
 
     rules = {}
+    horizon_days = days
     if strategy_id:
         strategy = get_strategy(strategy_id, user_wallet)
         if not strategy:
             return {"error": "Strategy not found"}
         symbols = list(strategy.get("symbols") or [])
         rules = strategy.get("rules") or {}
-    syms = [s.strip().upper() for s in (symbols or DEFAULT_STOCK_CRYPTO_BOOK)]
+        horizon_days = int(strategy.get("horizon_days") or rules.get("horizon_days") or days)
+    elif not symbols:
+        pick = select_assets_for_horizon(horizon_days=days)
+        symbols = list(pick.get("symbols") or [])
+        rules = {"picker": pick.get("note"), "horizon_days": days}
+
+    syms = [s.strip().upper() for s in (symbols or [])]
+    if not syms:
+        return {"error": "No symbols to backtest"}
     end = _now().date()
     start = end - timedelta(days=days)
     result = run_mock_backtest(
@@ -870,11 +979,13 @@ def run_strategy_backtest(
     return {
         "backtest_id": bid,
         "period": label,
+        "horizon_days": horizon_days,
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
         "symbols": syms,
         "rules": rules,
         "result": result,
+        "metrics": result.get("metrics"),
         "created_at": row["created_at"].isoformat() if row else None,
     }
 
@@ -901,17 +1012,67 @@ def list_backtests(user_wallet: str, limit: int = 20) -> list[dict[str, Any]]:
 def paper_dashboard(user_wallet: str) -> dict[str, Any]:
     summary = portfolio_summary(user_wallet)
     strategies = list_strategies(user_wallet)
-    decisions = list_decisions(user_wallet, limit=30)
-    trades = list_trades(user_wallet, limit=30)
+    decisions = list_decisions(user_wallet, limit=50)
+    trades = list_trades(user_wallet, limit=50)
     backtests = list_backtests(user_wallet, limit=10)
     watched = list_watched_symbols()
     market = get_market_snapshots(watched) if watched else []
+
+    # Per-strategy breakdown (same asset can appear under multiple strategies)
+    by_strategy: list[dict[str, Any]] = []
+    for s in strategies:
+        sid = s["id"]
+        spos = list_positions_for_strategy(sid)
+        snaps = {m["symbol"]: m for m in get_market_snapshots([p["symbol"] for p in spos])} if spos else {}
+        marked = []
+        sleeve = 0.0
+        for p in spos:
+            mark = float((snaps.get(p["symbol"]) or {}).get("price_usd") or p.get("mark_price_usd") or p.get("avg_entry_usd") or 0)
+            mv = float(p["units"]) * mark
+            cost = float(p["units"]) * float(p["avg_entry_usd"] or 0)
+            sleeve += mv
+            marked.append(
+                {
+                    **p,
+                    "strategy_id": sid,
+                    "strategy_name": s.get("name"),
+                    "mark_price_usd": mark,
+                    "market_value_usd": round(mv, 2),
+                    "unrealized_pnl_usd": round(mv - cost, 2),
+                }
+            )
+        s_trades = [t for t in trades if t.get("strategy_id") == sid][:15]
+        s_decisions = [d for d in decisions if d.get("strategy_id") == sid][:15]
+        by_strategy.append(
+            {
+                "strategy": s,
+                "positions": marked,
+                "sleeve_value_usd": round(sleeve, 2),
+                "trades": s_trades,
+                "decisions": s_decisions,
+                "symbols": s.get("symbols") or [],
+                "horizon_days": s.get("horizon_days"),
+                "horizon_label": s.get("horizon_label"),
+            }
+        )
+
+    # Shared assets across strategies
+    symbol_to_strategies: dict[str, list[str]] = {}
+    for block in by_strategy:
+        for sym in block["symbols"]:
+            symbol_to_strategies.setdefault(sym, []).append(block["strategy"]["id"])
+    overlapping = {k: v for k, v in symbol_to_strategies.items() if len(v) > 1}
+
     return {
         "mode": "paper",
+        "governance": "Covenant 18-analyst deterministic",
+        "llm_required": False,
         "monitor_interval_seconds": HF_MONITOR_INTERVAL_SECONDS,
         "last_market_refresh_at": _last_market_refresh_at.isoformat() if _last_market_refresh_at else None,
         "portfolio": summary,
         "strategies": strategies,
+        "by_strategy": by_strategy,
+        "overlapping_assets": overlapping,
         "decisions": decisions,
         "trades": trades,
         "backtests": backtests,

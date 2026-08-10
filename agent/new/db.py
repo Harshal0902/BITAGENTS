@@ -353,6 +353,8 @@ MIGRATION_STATEMENTS = [
         allocation_pct      JSONB NOT NULL DEFAULT '{}'::jsonb,
         rules               JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_by          VARCHAR(16) NOT NULL DEFAULT 'agent',
+        horizon_days        INTEGER,
+        horizon_label       VARCHAR(32),
         created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         last_evaluated_at   TIMESTAMPTZ
@@ -369,11 +371,15 @@ MIGRATION_STATEMENTS = [
         units               DOUBLE PRECISION NOT NULL DEFAULT 0,
         avg_entry_usd       DOUBLE PRECISION NOT NULL DEFAULT 0,
         mark_price_usd      DOUBLE PRECISION,
-        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (portfolio_id, symbol)
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_hf_paper_positions_portfolio ON hf_paper_positions (portfolio_id)",
+    "CREATE INDEX IF NOT EXISTS idx_hf_paper_positions_strategy ON hf_paper_positions (strategy_id)",
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_hf_pos_portfolio_strategy_symbol
+        ON hf_paper_positions (portfolio_id, strategy_id, symbol)
+    """,
     """
     CREATE TABLE IF NOT EXISTS hf_paper_trades (
         id                  VARCHAR(16) PRIMARY KEY,
@@ -392,6 +398,7 @@ MIGRATION_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_hf_paper_trades_portfolio ON hf_paper_trades (portfolio_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_hf_paper_trades_user ON hf_paper_trades (user_wallet, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_hf_paper_trades_strategy ON hf_paper_trades (strategy_id, created_at DESC)",
     """
     CREATE TABLE IF NOT EXISTS hf_decisions (
         id                  VARCHAR(16) PRIMARY KEY,
@@ -405,6 +412,8 @@ MIGRATION_STATEMENTS = [
         price_usd           DOUBLE PRECISION,
         executed            BOOLEAN NOT NULL DEFAULT FALSE,
         trade_id            VARCHAR(16),
+        signals             JSONB NOT NULL DEFAULT '[]'::jsonb,
+        decision_graph      JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
@@ -425,6 +434,16 @@ MIGRATION_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_hf_backtest_runs_user ON hf_backtest_runs (user_wallet, created_at DESC)",
+    # Retrofit existing Neon DBs
+    "ALTER TABLE hf_strategies ADD COLUMN IF NOT EXISTS horizon_days INTEGER",
+    "ALTER TABLE hf_strategies ADD COLUMN IF NOT EXISTS horizon_label VARCHAR(32)",
+    "ALTER TABLE hf_decisions ADD COLUMN IF NOT EXISTS signals JSONB NOT NULL DEFAULT '[]'::jsonb",
+    "ALTER TABLE hf_decisions ADD COLUMN IF NOT EXISTS decision_graph JSONB NOT NULL DEFAULT '{}'::jsonb",
+    "ALTER TABLE hf_paper_positions DROP CONSTRAINT IF EXISTS hf_paper_positions_portfolio_id_symbol_key",
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_hf_pos_portfolio_strategy_symbol
+        ON hf_paper_positions (portfolio_id, strategy_id, symbol)
+    """,
 ]
 
 

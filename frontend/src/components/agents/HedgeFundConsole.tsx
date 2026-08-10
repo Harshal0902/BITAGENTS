@@ -51,6 +51,7 @@ export function HedgeFundConsole() {
   const [symbolInput, setSymbolInput] = useState("");
   const [tpInput, setTpInput] = useState("15");
   const [slInput, setSlInput] = useState("8");
+  const [horizonDays, setHorizonDays] = useState("90");
   const [agentPick, setAgentPick] = useState(true);
   const [editTp, setEditTp] = useState<Record<string, string>>({});
   const [editSl, setEditSl] = useState<Record<string, string>>({});
@@ -131,7 +132,10 @@ export function HedgeFundConsole() {
         mode: agentPick ? "agent" : "user",
         take_profit_pct: Number(tpInput) || 15,
         stop_loss_pct: Number(slInput) || 8,
-        notes: agentPick ? "Agent-picked book" : "User-selected symbols",
+        horizon_days: Number(horizonDays) || 90,
+        notes: agentPick
+          ? `Agent pick for ${horizonDays}d horizon`
+          : `User-selected symbols · horizon ${horizonDays}d`,
       });
       await refreshDashboard();
     } catch (err) {
@@ -198,8 +202,8 @@ export function HedgeFundConsole() {
       <div className="border border-grid bg-surface/40 px-4 py-4">
         <p className="text-sm leading-relaxed text-muted-foreground">{HEDGE_FUND.description}</p>
         <p className="mt-2 font-mono text-xs text-signal">
-          Paper mode · market monitor every {hours}h (shared quotes) · Fee model:{" "}
-          {HEDGE_FUND.managementFeePct}% / {HEDGE_FUND.performanceFeePct}% ·{" "}
+          18-analyst · paper · monitor every {hours}h · shared quotes · fees{" "}
+          {HEDGE_FUND.managementFeePct}/{HEDGE_FUND.performanceFeePct} · LLM optional ·{" "}
           <Link href="/agents/hedge-fund/pricing" className="underline hover:text-foreground">
             Pricing
           </Link>
@@ -267,7 +271,7 @@ export function HedgeFundConsole() {
         </Panel>
 
         <Panel title="New strategy" className="lg:col-span-3">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
             <label className="flex items-center gap-2 font-mono text-xs">
               <input
                 type="checkbox"
@@ -275,17 +279,24 @@ export function HedgeFundConsole() {
                 onChange={(e) => setAgentPick(e.target.checked)}
                 disabled={!token}
               />
-              Agent picks book
+              Agent picks assets for horizon
             </label>
             {!agentPick && (
               <input
                 value={symbolInput}
                 onChange={(e) => setSymbolInput(e.target.value)}
                 placeholder="AAPL NVDA BTC ETH"
-                className="flex-1 border border-grid bg-background px-3 py-2 font-mono text-sm"
+                className="min-w-[12rem] flex-1 border border-grid bg-background px-3 py-2 font-mono text-sm"
               />
             )}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              <input
+                value={horizonDays}
+                onChange={(e) => setHorizonDays(e.target.value)}
+                className="w-24 border border-grid bg-background px-2 py-2 font-mono text-sm"
+                title="Horizon days"
+                placeholder="Days"
+              />
               <input
                 value={tpInput}
                 onChange={(e) => setTpInput(e.target.value)}
@@ -310,6 +321,9 @@ export function HedgeFundConsole() {
               </button>
             </div>
           </div>
+          <p className="mt-2 font-mono text-[10px] text-muted-foreground">
+            Horizon (days) drives lookback + asset ranking. Same ticker can sit in multiple strategies.
+          </p>
         </Panel>
       </div>
 
@@ -323,7 +337,7 @@ export function HedgeFundConsole() {
               <div key={s.id} className="border border-grid bg-surface/30 p-3 font-mono text-[11px]">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-signal">
-                    {s.name} · {s.mode}/{s.status}
+                    {s.name} · {s.mode}/{s.status} · {s.horizon_days || s.rules?.horizon_days || "?"}d
                   </span>
                   <span className="text-muted-foreground">{s.id}</span>
                 </div>
@@ -367,7 +381,76 @@ export function HedgeFundConsole() {
           </div>
         </Panel>
 
-        <Panel title="Positions">
+        <Panel title="Overlapping assets">
+          <div className="max-h-72 space-y-2 overflow-y-auto font-mono text-[11px]">
+            {Object.keys(dashboard?.overlapping_assets || {}).length === 0 ? (
+              <p className="text-muted-foreground">No shared tickers across strategies yet.</p>
+            ) : (
+              Object.entries(dashboard?.overlapping_assets || {}).map(([sym, sids]) => (
+                <div key={sym} className="border-b border-grid/40 pb-1.5">
+                  <span className="text-signal">{sym}</span>{" "}
+                  <span className="text-muted-foreground">→ {sids.join(", ")}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </Panel>
+      </div>
+
+      <Panel title="By strategy — positions, trades, decisions">
+        <div className="max-h-[28rem] space-y-4 overflow-y-auto">
+          {(dashboard?.by_strategy || []).length === 0 && (
+            <p className="font-mono text-xs text-muted-foreground">Create a strategy to see sleeves.</p>
+          )}
+          {(dashboard?.by_strategy || []).map((block) => {
+            const s = block.strategy;
+            return (
+              <div key={s.id} className="border border-grid bg-surface/20 p-3 font-mono text-[11px]">
+                <div className="mb-2 flex flex-wrap justify-between gap-2 text-signal">
+                  <span>
+                    {s.name} · sleeve {money(block.sleeve_value_usd)} · horizon{" "}
+                    {block.horizon_days || s.horizon_days || "?"}d
+                  </span>
+                  <span className="text-muted-foreground">{s.id}</span>
+                </div>
+                <p className="mb-2 text-muted-foreground">Assets: {(block.symbols || []).join(", ") || "—"}</p>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div>
+                    <div className="mb-1 text-muted-foreground">Positions</div>
+                    {(block.positions || []).length === 0 && <p>—</p>}
+                    {(block.positions || []).map((p) => (
+                      <div key={`${s.id}-${p.symbol}`}>
+                        {p.symbol} {Number(p.units).toPrecision(3)} · PnL {money(p.unrealized_pnl_usd)}
+                      </div>
+                    ))}
+                  </div>
+                  <div>
+                    <div className="mb-1 text-muted-foreground">Trades</div>
+                    {(block.trades || []).slice(0, 5).map((t, i) => (
+                      <div key={t.id || i}>
+                        {t.side} {t.symbol} {money(t.notional_usd)}
+                      </div>
+                    ))}
+                    {(block.trades || []).length === 0 && <p>—</p>}
+                  </div>
+                  <div>
+                    <div className="mb-1 text-muted-foreground">Decisions</div>
+                    {(block.decisions || []).slice(0, 5).map((d, i) => (
+                      <div key={d.id || i}>
+                        {d.action} {d.symbol}
+                      </div>
+                    ))}
+                    {(block.decisions || []).length === 0 && <p>—</p>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Panel>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Panel title="Positions (all)">
           <div className="max-h-72 overflow-y-auto font-mono text-[11px]">
             {positions.length === 0 ? (
               <p className="text-muted-foreground">No open positions.</p>
@@ -375,6 +458,7 @@ export function HedgeFundConsole() {
               <table className="w-full text-left">
                 <thead className="text-muted-foreground">
                   <tr>
+                    <th className="pb-2 font-normal">Strategy</th>
                     <th className="pb-2 font-normal">Symbol</th>
                     <th className="pb-2 font-normal">Units</th>
                     <th className="pb-2 font-normal">Entry</th>
@@ -383,32 +467,34 @@ export function HedgeFundConsole() {
                   </tr>
                 </thead>
                 <tbody>
-                  {positions.map((p) => (
-                    <tr key={`${p.symbol}-${p.id || p.strategy_id}`} className="border-t border-grid/60">
-                      <td className="py-1.5 text-signal">{p.symbol}</td>
-                      <td className="py-1.5">{Number(p.units).toPrecision(4)}</td>
-                      <td className="py-1.5">{money(p.avg_entry_usd)}</td>
-                      <td className="py-1.5">{money(p.mark_price_usd)}</td>
-                      <td className={`py-1.5 ${(p.unrealized_pnl_usd || 0) >= 0 ? "text-signal" : "text-warn"}`}>
-                        {money(p.unrealized_pnl_usd)}
-                      </td>
-                    </tr>
-                  ))}
+                  {(dashboard?.by_strategy || []).flatMap((b) =>
+                    (b.positions || []).map((p) => (
+                      <tr key={`${b.strategy.id}-${p.symbol}-${p.id}`} className="border-t border-grid/60">
+                        <td className="py-1.5 text-muted-foreground">{b.strategy.id}</td>
+                        <td className="py-1.5 text-signal">{p.symbol}</td>
+                        <td className="py-1.5">{Number(p.units).toPrecision(4)}</td>
+                        <td className="py-1.5">{money(p.avg_entry_usd)}</td>
+                        <td className="py-1.5">{money(p.mark_price_usd)}</td>
+                        <td className={`py-1.5 ${(p.unrealized_pnl_usd || 0) >= 0 ? "text-signal" : "text-warn"}`}>
+                          {money(p.unrealized_pnl_usd)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             )}
           </div>
         </Panel>
-      </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
         <Panel title="Decisions">
-          <div className="max-h-56 space-y-2 overflow-y-auto font-mono text-[11px]">
+          <div className="max-h-72 space-y-2 overflow-y-auto font-mono text-[11px]">
             {(dashboard?.decisions || []).length === 0 && (
               <p className="text-muted-foreground">No decisions yet — run a monitor cycle.</p>
             )}
             {(dashboard?.decisions || []).slice(0, 20).map((d, i) => (
               <div key={d.id || i} className="border-b border-grid/40 pb-1.5">
+                <span className="text-muted-foreground">[{d.strategy_id}]</span>{" "}
                 <span className="text-signal">{d.action}</span> {d.symbol}{" "}
                 <span className="text-muted-foreground">
                   {d.created_at ? String(d.created_at).slice(0, 16) : ""} — {d.rationale}
@@ -417,6 +503,9 @@ export function HedgeFundConsole() {
             ))}
           </div>
         </Panel>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
         <Panel title="Trades">
           <div className="max-h-56 space-y-2 overflow-y-auto font-mono text-[11px]">
             {(dashboard?.trades || []).length === 0 && (
@@ -424,12 +513,14 @@ export function HedgeFundConsole() {
             )}
             {(dashboard?.trades || []).slice(0, 20).map((t, i) => (
               <div key={t.id || i} className="border-b border-grid/40 pb-1.5">
+                <span className="text-muted-foreground">[{t.strategy_id}]</span>{" "}
                 <span className="text-signal">{t.side}</span> {t.symbol} {money(t.notional_usd)} @ {money(t.price_usd)}{" "}
                 <span className="text-muted-foreground">{t.reason}</span>
               </div>
             ))}
           </div>
         </Panel>
+        <div />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">

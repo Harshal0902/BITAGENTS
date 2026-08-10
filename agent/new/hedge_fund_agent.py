@@ -29,7 +29,8 @@ from hedge_fund_paper import (
     run_strategy_backtest,
     update_strategy_rules,
 )
-from yahoo_market_data import DEFAULT_STOCK_CRYPTO_BOOK, KNOWN_STOCK_TICKERS, YAHOO_TICKER_MAP
+from yahoo_market_data import extract_tickers_from_text
+from covenant_picker import parse_horizon_days
 
 HEDGE_FUND_MODEL = (
     CAPIX_MODEL
@@ -99,8 +100,10 @@ TOOLS = [
         "function": {
             "name": "create_paper_strategy",
             "description": (
-                "Create a PAPER trading strategy. Omit tokens for agent-picked default stock+crypto book. "
-                "Pass user TP/SL in rules (take_profit_pct, stop_loss_pct). Saves to DB; 4h monitor evaluates it."
+                "Create a PAPER strategy under the Covenant 18-analyst system. "
+                "Omit tokens to let the agent pick best-fit assets for the trading horizon "
+                "(e.g. 2 weeks, 6 months) — NOT a fixed default book. "
+                "Pass take_profit_pct / stop_loss_pct / horizon_days."
             ),
             "parameters": {
                 "type": "object",
@@ -111,6 +114,7 @@ TOOLS = [
                     "take_profit_pct": {"type": "number"},
                     "stop_loss_pct": {"type": "number"},
                     "capital_usd": {"type": "number"},
+                    "horizon_days": {"type": "number", "description": "Trading horizon in days"},
                     "notes": {"type": "string"},
                 },
                 "required": [],
@@ -141,7 +145,10 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_paper_dashboard",
-            "description": "Paper portfolio, positions, strategies, recent decisions/trades, shared market snapshots.",
+            "description": (
+                "Paper portfolio with per-strategy positions/trades/decisions "
+                "(same asset can appear under multiple strategies)."
+            ),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -149,7 +156,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "run_strategy_backtest",
-            "description": "Backtest a saved strategy or symbol list for period 1w|1m|3m|6m|1y using Yahoo Finance.",
+            "description": "Backtest a saved strategy with SPY benchmark, Sharpe/Sortino/drawdown (1w|1m|3m|6m|1y).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -167,7 +174,8 @@ TOOLS = [
         "function": {
             "name": "run_mock_backtest",
             "description": (
-                "Ad-hoc historical simulation (not tied to a saved strategy). Yahoo Finance prices + news."
+                "Ad-hoc historical simulation. Omit tokens for Covenant horizon-based asset pick. "
+                "Includes SPY benchmark metrics."
             ),
             "parameters": {
                 "type": "object",
@@ -177,6 +185,7 @@ TOOLS = [
                     "end_date": {"type": "string"},
                     "capital_usd": {"type": "number"},
                     "include_news": {"type": "boolean"},
+                    "horizon_days": {"type": "number"},
                 },
                 "required": ["start_date", "end_date"],
             },
@@ -186,7 +195,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "run_portfolio_analysis",
-            "description": "Live Solana on-chain portfolio analysis (not paper trading).",
+            "description": "Live Solana on-chain portfolio analysis (legacy path).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -243,15 +252,19 @@ def _paper_tools(user_wallet: Optional[str] = None):
     def create_paper_strategy(**kwargs):
         if not wallet:
             return {"error": "Wallet sign-in required for paper trading"}
+        notes = kwargs.get("notes") or ""
         rules = {
             "take_profit_pct": kwargs.get("take_profit_pct", 15),
             "stop_loss_pct": kwargs.get("stop_loss_pct", 8),
-            "notes": kwargs.get("notes") or "",
+            "notes": notes,
             "objective": "max_profit",
         }
         tokens = kwargs.get("tokens")
         created_by = "user" if tokens else "agent"
         mode = kwargs.get("mode") or ("user" if tokens else "agent")
+        horizon_days = kwargs.get("horizon_days")
+        if horizon_days is None:
+            horizon_days = parse_horizon_days(notes)
         return create_strategy(
             user_wallet=wallet,
             symbols=tokens,
@@ -260,6 +273,8 @@ def _paper_tools(user_wallet: Optional[str] = None):
             rules=rules,
             capital_usd=kwargs.get("capital_usd"),
             created_by=created_by,
+            horizon_days=int(horizon_days) if horizon_days else None,
+            horizon_text=notes,
         )
 
     def update_paper_strategy(**kwargs):
@@ -312,50 +327,31 @@ def _paper_tools(user_wallet: Optional[str] = None):
 
 TOOL_REGISTRY = _paper_tools()  # default without wallet; run_* rebuilds per request
 
-SYSTEM_PROMPT = f"""You are **Hedge Fund Agent** in **PAPER TRADING** mode (1/10 fees:
+SYSTEM_PROMPT = f"""You are **Hedge Fund Agent** — Covenant Framework paper trading (1/10 fees:
 {MANAGEMENT_FEE_RATE*100:.0f}% mgmt + {PERFORMANCE_FEE_RATE*100:.0f}% performance).
 
-Capabilities:
-- `create_paper_strategy` — user picks tickers OR omit tokens for agent default book (AAPL/MSFT/NVDA/AMZN/BTC/ETH/SOL).
-  Store TP/SL via take_profit_pct / stop_loss_pct. Market is monitored every {HF_MONITOR_INTERVAL_SECONDS // 3600}h (shared snapshots).
-- `update_paper_strategy` — edit TP/SL, symbols, pause/close.
-- `get_paper_dashboard` — positions, decisions, trades, market.
-- `run_strategy_backtest` — backtest saved strategy or symbols for 1w/1m/3m/6m/1y.
-- `run_mock_backtest` — ad-hoc date-range simulation.
-- Solana live research tools remain available for on-chain tokens.
+Architecture (deterministic — LLM never required for trade decisions):
+- 18 analysts: Quant(5) + Value(6) + Macro(7) → confidence-weighted synthesis → Risk Engine → paper fills
+- Optional LLM is commentary only
 
-Rules: never invent fills/PnL — use tools. Paper only — no real orders. Not financial advice.
+Capabilities:
+- `create_paper_strategy` — user tickers OR omit tokens for horizon-based Covenant picker (NOT a fixed book).
+  Pass horizon_days / notes like "trade for 6 months". TP/SL stored and editable.
+- Shared Yahoo quotes; positions isolated per strategy (same symbol can appear under multiple strategies).
+- Monitor every {HF_MONITOR_INTERVAL_SECONDS // 3600}h.
+- `run_strategy_backtest` / `run_mock_backtest` — SPY benchmark, Sharpe/Sortino/max drawdown.
+
+Rules: never invent fills/PnL — use tools. Paper only. Not financial advice.
 """
 
 
 def _extract_tokens(text: str) -> list[str]:
-    """Return explicit Yahoo-eligible tickers only — never English filler words."""
-    if OPEN_MANDATE_RE.search(text) and not re.search(
-        r"\b(?:BTC|ETH|SOL|AAPL|MSFT|NVDA|AMZN|GOOGL|TSLA|SPY|QQQ)\b", text, re.I
-    ):
+    """Return Yahoo-eligible tickers / aliases from free text (XRP, S&P500, AAPL, …)."""
+    found = extract_tickers_from_text(text)
+    # Open mandate with no explicit assets → empty so picker runs
+    if not found and OPEN_MANDATE_RE.search(text):
         return []
-
-    found: list[str] = []
-    # $AAPL style
-    for m in re.findall(r"\$([A-Za-z]{1,5})\b", text):
-        sym = m.upper()
-        if sym not in found:
-            found.append(sym)
-
-    # Explicit crypto / known stocks only when written as standalone tickers
-    candidates = re.findall(r"\b([A-Za-z]{1,5})\b", text.upper())
-    allow = set(YAHOO_TICKER_MAP) | set(KNOWN_STOCK_TICKERS) | {"BTC", "ETH", "SOL"}
-    for s in candidates:
-        if s in allow and s not in found:
-            found.append(s)
-
-    # Normalize bitcoin/ethereum words
-    if re.search(r"\bbitcoin\b", text, re.I) and "BTC" not in found:
-        found.append("BTC")
-    if re.search(r"\bethereum\b", text, re.I) and "ETH" not in found:
-        found.append("ETH")
-
-    return found[:8]
+    return found[:12]
 
 
 def _extract_capital(text: str) -> float:
@@ -590,9 +586,23 @@ def _format_backtest_reply(result: dict[str, Any]) -> str:
             f"total ${_fmt(fees.get('total_fees_usd', 0))}",
             f"- Net PnL after fees: ${_fmt(result.get('net_pnl_usd', 0))} ({result.get('net_pnl_pct', 0)}%)",
             "",
-            "**Positions**",
+            "**Risk / benchmark (SPY)**",
         ]
     )
+    metrics = result.get("metrics") or {}
+    if metrics and not metrics.get("error"):
+        lines.extend(
+            [
+                f"- Sharpe: {metrics.get('sharpe')} · Sortino: {metrics.get('sortino')}",
+                f"- Max drawdown: {metrics.get('max_drawdown_pct')}%",
+                f"- SPY return: {metrics.get('spy_return_pct')}% · Alpha vs SPY: {metrics.get('alpha_vs_spy_pct')}%",
+                f"- Beta vs SPY: {metrics.get('beta_vs_spy')}",
+                "",
+                "**Positions**",
+            ]
+        )
+    else:
+        lines.append("**Positions**")
     for pos in result.get("positions") or []:
         lines.append(
             f"- **{pos.get('symbol')}** ({pos.get('asset_class') or 'asset'}): "
@@ -672,7 +682,7 @@ def _try_backtest_shortcut(user_input: str) -> Optional[tuple[str, list[dict[str
         {
             "tool": "run_mock_backtest",
             "args": {
-                "tokens": tokens or list(DEFAULT_STOCK_CRYPTO_BOOK),
+                "tokens": tokens or result.get("selected_assets") or [],
                 "start_date": start_date,
                 "end_date": end_date,
                 "capital_usd": capital,
@@ -726,10 +736,9 @@ def _format_paper_dashboard(dash: dict[str, Any]) -> str:
     if dash.get("error"):
         return f"**Paper dashboard error:** {dash['error']}"
     port = dash.get("portfolio") or {}
-    positions = port.get("positions") or dash.get("positions") or []
     lines = [
         "**Paper Trading Dashboard**",
-        f"Mode: paper · Monitor every {HF_MONITOR_INTERVAL_SECONDS // 3600}h · Shared market cache",
+        f"Mode: paper · Covenant 18-analyst · Monitor every {HF_MONITOR_INTERVAL_SECONDS // 3600}h",
         f"Cash: ${_fmt(port.get('cash_usd'))} · Equity: ${_fmt(port.get('equity_usd'))} · "
         f"PnL: ${_fmt(port.get('pnl_usd') or port.get('unrealized_pnl_usd'))} "
         f"({port.get('pnl_pct', 0)}%)",
@@ -740,24 +749,56 @@ def _format_paper_dashboard(dash: dict[str, Any]) -> str:
         rules = s.get("rules") or {}
         lines.append(
             f"- `{s.get('id')}` **{s.get('name')}** [{s.get('mode')}/{s.get('status')}] "
+            f"· horizon {s.get('horizon_days') or rules.get('horizon_days') or '?'}d "
             f"· {', '.join(s.get('symbols') or [])} "
             f"· TP {rules.get('take_profit_pct')}% / SL {rules.get('stop_loss_pct')}%"
         )
+    overlap = dash.get("overlapping_assets") or {}
+    if overlap:
+        lines.append("")
+        lines.append("**Overlapping assets (multi-strategy)**")
+        for sym, sids in overlap.items():
+            lines.append(f"- **{sym}** in strategies: {', '.join(sids)}")
+
     lines.append("")
-    lines.append("**Positions**")
-    if not positions:
-        lines.append("- none yet (monitor will allocate on next cycle)")
-    for p in positions:
-        lines.append(
-            f"- **{p.get('symbol')}** {p.get('side') or 'long'}: "
-            f"{p.get('units') or p.get('qty')} @ ${_fmt(p.get('avg_entry_usd') or p.get('avg_price_usd'))} "
-            f"· mkt ${_fmt(p.get('mark_price_usd') or p.get('mark_usd'))} · "
-            f"PnL ${_fmt(p.get('unrealized_pnl_usd'))}"
-        )
+    lines.append("**Positions by strategy**")
+    by_strategy = dash.get("by_strategy") or []
+    if by_strategy:
+        for block in by_strategy:
+            st = block.get("strategy") or {}
+            lines.append(
+                f"### `{st.get('id')}` {st.get('name')} · sleeve ${_fmt(block.get('sleeve_value_usd'))}"
+            )
+            positions = block.get("positions") or []
+            if not positions:
+                lines.append("- no open positions")
+            for p in positions:
+                lines.append(
+                    f"- **{p.get('symbol')}**: {p.get('units')} @ ${_fmt(p.get('avg_entry_usd'))} "
+                    f"· mkt ${_fmt(p.get('mark_price_usd'))} · PnL ${_fmt(p.get('unrealized_pnl_usd'))}"
+                )
+            for d in (block.get("decisions") or [])[:4]:
+                lines.append(
+                    f"  · decision `{d.get('action')}` {d.get('symbol')} — {(d.get('rationale') or '')[:100]}"
+                )
+    else:
+        lines.append("")
+        lines.append("**Positions**")
+        positions = port.get("positions") or dash.get("positions") or []
+        if not positions:
+            lines.append("- none yet (monitor will allocate on next cycle)")
+        for p in positions:
+            lines.append(
+                f"- **{p.get('symbol')}** {p.get('side') or 'long'}: "
+                f"{p.get('units') or p.get('qty')} @ ${_fmt(p.get('avg_entry_usd') or p.get('avg_price_usd'))} "
+                f"· mkt ${_fmt(p.get('mark_price_usd') or p.get('mark_usd'))} · "
+                f"PnL ${_fmt(p.get('unrealized_pnl_usd'))}"
+            )
     lines.extend(["", "**Recent decisions**"])
     for d in (dash.get("decisions") or [])[:8]:
         lines.append(
-            f"- {str(d.get('created_at', ''))[:16]} `{d.get('action')}` {d.get('symbol') or ''} — {d.get('rationale') or ''}"
+            f"- {str(d.get('created_at', ''))[:16]} `{d.get('action')}` "
+            f"{d.get('symbol') or ''} [{d.get('strategy_id')}] — {d.get('rationale') or ''}"
         )
     lines.append("\nAsk me to create/update strategies, run a backtest (1w/6m/1y), or edit TP/SL.")
     return "\n".join(lines)
@@ -837,6 +878,8 @@ def _try_paper_shortcut(
             rules=rules,
             capital_usd=_extract_capital(user_input),
             created_by=created_by,
+            horizon_days=parse_horizon_days(user_input),
+            horizon_text=user_input,
         )
         if result.get("error"):
             return f"**Could not create strategy:** {result['error']}", [
@@ -848,12 +891,16 @@ def _try_paper_shortcut(
         except Exception:
             pass
         dash = paper_dashboard(user_wallet)
+        pick_note = (result.get("picker") or {}).get("note") or ""
         reply = (
             f"**Paper strategy created** `{result.get('id')}`\n"
-            f"- Mode: {result.get('mode')} · Symbols: {', '.join(result.get('symbols') or [])}\n"
+            f"- Mode: {result.get('mode')} · Horizon: {result.get('horizon_days')}d "
+            f"({result.get('horizon_label')})\n"
+            f"- Symbols: {', '.join(result.get('symbols') or [])}\n"
             f"- TP {rules['take_profit_pct']}% / SL {rules['stop_loss_pct']}%\n"
-            f"- Market monitor runs every {HF_MONITOR_INTERVAL_SECONDS // 3600}h "
-            f"(shared quotes across users).\n\n"
+            f"- Covenant 18-analyst decisions · LLM not required\n"
+            + (f"- {pick_note}\n" if pick_note else "")
+            + f"- Market monitor every {HF_MONITOR_INTERVAL_SECONDS // 3600}h\n\n"
             + _format_paper_dashboard(dash)
         )
         return reply, [
