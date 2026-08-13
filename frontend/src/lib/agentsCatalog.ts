@@ -45,7 +45,7 @@ export type MarketplaceAgent = {
 };
 
 export const MARKETPLACE_STATS = {
-  liveAgents: "7",
+  liveAgents: "8",
   tasks24h: "102",
   activeBuilders: "22",
   uptime30d: "99.2%",
@@ -98,6 +98,23 @@ export const FEATURED_AGENTS: MarketplaceAgent[] = [
     description:
       "Run volume campaigns. Deposit your token + SOL, create or reuse a pool, and schedule buy/sell cycles at your chosen frequency.",
     tagline: "DLMM volume · pool infra",
+    pricePerTask: "0.25% / leg",
+    runs: "-",
+    volumeSol: "-",
+    rating: 4.8,
+    iconId: "swap",
+    available: true,
+    model: "meta-llama/llama-3.1-8b-instruct",
+    cluster: "mainnet",
+  },
+  {
+    id: "volume2",
+    slug: "volume2",
+    name: "BITAGENTS Volume",
+    category: "Trading",
+    description:
+      "One-click BITAGENTS volume campaigns. Deposit SOL, pick Quick / Standard / Full day — no token fields or Meteora setup.",
+    tagline: "BITAGENTS presets · simple",
     pricePerTask: "0.25% / leg",
     runs: "-",
     volumeSol: "-",

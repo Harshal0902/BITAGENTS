@@ -29,31 +29,59 @@ HORIZON_PRESETS = {
 }
 
 
-def parse_horizon_days(text: str = "", horizon_days: Optional[int] = None) -> int:
-    if horizon_days and horizon_days > 0:
-        return int(horizon_days)
+def parse_horizon_days(text: str = "", horizon_days: Optional[int] = None) -> Optional[int]:
+    """
+    Return horizon in days, or None for open-ended (user closes manually).
+    Explicit horizon_days <= 0 means open-ended.
+    """
+    if horizon_days is not None:
+        try:
+            d = int(horizon_days)
+        except (TypeError, ValueError):
+            d = 0
+        return None if d <= 0 else d
+
     import re
 
     t = text or ""
+    if re.search(
+        r"\b(no\s+(?:fixed\s+)?(?:time|horizon|duration)|open[- ]?ended|indefinite|"
+        r"until\s+i\s+close|no\s+end|manual(?:ly)?\s+close)\b",
+        t,
+        re.I,
+    ):
+        return None
+
     m = re.search(
-        r"\b(?:for|over|next|within|horizon|trade(?:\s+for)?)\s+(\d+)\s*(day|days|week|weeks|month|months|year|years)\b",
+        r"\b(?:for|over|next|within|horizon|trade(?:\s+for)?|duration)\s+(\d+(?:\.\d+)?)\s*"
+        r"(day|days|week|weeks|month|months|year|years)\b",
         t,
         re.I,
     )
     if not m:
-        m = re.search(r"\b(\d+)\s*(day|days|week|weeks|month|months|year|years)\b", t, re.I)
+        m = re.search(
+            r"\b(\d+(?:\.\d+)?)\s*(day|days|week|weeks|month|months|year|years)\b",
+            t,
+            re.I,
+        )
     if m:
-        n = int(m.group(1))
+        n = float(m.group(1))
         unit = m.group(2).lower()
         if unit.startswith("day"):
-            return max(1, n)
+            return max(1, int(round(n)))
         if unit.startswith("week"):
-            return max(1, n * 7)
+            return max(1, int(round(n * 7)))
         if unit.startswith("month"):
-            return max(1, n * 30)
+            return max(1, int(round(n * 30)))
         if unit.startswith("year"):
-            return max(1, n * 365)
-    return 90
+            return max(1, int(round(n * 365)))
+    # Default: open-ended (user can close anytime)
+    return None
+
+
+def horizon_days_for_picker(days: Optional[int]) -> int:
+    """Asset picker needs a lookback tilt even when strategy is open-ended."""
+    return int(days) if days and days > 0 else 90
 
 
 def horizon_preset(days: int) -> dict[str, Any]:

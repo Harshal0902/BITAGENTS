@@ -4,9 +4,14 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Panel } from "@/components/AppShell";
 import {
+  addPaperStrategyCapital,
+  analyzePaperAsset,
   createPaperStrategy,
+  confirmPaperStrategy,
   fetchHedgeFundHealth,
   fetchPaperDashboard,
+  fetchStrategyLivePnl,
+  liquidatePaperStrategy,
   mapHedgeFundActions,
   runPaperBacktest,
   runPaperMonitor,
@@ -51,11 +56,16 @@ export function HedgeFundConsole() {
   const [symbolInput, setSymbolInput] = useState("");
   const [tpInput, setTpInput] = useState("15");
   const [slInput, setSlInput] = useState("8");
-  const [horizonDays, setHorizonDays] = useState("90");
+  const [horizonDays, setHorizonDays] = useState("");
+  const [capitalInput, setCapitalInput] = useState("100");
   const [agentPick, setAgentPick] = useState(true);
   const [editTp, setEditTp] = useState<Record<string, string>>({});
   const [editSl, setEditSl] = useState<Record<string, string>>({});
+  const [editHorizon, setEditHorizon] = useState<Record<string, string>>({});
+  const [editAddCap, setEditAddCap] = useState<Record<string, string>>({});
   const [lastBacktest, setLastBacktest] = useState<string | null>(null);
+  const [lastLivePnl, setLastLivePnl] = useState<string | null>(null);
+  const [lastAnalysis, setLastAnalysis] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const refreshDashboard = useCallback(async () => {
@@ -127,15 +137,22 @@ export function HedgeFundConsole() {
             .split(/[,\s]+/)
             .map((s) => s.trim().toUpperCase())
             .filter(Boolean);
+      if (!agentPick && (!tokens || tokens.length === 0)) {
+        throw new Error("Enter stocks/crypto tickers, or enable agent pick");
+      }
+      const hzRaw = horizonDays.trim();
+      const horizon = hzRaw === "" ? null : Math.max(0, Number(hzRaw) || 0);
+      const capital = Math.min(100, Math.max(1, Number(capitalInput) || 100));
       await createPaperStrategy(token, {
         tokens,
         mode: agentPick ? "agent" : "user",
         take_profit_pct: Number(tpInput) || 15,
         stop_loss_pct: Number(slInput) || 8,
-        horizon_days: Number(horizonDays) || 90,
+        capital_usd: capital,
+        horizon_days: horizon === 0 ? null : horizon,
         notes: agentPick
-          ? `Agent pick for ${horizonDays}d horizon`
-          : `User-selected symbols · horizon ${horizonDays}d`,
+          ? `Agent pick · paper $${capital}${horizon ? ` · ${horizon}d` : " · open-ended"}`
+          : `User symbols · paper $${capital}${horizon ? ` · ${horizon}d` : " · open-ended"}`,
       });
       await refreshDashboard();
     } catch (err) {
@@ -149,9 +166,19 @@ export function HedgeFundConsole() {
     if (!token) return;
     setDashBusy(true);
     try {
+      const hzRaw = (editHorizon[strategyId] ?? "").trim();
+      const horizon =
+        hzRaw === ""
+          ? undefined
+          : hzRaw === "0" || hzRaw.toLowerCase() === "open"
+            ? 0
+            : Math.max(0, Number(hzRaw) || 0);
+      const addCap = Number(editAddCap[strategyId] || 0);
       await updatePaperStrategy(token, strategyId, {
         take_profit_pct: Number(editTp[strategyId] ?? 15),
         stop_loss_pct: Number(editSl[strategyId] ?? 8),
+        horizon_days: horizon,
+        add_capital_usd: addCap > 0 ? Math.min(100, addCap) : undefined,
       });
       await refreshDashboard();
     } catch (err) {
@@ -193,6 +220,81 @@ export function HedgeFundConsole() {
     }
   }
 
+  async function onConfirm(strategyId: string) {
+    if (!token) return;
+    setDashBusy(true);
+    try {
+      const capital = Math.min(100, Math.max(1, Number(capitalInput) || 100));
+      await confirmPaperStrategy(token, strategyId, { capital_usd: capital });
+      await refreshDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Confirm failed");
+    } finally {
+      setDashBusy(false);
+    }
+  }
+
+  async function onAddCapital(strategyId: string) {
+    if (!token) return;
+    const add = Math.min(100, Math.max(1, Number(editAddCap[strategyId] || 0)));
+    if (!add) return;
+    setDashBusy(true);
+    try {
+      await addPaperStrategyCapital(token, strategyId, add);
+      await refreshDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Add capital failed");
+    } finally {
+      setDashBusy(false);
+    }
+  }
+
+  async function onAnalyze(symbol: string) {
+    if (!token || !symbol) return;
+    setDashBusy(true);
+    try {
+      const data = (await analyzePaperAsset(token, symbol, 100)) as Record<string, unknown>;
+      const analysis = (data.analysis || {}) as Record<string, unknown>;
+      const synth = (analysis.synthesis || {}) as Record<string, unknown>;
+      setLastAnalysis(
+        `${data.symbol || symbol} · $${data.live_price_usd ?? "—"} · ${String(synth.action || "n/a")}`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Analyze failed");
+    } finally {
+      setDashBusy(false);
+    }
+  }
+
+  async function onLivePnl(strategyId: string) {
+    if (!token) return;
+    setDashBusy(true);
+    try {
+      const pnl = (await fetchStrategyLivePnl(token, strategyId)) as Record<string, unknown>;
+      setLastLivePnl(
+        `${strategyId} · ${pnl.status} · sleeve ${money(pnl.sleeve_market_value_usd as number)} · ` +
+          `uPnL ${money(pnl.unrealized_pnl_usd as number)} (${pnl.unrealized_pnl_pct ?? 0}%)`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Live PnL failed");
+    } finally {
+      setDashBusy(false);
+    }
+  }
+
+  async function onLiquidate(strategyId: string) {
+    if (!token) return;
+    setDashBusy(true);
+    try {
+      await liquidatePaperStrategy(token, strategyId);
+      await refreshDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Liquidate failed");
+    } finally {
+      setDashBusy(false);
+    }
+  }
+
   const port = dashboard?.portfolio;
   const positions = port?.positions || [];
   const hours = Math.round((health?.monitor_interval_seconds || dashboard?.monitor_interval_seconds || 14400) / 3600);
@@ -202,8 +304,8 @@ export function HedgeFundConsole() {
       <div className="border border-grid bg-surface/40 px-4 py-4">
         <p className="text-sm leading-relaxed text-muted-foreground">{HEDGE_FUND.description}</p>
         <p className="mt-2 font-mono text-xs text-signal">
-          18-analyst · paper · monitor every {hours}h · shared quotes · fees{" "}
-          {HEDGE_FUND.managementFeePct}/{HEDGE_FUND.performanceFeePct} · LLM optional ·{" "}
+          18-analyst · paper only (no deposits yet) · max $100 USDC/sleeve · monitor every {hours}h · fees{" "}
+          {HEDGE_FUND.managementFeePct}/{HEDGE_FUND.performanceFeePct} ·{" "}
           <Link href="/agents/hedge-fund/pricing" className="underline hover:text-foreground">
             Pricing
           </Link>
@@ -291,10 +393,17 @@ export function HedgeFundConsole() {
             )}
             <div className="flex flex-wrap gap-2">
               <input
+                value={capitalInput}
+                onChange={(e) => setCapitalInput(e.target.value)}
+                className="w-24 border border-grid bg-background px-2 py-2 font-mono text-sm"
+                title="Paper capital USDC (max 100)"
+                placeholder="$ USDC"
+              />
+              <input
                 value={horizonDays}
                 onChange={(e) => setHorizonDays(e.target.value)}
                 className="w-24 border border-grid bg-background px-2 py-2 font-mono text-sm"
-                title="Horizon days"
+                title="Horizon days (blank = open-ended)"
                 placeholder="Days"
               />
               <input
@@ -317,12 +426,12 @@ export function HedgeFundConsole() {
                 onClick={() => void onCreateStrategy()}
                 className="border border-signal bg-signal/10 px-4 py-2 font-mono text-xs uppercase text-signal disabled:opacity-40"
               >
-                Create
+                Propose
               </button>
             </div>
           </div>
           <p className="mt-2 font-mono text-[10px] text-muted-foreground">
-            Horizon (days) drives lookback + asset ranking. Same ticker can sit in multiple strategies.
+            Paper mode: capital max $100 USDC. Leave days blank for open-ended (close anytime). Confirm to deploy fills.
           </p>
         </Panel>
       </div>
@@ -333,7 +442,13 @@ export function HedgeFundConsole() {
             {(dashboard?.strategies || []).length === 0 && (
               <p className="font-mono text-xs text-muted-foreground">No strategies yet — create one above or ask in chat.</p>
             )}
-            {(dashboard?.strategies || []).map((s) => (
+            {(dashboard?.strategies || []).map((s) => {
+              const mintMap = s.rules?.mint_map || {};
+              const mintHint = (s.symbols || [])
+                .slice(0, 3)
+                .map((sym) => (mintMap[sym] ? `${sym}…${String(mintMap[sym]).slice(-4)}` : sym))
+                .join(" · ");
+              return (
               <div key={s.id} className="border border-grid bg-surface/30 p-3 font-mono text-[11px]">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-signal">
@@ -342,7 +457,40 @@ export function HedgeFundConsole() {
                   <span className="text-muted-foreground">{s.id}</span>
                 </div>
                 <p className="mt-1 text-muted-foreground">{(s.symbols || []).join(", ")}</p>
+                {mintHint && (
+                  <p className="mt-0.5 text-[10px] text-muted-foreground/80">mints: {mintHint}</p>
+                )}
                 <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {s.status === "pending" && (
+                    <button
+                      type="button"
+                      disabled={!token || dashBusy}
+                      onClick={() => void onConfirm(s.id)}
+                      className="border border-signal bg-signal/15 px-2 py-0.5 uppercase text-signal disabled:opacity-40"
+                    >
+                      Confirm
+                    </button>
+                  )}
+                  {(s.status === "active" || s.status === "paused") && (
+                    <>
+                      <button
+                        type="button"
+                        disabled={!token || dashBusy}
+                        onClick={() => void onLivePnl(s.id)}
+                        className="border border-grid px-2 py-0.5 uppercase disabled:opacity-40"
+                      >
+                        Live PnL
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!token || dashBusy}
+                        onClick={() => void onLiquidate(s.id)}
+                        className="border border-warn/40 px-2 py-0.5 uppercase text-warn disabled:opacity-40"
+                      >
+                        Liquidate USDC
+                      </button>
+                    </>
+                  )}
                   <span>TP</span>
                   <input
                     className="w-14 border border-grid bg-background px-1 py-0.5"
@@ -355,6 +503,25 @@ export function HedgeFundConsole() {
                     value={editSl[s.id] ?? String(s.rules?.stop_loss_pct ?? 8)}
                     onChange={(e) => setEditSl((prev) => ({ ...prev, [s.id]: e.target.value }))}
                   />
+                  <span>Days</span>
+                  <input
+                    className="w-14 border border-grid bg-background px-1 py-0.5"
+                    placeholder="open"
+                    value={
+                      editHorizon[s.id] ??
+                      (s.horizon_days == null && s.rules?.horizon_days == null
+                        ? ""
+                        : String(s.horizon_days ?? s.rules?.horizon_days ?? ""))
+                    }
+                    onChange={(e) => setEditHorizon((prev) => ({ ...prev, [s.id]: e.target.value }))}
+                  />
+                  <span>Add$</span>
+                  <input
+                    className="w-14 border border-grid bg-background px-1 py-0.5"
+                    placeholder="0"
+                    value={editAddCap[s.id] ?? ""}
+                    onChange={(e) => setEditAddCap((prev) => ({ ...prev, [s.id]: e.target.value }))}
+                  />
                   <button
                     type="button"
                     disabled={!token || dashBusy}
@@ -363,6 +530,27 @@ export function HedgeFundConsole() {
                   >
                     Save
                   </button>
+                  {(s.status === "active" || s.status === "paused") && (
+                    <button
+                      type="button"
+                      disabled={!token || dashBusy || !Number(editAddCap[s.id] || 0)}
+                      onClick={() => void onAddCapital(s.id)}
+                      className="border border-signal/30 px-2 py-0.5 text-signal disabled:opacity-40"
+                    >
+                      Add cap
+                    </button>
+                  )}
+                  {(s.symbols || []).slice(0, 2).map((sym) => (
+                    <button
+                      key={sym}
+                      type="button"
+                      disabled={!token || dashBusy}
+                      onClick={() => void onAnalyze(sym)}
+                      className="border border-grid px-2 py-0.5 uppercase disabled:opacity-40"
+                    >
+                      Ax {sym}
+                    </button>
+                  ))}
                   {(["1w", "1m", "6m", "1y"] as const).map((p) => (
                     <button
                       key={p}
@@ -376,8 +564,11 @@ export function HedgeFundConsole() {
                   ))}
                 </div>
               </div>
-            ))}
-            {lastBacktest && <p className="font-mono text-[11px] text-signal">Last backtest: {lastBacktest}</p>}
+            );
+            })}
+            {lastLivePnl && <p className="font-mono text-[11px] text-signal">Live PnL: {lastLivePnl}</p>}
+            {lastAnalysis && <p className="font-mono text-[11px] text-signal">Analysis: {lastAnalysis}</p>}
+            {lastBacktest && <p className="font-mono text-[11px] text-muted-foreground">Mock backtest: {lastBacktest}</p>}
           </div>
         </Panel>
 
@@ -528,7 +719,7 @@ export function HedgeFundConsole() {
           <div className="flex max-h-[420px] flex-col gap-4 overflow-y-auto pr-1">
             {messages.length === 0 && (
               <p className="text-sm text-muted-foreground">
-                Chat to create strategies, edit TP/SL, or run backtests. Paper only — no live orders.
+                Chat: propose → confirm hs… → live PnL for hs… · liquidate to USDC. Mock BT is historical only.
               </p>
             )}
             {messages.map((msg) => (
@@ -558,7 +749,7 @@ export function HedgeFundConsole() {
                 onChange={(e) => setInput(e.target.value)}
                 placeholder={
                   isAuthenticated
-                    ? "e.g. Create paper strategy with BTC ETH, TP 20 SL 10"
+                    ? "e.g. Propose strategy AAPL XRP $50 · confirm hs… · analyze AAPL"
                     : "Connect wallet to chat"
                 }
                 disabled={!token || busy}

@@ -4,9 +4,9 @@
 # Deploy: connect this repo in Render and use this file, OR create a Docker Web Service
 # manually with root directory `agent/new` and the start command below.
 #
-# IMPORTANT: keep numInstances at 1 so Volume/DCA/EasyA in-process schedulers
-# do not double-fire across replicas, and so the in-memory 15m token/wallet cache
-# stays shared for all chat agents in this process.
+# IMPORTANT: prefer numInstances: 1 for now — Hedge Fund paper monitor + in-memory
+# research caches are still process-local. DCA/Volume/EasyA schedulers use
+# SELECT … FOR UPDATE SKIP LOCKED claim leases and are multi-instance safe.
 
 services:
   - type: web
@@ -30,6 +30,12 @@ services:
         value: meta-llama/llama-3.1-8b-instruct
       - key: CAPIX_PROVIDER
         value: DeepInfra
+      - key: CAPIX_CONNECT_TIMEOUT
+        value: "10"
+      - key: CAPIX_READ_TIMEOUT
+        value: "45"
+      - key: CAPIX_MAX_RETRIES
+        value: "2"
       - key: AGENTS_INTERNAL_API_KEY
         sync: false
       - key: SOLANA_CLUSTER

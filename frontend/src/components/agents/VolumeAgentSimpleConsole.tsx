@@ -127,6 +127,12 @@ export function VolumeAgentSimpleConsole() {
           in SOL. Deposit SOL below, then press one button to start. Platform fee is{" "}
           <strong className="text-foreground">{VOLUME_AGENT.platformFeeLabel}</strong>.
         </p>
+        <p className="mt-2 font-mono text-[10px] text-muted-foreground">
+          Need any SPL token + Meteora controls?{" "}
+          <a href="/agents/volume" className="text-signal underline hover:text-foreground">
+            Open full Volume Agent
+          </a>
+        </p>
       </div>
 
       {authError && (

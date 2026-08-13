@@ -446,7 +446,7 @@ def run_mock_backtest(
     selected = [t.strip() for t in (tokens or []) if t and str(t).strip()]
     picker_note = None
     if not selected:
-        days = horizon_days or parse_horizon_days("", None)
+        days = horizon_days or parse_horizon_days("", None) or 90
         # Infer horizon from date window when possible
         try:
             sdt = datetime.strptime(start_date[:10], "%Y-%m-%d")
@@ -454,7 +454,7 @@ def run_mock_backtest(
             days = max(1, (edt - sdt).days)
         except Exception:
             pass
-        pick = select_assets_for_horizon(horizon_days=days)
+        pick = select_assets_for_horizon(horizon_days=int(days) if days else 90)
         selected = list(pick.get("symbols") or [])
         picker_note = pick.get("note")
         strategy_note = picker_note or "Covenant horizon picker selected assets"

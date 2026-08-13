@@ -21,7 +21,29 @@ from yahoo_market_data import (
 
 HF_MONITOR_INTERVAL_SECONDS = int(os.environ.get("HF_MONITOR_INTERVAL_SECONDS", str(4 * 3600)))
 HF_SCHEDULER_POLL_SECONDS = int(os.environ.get("HF_SCHEDULER_POLL_SECONDS", "60"))
-DEFAULT_PAPER_CAPITAL = float(os.environ.get("HF_DEFAULT_PAPER_CAPITAL", "10000"))
+# Paper book defaults — strategy sleeves capped at $100 USDC (paper) for now
+HF_MAX_STRATEGY_USDC = float(os.environ.get("HF_MAX_STRATEGY_USDC", "100"))
+HF_MIN_STRATEGY_USDC = float(os.environ.get("HF_MIN_STRATEGY_USDC", "1"))
+DEFAULT_PAPER_CAPITAL = float(os.environ.get("HF_DEFAULT_PAPER_CAPITAL", str(HF_MAX_STRATEGY_USDC)))
+
+
+def clamp_strategy_capital(amount: Optional[float]) -> float:
+    """Paper sleeve capital: between min and max (default max $100 USDC)."""
+    if amount is None:
+        return float(HF_MAX_STRATEGY_USDC)
+    try:
+        val = float(amount)
+    except (TypeError, ValueError):
+        return float(HF_MAX_STRATEGY_USDC)
+    return max(HF_MIN_STRATEGY_USDC, min(HF_MAX_STRATEGY_USDC, val))
+
+
+def _horizon_label_for(days: Optional[int]) -> str:
+    if not days:
+        return "open"
+    from covenant_picker import horizon_preset
+
+    return horizon_preset(int(days))["key"]
 
 _scheduler_thread: Optional[threading.Thread] = None
 _scheduler_stop = threading.Event()
@@ -176,7 +198,7 @@ def get_or_create_portfolio(user_wallet: str, capital_usd: float = DEFAULT_PAPER
             if row:
                 return _row(row)
             pid = _new_id("hp")
-            capital = max(100.0, float(capital_usd))
+            capital = max(HF_MIN_STRATEGY_USDC, float(capital_usd))
             cur.execute(
                 """
                 INSERT INTO hf_paper_portfolios (id, user_wallet, name, cash_usd, starting_capital)
@@ -273,15 +295,24 @@ def create_strategy(
     created_by: str = "agent",
     horizon_days: Optional[int] = None,
     horizon_text: str = "",
+    require_confirm: bool = True,
+    deploy: bool = False,
 ) -> dict[str, Any]:
-    """Create paper strategy. Empty symbols => Covenant horizon picker (not a fixed book)."""
-    from covenant_picker import horizon_preset, parse_horizon_days, select_assets_for_horizon
+    """
+    Create paper strategy.
+    By default require_confirm=True → status=pending (no fills) until confirm_strategy().
+    Resolves Solana mints via Jupiter (xStocks for equities). Paper only — no deposits.
+    Capital sleeve capped at HF_MAX_STRATEGY_USDC (default $100).
+    """
+    from hedge_fund_assets import USDC_MINT, resolve_hf_book_mints
+    from covenant_picker import horizon_days_for_picker, horizon_preset, parse_horizon_days, select_assets_for_horizon
 
     portfolio = get_or_create_portfolio(user_wallet, capital_usd or DEFAULT_PAPER_CAPITAL)
+    sleeve_capital = clamp_strategy_capital(capital_usd)
     # If user specifies capital and book is unused, resize paper cash to match
     if capital_usd is not None:
         try:
-            cap = max(100.0, float(capital_usd))
+            cap = sleeve_capital
             init_db()
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -313,19 +344,21 @@ def create_strategy(
             pass
 
     days = parse_horizon_days(horizon_text, horizon_days)
-    preset = horizon_preset(days)
+    pick_days = horizon_days_for_picker(days)
+    preset = horizon_preset(pick_days)
+    horizon_label = "open" if not days else preset["key"]
     pick_meta: dict[str, Any] = {}
 
     syms = [str(s).strip() for s in (symbols or []) if s and str(s).strip()]
     if not syms:
-        pick_meta = select_assets_for_horizon(horizon_days=days)
+        pick_meta = select_assets_for_horizon(horizon_days=pick_days)
         syms = list(pick_meta.get("symbols") or [])
         created_by = created_by or "agent"
         mode = mode if mode in ("agent", "user", "hybrid") else "agent"
         if not name:
-            name = f"Agent {preset['key']} {days}d"
+            name = f"Agent {horizon_label}" + (f" {days}d" if days else " open")
 
-    # Validate symbols via Yahoo (aliases + live probe for any Yahoo asset)
+    # Validate symbols via Yahoo
     valid = []
     errors = []
     for s in syms[:10]:
@@ -336,18 +369,36 @@ def create_strategy(
             valid.append(r["symbol"])
     if not valid:
         return {
-            "error": "No valid symbols",
+            "error": "No valid symbols — stocks or crypto are required",
             "errors": errors,
             "hint": "Use Yahoo tickers e.g. XRP, SPY (S&P500), AAPL, BTC-USD, ^GSPC",
             "picker": pick_meta,
         }
+
+    # Jupiter / xStocks mint resolution
+    mint_info = resolve_hf_book_mints(valid)
+    if mint_info.get("errors"):
+        # Soft-fail: still propose but flag missing mints
+        errors.extend([e.get("error") for e in mint_info["errors"] if e.get("error")])
 
     if not allocation_pct:
         w = round(100.0 / len(valid), 4)
         allocation_pct = {s: w for s in valid}
     rules_final = _default_rules(rules)
     rules_final["horizon_days"] = days
-    rules_final["horizon_label"] = preset["key"]
+    rules_final["horizon_label"] = horizon_label
+    rules_final["open_ended"] = days is None
+    rules_final["capital_usd"] = sleeve_capital
+    rules_final["max_capital_usd"] = HF_MAX_STRATEGY_USDC
+    rules_final["mint_map"] = mint_info.get("mint_map") or {}
+    rules_final["solana_assets"] = mint_info.get("assets") or []
+    rules_final["liquidation_asset"] = "USDC"
+    rules_final["liquidation_mint"] = USDC_MINT
+    rules_final["objective"] = rules_final.get("objective") or "max_profit"
+    rules_final["paper_mode"] = True
+    rules_final["deposits_required"] = False
+
+    status = "active" if (deploy and not require_confirm) else "pending"
     sid = _new_id("hs")
     init_db()
     with get_conn() as conn:
@@ -357,7 +408,7 @@ def create_strategy(
                 INSERT INTO hf_strategies (
                     id, portfolio_id, user_wallet, name, mode, status, symbols, allocation_pct,
                     rules, created_by, horizon_days, horizon_label
-                ) VALUES (%s,%s,%s,%s,%s,'active',%s,%s,%s,%s,%s,%s) RETURNING *
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *
                 """,
                 (
                     sid,
@@ -365,29 +416,455 @@ def create_strategy(
                     user_wallet.strip(),
                     name or f"{'Agent' if created_by == 'agent' else 'User'} Strategy {sid}",
                     mode if mode in ("agent", "user", "hybrid") else "agent",
+                    status,
                     Json(valid),
                     Json(allocation_pct),
                     Json(rules_final),
                     created_by if created_by in ("agent", "user") else "agent",
                     days,
-                    preset["key"],
+                    horizon_label,
                 ),
             )
             strategy = _row(cur.fetchone())
 
-    refresh_symbols(valid, force=False)
-    deploy = _deploy_initial_allocations(portfolio["id"], sid, user_wallet, valid, allocation_pct)
+    deploy_result = None
+    if status == "active":
+        refresh_symbols(valid, force=False)
+        deploy_result = _deploy_initial_allocations(
+            portfolio["id"], sid, user_wallet, valid, allocation_pct, capital_usd=sleeve_capital
+        )
+
+    horizon_note = (
+        f"Open-ended — close anytime with **liquidate {sid}**."
+        if not days
+        else f"Horizon {days}d — auto-liquidates to USDC when ended (or liquidate early)."
+    )
     return {
         **strategy,
         "strategy": strategy,
-        "deploy": deploy,
+        "deploy": deploy_result,
         "errors": errors,
         "mode": strategy.get("mode") or mode,
         "paper": True,
+        "deposits_required": False,
         "picker": pick_meta,
         "horizon_days": days,
-        "horizon_label": preset["key"],
+        "horizon_label": horizon_label,
+        "open_ended": days is None,
+        "capital_usd": sleeve_capital,
+        "max_capital_usd": HF_MAX_STRATEGY_USDC,
+        "solana_assets": mint_info.get("assets") or [],
+        "mint_map": mint_info.get("mint_map") or {},
+        "usdc_mint": USDC_MINT,
+        "status": status,
+        "awaiting_confirmation": status == "pending",
+        "confirm_hint": (
+            f"Reply **confirm {sid}** (optional: `with $50`, `for 30 days`) to deploy "
+            f"**${sleeve_capital:,.2f}** paper sleeve (max ${HF_MAX_STRATEGY_USDC:,.0f}). {horizon_note}"
+            if status == "pending"
+            else None
+        ),
     }
+
+
+def _strategy_trade_count(strategy_id: str, user_wallet: str) -> int:
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS n FROM hf_paper_trades
+                WHERE strategy_id = %s AND user_wallet = %s
+                """,
+                (strategy_id, user_wallet.strip()),
+            )
+            return int((cur.fetchone() or {}).get("n") or 0)
+
+
+def _ensure_paper_cash(portfolio_id: str, need_usd: float) -> dict[str, Any]:
+    """Paper book: credit cash so a strategy sleeve can deploy (does not steal other sleeves)."""
+    need = max(0.0, float(need_usd))
+    if need <= 0:
+        return {"credited_usd": 0.0}
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT cash_usd, starting_capital FROM hf_paper_portfolios WHERE id = %s FOR UPDATE",
+                (portfolio_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {"error": "Portfolio not found", "credited_usd": 0.0}
+            cash = float(row["cash_usd"] or 0)
+            starting = float(row["starting_capital"] or 0)
+            if cash + 1e-6 >= need:
+                return {"credited_usd": 0.0, "cash_usd": cash}
+            credit = need - cash
+            cur.execute(
+                """
+                UPDATE hf_paper_portfolios
+                SET cash_usd = %s, starting_capital = %s, updated_at = NOW()
+                WHERE id = %s
+                RETURNING cash_usd, starting_capital
+                """,
+                (cash + credit, starting + credit, portfolio_id),
+            )
+            updated = cur.fetchone()
+            return {
+                "credited_usd": round(credit, 2),
+                "cash_usd": float(updated["cash_usd"]),
+                "starting_capital": float(updated["starting_capital"]),
+            }
+
+
+def confirm_strategy(
+    strategy_id: str,
+    user_wallet: str,
+    capital_usd: Optional[float] = None,
+    horizon_days: Optional[int] = None,
+) -> dict[str, Any]:
+    """Activate a pending (or closed-never-traded) strategy and deploy sleeve capital."""
+    strategy = get_strategy(strategy_id, user_wallet)
+    if not strategy:
+        return {"error": "Strategy not found"}
+
+    status = strategy.get("status")
+    n_trades = _strategy_trade_count(strategy_id, user_wallet)
+    # Allow redeploy of closed/pending strategies that never received fills
+    if status == "active":
+        positions = list_positions_for_strategy(strategy_id)
+        open_units = sum(float(p.get("units") or 0) for p in positions)
+        if open_units > 0 or n_trades > 0:
+            return {"strategy": strategy, "note": "Already active", "confirmed": True}
+    elif status not in ("pending", "paused", "closed"):
+        return {"error": f"Cannot confirm strategy in status={status}"}
+    elif status == "closed" and n_trades > 0:
+        return {
+            "error": "Strategy already closed with trade history. Create a new strategy to redeploy.",
+            "strategy_id": strategy_id,
+        }
+
+    symbols = list(strategy.get("symbols") or [])
+    if not symbols:
+        return {"error": "Strategy has no symbols — stocks/crypto are required before confirm"}
+    allocation_pct = dict(strategy.get("allocation_pct") or {})
+    rules = dict(strategy.get("rules") or {})
+    if capital_usd is not None:
+        sleeve = clamp_strategy_capital(capital_usd)
+    else:
+        sleeve = clamp_strategy_capital(rules.get("capital_usd"))
+    rules["capital_usd"] = sleeve
+    rules["max_capital_usd"] = HF_MAX_STRATEGY_USDC
+    rules["paper_mode"] = True
+    rules["deposits_required"] = False
+
+    if horizon_days is not None:
+        days = int(horizon_days) if int(horizon_days) > 0 else None
+        rules["horizon_days"] = days
+        rules["open_ended"] = days is None
+        rules["horizon_label"] = _horizon_label_for(days)
+    else:
+        days = strategy.get("horizon_days")
+        if days is None and rules.get("horizon_days") is not None:
+            days = rules.get("horizon_days")
+        if days is not None:
+            try:
+                days = int(days) if int(days) > 0 else None
+            except (TypeError, ValueError):
+                days = None
+        rules["horizon_days"] = days
+        rules["open_ended"] = days is None
+        rules["horizon_label"] = _horizon_label_for(days)
+
+    if not allocation_pct and symbols:
+        w = round(100.0 / len(symbols), 4)
+        allocation_pct = {s: w for s in symbols}
+
+    # Reset horizon clock on (re)deploy
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE hf_strategies
+                SET status = 'active', rules = %s, horizon_days = %s, horizon_label = %s,
+                    created_at = NOW(), updated_at = NOW()
+                WHERE id = %s AND user_wallet = %s RETURNING *
+                """,
+                (
+                    Json(rules),
+                    days,
+                    rules["horizon_label"],
+                    strategy_id,
+                    user_wallet.strip(),
+                ),
+            )
+            strategy = _row(cur.fetchone())
+
+    refresh_symbols(symbols, force=False)
+    deploy = _deploy_initial_allocations(
+        strategy["portfolio_id"],
+        strategy_id,
+        user_wallet,
+        symbols,
+        allocation_pct,
+        capital_usd=sleeve,
+    )
+    return {
+        "strategy": strategy,
+        "deploy": deploy,
+        "confirmed": True,
+        "capital_usd": sleeve,
+        "max_capital_usd": HF_MAX_STRATEGY_USDC,
+        "horizon_days": days,
+        "open_ended": days is None,
+        "symbols": symbols,
+        "solana_assets": rules.get("solana_assets") or [],
+        "mint_map": rules.get("mint_map") or {},
+        "paper": True,
+        "message": (
+            f"Strategy {strategy_id} confirmed — deployed ${sleeve:,.2f} paper sleeve "
+            f"(max ${HF_MAX_STRATEGY_USDC:,.0f}) across {', '.join(symbols)}."
+        ),
+    }
+
+
+def strategy_live_pnl(strategy_id: str, user_wallet: str) -> dict[str, Any]:
+    """Live mark-to-market PnL for a paper strategy (not a historical mock backtest)."""
+    strategy = get_strategy(strategy_id, user_wallet)
+    if not strategy:
+        return {"error": "Strategy not found", "strategy_id": strategy_id}
+
+    symbols = list(strategy.get("symbols") or [])
+    refresh_symbols(symbols, force=False)
+    positions = list_positions_for_strategy(strategy_id)
+    snaps = {s["symbol"]: s for s in get_market_snapshots(symbols)} if symbols else {}
+    rules = strategy.get("rules") or {}
+    mint_map = rules.get("mint_map") or {}
+    sleeve_capital = float(rules.get("capital_usd") or 0) or None
+    liq_proceeds = rules.get("liquidation_proceeds_usd")
+
+    marked = []
+    market_value = 0.0
+    cost_basis = 0.0
+    for p in positions:
+        mark = float(
+            (snaps.get(p["symbol"]) or {}).get("price_usd")
+            or p.get("mark_price_usd")
+            or p.get("avg_entry_usd")
+            or 0
+        )
+        units = float(p.get("units") or 0)
+        entry = float(p.get("avg_entry_usd") or 0)
+        mv = units * mark
+        cost = units * entry
+        market_value += mv
+        cost_basis += cost
+        marked.append(
+            {
+                **p,
+                "mark_price_usd": mark,
+                "market_value_usd": round(mv, 2),
+                "cost_basis_usd": round(cost, 2),
+                "unrealized_pnl_usd": round(mv - cost, 2),
+                "unrealized_pnl_pct": round(((mv - cost) / cost) * 100, 2) if cost else 0,
+                "mint": mint_map.get(p["symbol"]),
+            }
+        )
+
+    trades = []
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM hf_paper_trades
+                WHERE strategy_id = %s AND user_wallet = %s
+                ORDER BY created_at DESC LIMIT 100
+                """,
+                (strategy_id, user_wallet.strip()),
+            )
+            trades = [_row(r) for r in cur.fetchall()]
+
+    buy_notional = sum(float(t["notional_usd"]) for t in trades if t.get("side") == "BUY")
+    sell_notional = sum(float(t["notional_usd"]) for t in trades if t.get("side") == "SELL")
+    unrealized = market_value - cost_basis
+    sleeve_equity = market_value
+    realized_approx = sell_notional - buy_notional + market_value if trades else 0.0
+    if liq_proceeds is not None and buy_notional:
+        realized_approx = float(liq_proceeds) - buy_notional
+
+    created = strategy.get("created_at")
+    horizon = int(strategy.get("horizon_days") or rules.get("horizon_days") or 0)
+    ends_at = None
+    expired = False
+    status = strategy.get("status")
+    if created and horizon and status == "active":
+        try:
+            if isinstance(created, str):
+                created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            else:
+                created_dt = created
+            if created_dt.tzinfo is None:
+                created_dt = created_dt.replace(tzinfo=timezone.utc)
+            ends_at = created_dt + timedelta(days=horizon)
+            expired = _now() >= ends_at
+        except Exception:
+            pass
+    elif created and horizon:
+        try:
+            if isinstance(created, str):
+                created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            else:
+                created_dt = created
+            if created_dt.tzinfo is None:
+                created_dt = created_dt.replace(tzinfo=timezone.utc)
+            ends_at = created_dt + timedelta(days=horizon)
+        except Exception:
+            pass
+
+    never_deployed = len(trades) == 0 and market_value <= 0
+    hint = None
+    if never_deployed and status in ("pending", "closed", "paused"):
+        hint = (
+            f"No paper fills were placed for this strategy"
+            + (f" (intended sleeve ${sleeve_capital:,.2f})" if sleeve_capital else "")
+            + f". Reply **confirm {strategy_id}** to deploy now."
+        )
+    elif never_deployed and status == "active":
+        hint = f"Active but empty — reply **confirm {strategy_id}** to force redeploy fills."
+
+    return {
+        "mode": "live_paper",
+        "strategy_id": strategy_id,
+        "name": strategy.get("name"),
+        "status": status,
+        "symbols": symbols,
+        "mint_map": mint_map,
+        "solana_assets": rules.get("solana_assets") or [],
+        "capital_usd": sleeve_capital,
+        "horizon_days": horizon,
+        "created_at": created,
+        "ends_at": ends_at.isoformat() if ends_at else None,
+        "expired": expired,
+        "never_deployed": never_deployed,
+        "hint": hint,
+        "positions": marked,
+        "sleeve_market_value_usd": round(sleeve_equity, 2),
+        "cost_basis_usd": round(cost_basis, 2),
+        "unrealized_pnl_usd": round(unrealized, 2),
+        "unrealized_pnl_pct": round((unrealized / cost_basis) * 100, 2) if cost_basis else 0,
+        "realized_pnl_usd": round(realized_approx, 2) if trades else 0.0,
+        "liquidation_proceeds_usd": liq_proceeds,
+        "trade_counts": {
+            "buys": sum(1 for t in trades if t.get("side") == "BUY"),
+            "sells": sum(1 for t in trades if t.get("side") == "SELL"),
+            "buy_notional_usd": round(buy_notional, 2),
+            "sell_notional_usd": round(sell_notional, 2),
+        },
+        "recent_trades": trades[:20],
+        "liquidation_asset": rules.get("liquidation_asset") or "USDC",
+        "liquidation_mint": rules.get("liquidation_mint"),
+        "note": "Live paper mark-to-market — not a mock historical backtest.",
+    }
+
+
+def liquidate_strategy(
+    strategy_id: str,
+    user_wallet: str,
+    reason: str = "Horizon ended — liquidate to USDC",
+) -> dict[str, Any]:
+    """Sell all strategy positions to paper cash (USDC). Marks strategy closed."""
+    from hedge_fund_assets import USDC_MINT
+
+    strategy = get_strategy(strategy_id, user_wallet)
+    if not strategy:
+        return {"error": "Strategy not found"}
+    if strategy.get("status") == "closed":
+        return {"strategy": strategy, "note": "Already closed", "trades": []}
+
+    portfolio_id = strategy["portfolio_id"]
+    positions = list_positions_for_strategy(strategy_id)
+    refresh_symbols([p["symbol"] for p in positions], force=True)
+    trades = []
+    proceeds = 0.0
+    for pos in positions:
+        units = float(pos.get("units") or 0)
+        if units <= 0:
+            continue
+        result = execute_paper_trade(
+            portfolio_id=portfolio_id,
+            strategy_id=strategy_id,
+            user_wallet=user_wallet,
+            symbol=pos["symbol"],
+            side="SELL",
+            units=units,
+            reason=reason,
+            decision="liquidate_usdc",
+        )
+        trades.append(result)
+        if result.get("trade"):
+            proceeds += float(result["trade"].get("notional_usd") or 0)
+        _record_decision(
+            strategy_id,
+            portfolio_id,
+            user_wallet,
+            pos["symbol"],
+            "sell",
+            reason,
+            float((result.get("trade") or {}).get("price_usd") or 0),
+            0.95,
+            bool(result.get("trade")),
+            (result.get("trade") or {}).get("id"),
+            [],
+            {"liquidation": True, "to": "USDC", "mint": USDC_MINT},
+        )
+
+    rules = dict(strategy.get("rules") or {})
+    rules["liquidated_at"] = _now().isoformat()
+    rules["liquidation_proceeds_usd"] = round(proceeds, 2)
+    rules["liquidation_mint"] = USDC_MINT
+
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE hf_strategies SET status = 'closed', rules = %s, updated_at = NOW()
+                WHERE id = %s RETURNING *
+                """,
+                (Json(rules), strategy_id),
+            )
+            strategy = _row(cur.fetchone())
+
+    return {
+        "strategy": strategy,
+        "liquidated": True,
+        "proceeds_usd": round(proceeds, 2),
+        "to_asset": "USDC",
+        "to_mint": USDC_MINT,
+        "trades": trades,
+        "message": (
+            f"Strategy {strategy_id} liquidated to USDC (paper). "
+            f"Proceeds ${proceeds:,.2f} credited as cash."
+        ),
+    }
+
+
+def maybe_liquidate_expired(strategy_id: str) -> Optional[dict[str, Any]]:
+    strategy = get_strategy(strategy_id)
+    if not strategy or strategy.get("status") != "active":
+        return None
+    pnl = strategy_live_pnl(strategy_id, strategy["user_wallet"])
+    if pnl.get("expired"):
+        return liquidate_strategy(
+            strategy_id,
+            strategy["user_wallet"],
+            reason=f"Horizon {strategy.get('horizon_days')}d ended — auto-liquidate to USDC",
+        )
+    return None
+
 
 
 def update_strategy_rules(
@@ -398,6 +875,8 @@ def update_strategy_rules(
     allocation_pct: Optional[dict[str, float]] = None,
     name: Optional[str] = None,
     status: Optional[str] = None,
+    horizon_days: Optional[int] = None,
+    add_capital_usd: Optional[float] = None,
 ) -> dict[str, Any]:
     init_db()
     with get_conn() as conn:
@@ -415,17 +894,130 @@ def update_strategy_rules(
             new_symbols = symbols if symbols is not None else list(row["symbols"] or [])
             new_alloc = allocation_pct if allocation_pct is not None else dict(row["allocation_pct"] or {})
             new_name = name if name is not None else row["name"]
-            new_status = status if status in ("active", "paused", "closed") else row["status"]
+            new_status = status if status in ("active", "paused", "closed", "pending") else row["status"]
+            new_horizon = row.get("horizon_days")
+            if horizon_days is not None:
+                new_horizon = int(horizon_days) if int(horizon_days) > 0 else None
+                merged_rules["horizon_days"] = new_horizon
+                merged_rules["open_ended"] = new_horizon is None
+                merged_rules["horizon_label"] = _horizon_label_for(new_horizon)
             cur.execute(
                 """
                 UPDATE hf_strategies SET
                     name = %s, symbols = %s, allocation_pct = %s, rules = %s,
-                    status = %s, updated_at = NOW()
+                    status = %s, horizon_days = %s, horizon_label = %s, updated_at = NOW()
                 WHERE id = %s RETURNING *
                 """,
-                (new_name, Json(new_symbols), Json(new_alloc), Json(merged_rules), new_status, strategy_id),
+                (
+                    new_name,
+                    Json(new_symbols),
+                    Json(new_alloc),
+                    Json(merged_rules),
+                    new_status,
+                    new_horizon,
+                    merged_rules.get("horizon_label") or row.get("horizon_label"),
+                    strategy_id,
+                ),
             )
-            return {"strategy": _row(cur.fetchone())}
+            strategy = _row(cur.fetchone())
+
+    add_result = None
+    if add_capital_usd is not None and float(add_capital_usd) > 0:
+        add_result = add_capital_to_strategy(strategy_id, user_wallet, float(add_capital_usd))
+        if add_result.get("strategy"):
+            strategy = add_result["strategy"]
+        if add_result.get("error") and not strategy:
+            return add_result
+
+    return {"strategy": strategy, "add_capital": add_result}
+
+
+def add_capital_to_strategy(
+    strategy_id: str, user_wallet: str, add_usd: float
+) -> dict[str, Any]:
+    """Increase paper sleeve capital (capped at HF_MAX_STRATEGY_USDC) and deploy extra fills."""
+    strategy = get_strategy(strategy_id, user_wallet)
+    if not strategy:
+        return {"error": "Strategy not found"}
+    if strategy.get("status") not in ("active", "pending"):
+        return {"error": f"Cannot add capital while status={strategy.get('status')}"}
+
+    rules = dict(strategy.get("rules") or {})
+    current = float(rules.get("capital_usd") or 0)
+    room = max(0.0, HF_MAX_STRATEGY_USDC - current)
+    add = min(max(HF_MIN_STRATEGY_USDC, float(add_usd)), room) if room > 0 else 0.0
+    if add <= 0:
+        return {
+            "error": f"Sleeve already at max ${HF_MAX_STRATEGY_USDC:,.0f} paper USDC",
+            "capital_usd": current,
+            "max_capital_usd": HF_MAX_STRATEGY_USDC,
+        }
+
+    new_total = round(current + add, 2)
+    rules["capital_usd"] = new_total
+    symbols = list(strategy.get("symbols") or [])
+    allocation_pct = dict(strategy.get("allocation_pct") or {})
+    if not allocation_pct and symbols:
+        w = round(100.0 / len(symbols), 4)
+        allocation_pct = {s: w for s in symbols}
+
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE hf_strategies SET rules = %s, updated_at = NOW()
+                WHERE id = %s RETURNING *
+                """,
+                (Json(rules), strategy_id),
+            )
+            strategy = _row(cur.fetchone())
+
+    deploy = None
+    if strategy.get("status") == "active" and symbols:
+        refresh_symbols(symbols, force=False)
+        deploy = _deploy_initial_allocations(
+            strategy["portfolio_id"],
+            strategy_id,
+            user_wallet,
+            symbols,
+            allocation_pct,
+            capital_usd=add,
+        )
+
+    return {
+        "strategy": strategy,
+        "added_usd": add,
+        "capital_usd": new_total,
+        "max_capital_usd": HF_MAX_STRATEGY_USDC,
+        "deploy": deploy,
+        "message": f"Added ${add:,.2f} paper capital → sleeve ${new_total:,.2f} (max ${HF_MAX_STRATEGY_USDC:,.0f}).",
+    }
+
+
+def analyze_live_asset(symbol: str, equity_usd: float = HF_MAX_STRATEGY_USDC) -> dict[str, Any]:
+    """Realtime Yahoo mark + 18-analyst graph for a stock/crypto ticker."""
+    from covenant_pipeline import analyze_yahoo_asset
+    from hedge_fund_assets import resolve_hf_solana_asset
+
+    snap = upsert_market_snapshot(symbol, force=True)
+    analysis = analyze_yahoo_asset(
+        symbol,
+        lookback_days=180,
+        equity_usd=float(equity_usd) or HF_MAX_STRATEGY_USDC,
+        cash_usd=float(equity_usd) or HF_MAX_STRATEGY_USDC,
+    )
+    mint_info = resolve_hf_solana_asset(analysis.get("symbol") or symbol)
+    return {
+        "symbol": analysis.get("symbol") or symbol,
+        "live_price_usd": snap.get("price_usd") if not snap.get("error") else None,
+        "change_24h_pct": snap.get("change_24h_pct"),
+        "snapshot": snap if not snap.get("error") else None,
+        "analysis": analysis,
+        "solana": mint_info if not mint_info.get("error") else None,
+        "paper": True,
+        "note": "Live Yahoo marks + deterministic analysts — paper mode, not financial advice.",
+    }
 
 
 def list_strategies(user_wallet: str) -> list[dict[str, Any]]:
@@ -469,15 +1061,28 @@ def _deploy_initial_allocations(
     user_wallet: str,
     symbols: list[str],
     allocation_pct: dict[str, float],
+    capital_usd: Optional[float] = None,
 ) -> dict[str, Any]:
     trades = []
     portfolio = get_portfolio(portfolio_id)
     if not portfolio:
         return {"trades": [], "count": 0, "error": "Portfolio not found"}
-    initial_cash = float(portfolio["cash_usd"])
+
+    # Prefer strategy sleeve capital (e.g. $1000) — not the entire book cash
+    sleeve = float(capital_usd) if capital_usd is not None else None
+    if sleeve is None:
+        st = get_strategy(strategy_id, user_wallet)
+        rules = (st or {}).get("rules") or {}
+        sleeve = float(rules.get("capital_usd") or 0) or float(portfolio["cash_usd"])
+    sleeve = max(HF_MIN_STRATEGY_USDC, float(sleeve))
+
+    funded = _ensure_paper_cash(portfolio_id, sleeve)
+    if funded.get("error"):
+        return {"trades": [], "count": 0, "error": funded["error"], "capital_usd": sleeve}
+
     for sym in symbols:
         pct = float(allocation_pct.get(sym) or (100.0 / max(len(symbols), 1)))
-        notional = initial_cash * (pct / 100.0)
+        notional = sleeve * (pct / 100.0)
         price = _get_price(sym)
         if not price or notional < 1:
             continue
@@ -493,11 +1098,18 @@ def _deploy_initial_allocations(
             symbol=sym,
             side="BUY",
             notional_usd=spend,
-            reason="Initial paper allocation",
+            reason=f"Initial paper allocation (${sleeve:,.0f} sleeve)",
             decision="buy",
         )
         trades.append(t)
-    return {"trades": trades, "count": len([t for t in trades if not t.get("error")])}
+    ok = [t for t in trades if not t.get("error") and t.get("trade")]
+    return {
+        "trades": trades,
+        "count": len(ok),
+        "capital_usd": sleeve,
+        "cash_credited_usd": funded.get("credited_usd") or 0,
+        "error": None if ok else "No fills placed (check prices / cash)",
+    }
 
 
 def execute_paper_trade(
@@ -722,6 +1334,18 @@ def list_positions_for_strategy(strategy_id: str) -> list[dict[str, Any]]:
 def evaluate_strategy(strategy_id: str, execute: bool = True) -> dict[str, Any]:
     """Covenant 18-analyst decisions + user TP/SL overrides. Auditable signal graph."""
     from covenant_pipeline import analyze_yahoo_asset
+
+    # Auto-liquidate when horizon ends
+    liq = maybe_liquidate_expired(strategy_id)
+    if liq and liq.get("liquidated"):
+        return {
+            "strategy_id": strategy_id,
+            "liquidated": True,
+            "liquidation": liq,
+            "decisions": [],
+            "count": 0,
+            "evaluated_at": _now().isoformat(),
+        }
 
     strategy = get_strategy(strategy_id)
     if not strategy or strategy.get("status") != "active":

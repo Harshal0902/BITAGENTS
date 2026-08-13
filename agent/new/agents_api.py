@@ -119,14 +119,20 @@ from cache_store import cache_backend
 from hedge_fund_agent import HEDGE_FUND_MODEL, run_hedge_fund_agent
 from hedge_fund_core import get_fee_structure
 from hedge_fund_paper import (
+    HF_MAX_STRATEGY_USDC,
     HF_MONITOR_INTERVAL_SECONDS,
+    add_capital_to_strategy as hf_add_capital,
+    analyze_live_asset as hf_analyze_live_asset,
+    confirm_strategy as hf_confirm_strategy,
     create_strategy as hf_create_strategy,
     list_strategies as hf_list_strategies,
+    liquidate_strategy as hf_liquidate_strategy,
     monitor_cycle as hf_monitor_cycle,
     paper_dashboard as hf_paper_dashboard,
     run_strategy_backtest as hf_run_strategy_backtest,
     scheduler_status as hf_scheduler_status,
     start_hedge_fund_scheduler,
+    strategy_live_pnl as hf_strategy_live_pnl,
     update_strategy_rules as hf_update_strategy_rules,
 )
 from meteora_dlmm import check_pool_infrastructure, get_pool_creation_cost_sol
@@ -1325,13 +1331,25 @@ class HfPaperStrategyUpdate(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
     allocation_pct: Optional[dict[str, float]] = None
+    horizon_days: Optional[int] = None
+    add_capital_usd: Optional[float] = None
+
+
+class HfPaperConfirmRequest(BaseModel):
+    capital_usd: Optional[float] = None
+    horizon_days: Optional[int] = None
 
 
 class HfPaperBacktestRequest(BaseModel):
     period: str = "6m"
     strategy_id: Optional[str] = None
     tokens: Optional[list[str]] = None
-    capital_usd: float = 10_000.0
+    capital_usd: float = 100.0
+
+
+class HfPaperAnalyzeRequest(BaseModel):
+    symbol: str
+    equity_usd: Optional[float] = None
 
 
 @app.get("/hedge-fund/health")
@@ -1350,6 +1368,8 @@ def hedge_fund_health() -> dict[str, Any]:
         "pricing": "1% AUM + 10% performance (vs 2/20)",
         "governance": "Covenant 18-analyst deterministic (LLM optional)",
         "paper_trading": True,
+        "deposits_required": False,
+        "max_strategy_usdc": HF_MAX_STRATEGY_USDC,
         "analysts": 18,
         "llm_required_for_trades": False,
         "monitor_interval_seconds": HF_MONITOR_INTERVAL_SECONDS,
@@ -1433,6 +1453,8 @@ def hedge_fund_paper_update_strategy(
         allocation_pct=body.allocation_pct,
         name=body.name,
         status=body.status,
+        horizon_days=body.horizon_days,
+        add_capital_usd=body.add_capital_usd,
     )
 
 
@@ -1446,6 +1468,56 @@ def hedge_fund_paper_monitor(
     return hf_monitor_cycle(force_prices=force)
 
 
+@app.post("/hedge-fund/paper/strategies/{strategy_id}/confirm")
+def hedge_fund_paper_confirm_strategy(
+    strategy_id: str,
+    auth_wallet: str = Depends(require_wallet_session),
+    body: HfPaperConfirmRequest = HfPaperConfirmRequest(),
+) -> dict[str, Any]:
+    return hf_confirm_strategy(
+        strategy_id,
+        auth_wallet,
+        capital_usd=body.capital_usd,
+        horizon_days=body.horizon_days,
+    )
+
+
+@app.get("/hedge-fund/paper/strategies/{strategy_id}/pnl")
+def hedge_fund_paper_strategy_pnl(
+    strategy_id: str,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    return hf_strategy_live_pnl(strategy_id, auth_wallet)
+
+
+@app.post("/hedge-fund/paper/strategies/{strategy_id}/liquidate")
+def hedge_fund_paper_liquidate(
+    strategy_id: str,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    return hf_liquidate_strategy(strategy_id, auth_wallet)
+
+
+@app.post("/hedge-fund/paper/strategies/{strategy_id}/add-capital")
+def hedge_fund_paper_add_capital(
+    strategy_id: str,
+    body: HfPaperConfirmRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    if body.capital_usd is None:
+        return {"error": "capital_usd required"}
+    return hf_add_capital(strategy_id, auth_wallet, float(body.capital_usd))
+
+
+@app.post("/hedge-fund/paper/analyze")
+def hedge_fund_paper_analyze(
+    body: HfPaperAnalyzeRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    _ = auth_wallet
+    return hf_analyze_live_asset(body.symbol, equity_usd=body.equity_usd or HF_MAX_STRATEGY_USDC)
+
+
 @app.post("/hedge-fund/paper/backtest")
 def hedge_fund_paper_backtest(
     body: HfPaperBacktestRequest,
@@ -1456,7 +1528,7 @@ def hedge_fund_paper_backtest(
         period=body.period,
         strategy_id=body.strategy_id,
         symbols=body.tokens,
-        capital_usd=body.capital_usd,
+        capital_usd=min(float(body.capital_usd or HF_MAX_STRATEGY_USDC), HF_MAX_STRATEGY_USDC),
     )
 
 

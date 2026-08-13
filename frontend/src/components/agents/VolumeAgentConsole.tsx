@@ -346,6 +346,12 @@ export function VolumeAgentConsole() {
           SOL pool creation. Platform fee is{" "}
           <strong className="text-foreground">{VOLUME_AGENT.platformFeeLabel}</strong>.
         </p>
+        <p className="mt-2 font-mono text-[10px] text-muted-foreground">
+          Just BITAGENTS volume?{" "}
+          <a href="/agents/volume2" className="text-signal underline hover:text-foreground">
+            Use the simplified presets page
+          </a>
+        </p>
       </div>
 
       {error && (
@@ -406,7 +412,7 @@ export function VolumeAgentConsole() {
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Panel title="Command · Volume Agent" className="lg:col-span-2">
-          <div className="flex max-h-[420px] flex-col gap-4 overflow-y-auto pr-1">
+          <div className="flex max-h-105 flex-col gap-4 overflow-y-auto pr-1">
             {messages.map((msg) => (
               <div
                 key={msg.id}
@@ -496,7 +502,7 @@ export function VolumeAgentConsole() {
             </span>
           }
         >
-          <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1 font-mono text-xs">
+          <div className="max-h-130 space-y-3 overflow-y-auto pr-1 font-mono text-xs">
             {actions.length === 0 && (
               <p className="text-muted-foreground">
                 Pool checks, campaign creation, and swap tool calls appear here with tx signatures.

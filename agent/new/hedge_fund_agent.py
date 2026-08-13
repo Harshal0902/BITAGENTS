@@ -21,12 +21,18 @@ from hedge_fund_core import (
     run_portfolio_analysis,
 )
 from hedge_fund_paper import (
+    HF_MAX_STRATEGY_USDC,
     HF_MONITOR_INTERVAL_SECONDS,
+    add_capital_to_strategy,
+    analyze_live_asset,
+    confirm_strategy,
     create_strategy,
+    liquidate_strategy,
     list_strategies,
     monitor_cycle,
     paper_dashboard,
     run_strategy_backtest,
+    strategy_live_pnl,
     update_strategy_rules,
 )
 from yahoo_market_data import extract_tickers_from_text
@@ -47,9 +53,28 @@ PORTFOLIO_INTENT_RE = re.compile(
 )
 
 BACKTEST_INTENT_RE = re.compile(
-    r"\b(backtest|back\s*test|mock\s*trad|paper\s*trad|simulate|simulation|pnl|p&l|profit\s*and\s*loss|"
+    r"\b(backtest|back\s*test|mock\s*trad|simulate|simulation|"
     r"historical\s*(?:return|performance)|from\s+\w+\s+20\d{2}|start\s+trading|"
-    r"allowed\s+to\s+trade|give\s+(?:the\s+)?pnl|20\d{2}-\d{2}-\d{2})\b",
+    r"allowed\s+to\s+trade|20\d{2}-\d{2}-\d{2})\b",
+    re.I,
+)
+
+LIVE_PNL_INTENT_RE = re.compile(
+    r"\b(pnl|p&l|profit\s*and\s*loss|live\s*pnl|paper\s*pnl|performance|"
+    r"how\s+(?:am\s+i|is\s+(?:it|my\s+strategy)\s+)?doing|unrealized)\b",
+    re.I,
+)
+
+CONFIRM_INTENT_RE = re.compile(
+    r"\b(confirm|approve|go\s*ahead|activate|deploy|looks\s*good|proceed|"
+    r"yes\s*,?\s*(?:confirm|deploy|activate|go)|confirm\s+hs[a-f0-9]+)\b",
+    re.I,
+)
+
+STRATEGY_ID_RE = re.compile(r"\b(hs[a-f0-9]{6,12})\b", re.I)
+
+LIQUIDATE_INTENT_RE = re.compile(
+    r"\b(liquidate|close\s+strategy|end\s+strategy|sell\s+all|swap\s+to\s+usdc)\b",
     re.I,
 )
 
@@ -100,10 +125,9 @@ TOOLS = [
         "function": {
             "name": "create_paper_strategy",
             "description": (
-                "Create a PAPER strategy under the Covenant 18-analyst system. "
-                "Omit tokens to let the agent pick best-fit assets for the trading horizon "
-                "(e.g. 2 weeks, 6 months) — NOT a fixed default book. "
-                "Pass take_profit_pct / stop_loss_pct / horizon_days."
+                "Propose a PAPER strategy (pending). Stocks/crypto required (or agent picks). "
+                f"Capital max ${HF_MAX_STRATEGY_USDC:.0f} paper USDC. Duration optional (open-ended if omitted). "
+                "Shows Jupiter/xStocks mints. Confirm before deploy."
             ),
             "parameters": {
                 "type": "object",
@@ -113,8 +137,8 @@ TOOLS = [
                     "mode": {"type": "string", "description": "agent | user | hybrid"},
                     "take_profit_pct": {"type": "number"},
                     "stop_loss_pct": {"type": "number"},
-                    "capital_usd": {"type": "number"},
-                    "horizon_days": {"type": "number", "description": "Trading horizon in days"},
+                    "capital_usd": {"type": "number", "description": f"Paper USDC sleeve, max {HF_MAX_STRATEGY_USDC}"},
+                    "horizon_days": {"type": "number", "description": "Days; omit/0 = open-ended"},
                     "notes": {"type": "string"},
                 },
                 "required": [],
@@ -124,8 +148,57 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "confirm_paper_strategy",
+            "description": (
+                f"Confirm pending strategy (hs…). Deploys paper sleeve (max ${HF_MAX_STRATEGY_USDC:.0f}). "
+                "Optional capital_usd and horizon_days."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "strategy_id": {"type": "string"},
+                    "capital_usd": {"type": "number"},
+                    "horizon_days": {"type": "number"},
+                },
+                "required": ["strategy_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_strategy_live_pnl",
+            "description": (
+                "LIVE paper mark-to-market PnL for a strategy id (hs…). "
+                "Do NOT use mock backtest for this."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"strategy_id": {"type": "string"}},
+                "required": ["strategy_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "liquidate_paper_strategy",
+            "description": "Sell all positions to USDC (paper cash) and close the strategy.",
+            "parameters": {
+                "type": "object",
+                "properties": {"strategy_id": {"type": "string"}, "reason": {"type": "string"}},
+                "required": ["strategy_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "update_paper_strategy",
-            "description": "Edit paper strategy rules (TP/SL), symbols, name, or status (active/paused/closed).",
+            "description": (
+                "Edit strategy: TP/SL, symbols, horizon_days (0=open), add_capital_usd "
+                f"(extra paper capital up to ${HF_MAX_STRATEGY_USDC:.0f}), name, status."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -136,8 +209,25 @@ TOOLS = [
                     "name": {"type": "string"},
                     "status": {"type": "string"},
                     "notes": {"type": "string"},
+                    "horizon_days": {"type": "number"},
+                    "add_capital_usd": {"type": "number"},
                 },
                 "required": ["strategy_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_live_asset",
+            "description": "Realtime Yahoo price + 18-analyst analysis for a stock/crypto ticker.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string"},
+                    "equity_usd": {"type": "number"},
+                },
+                "required": ["symbol"],
             },
         },
     },
@@ -156,7 +246,10 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "run_strategy_backtest",
-            "description": "Backtest a saved strategy with SPY benchmark, Sharpe/Sortino/drawdown (1w|1m|3m|6m|1y).",
+            "description": (
+                "HISTORICAL mock backtest only (Yahoo). Not for live PnL of an existing strategy — "
+                "use get_strategy_live_pnl for that."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -174,8 +267,7 @@ TOOLS = [
         "function": {
             "name": "run_mock_backtest",
             "description": (
-                "Ad-hoc historical simulation. Omit tokens for Covenant horizon-based asset pick. "
-                "Includes SPY benchmark metrics."
+                "Ad-hoc HISTORICAL simulation only. For live strategy PnL use get_strategy_live_pnl."
             ),
             "parameters": {
                 "type": "object",
@@ -265,16 +357,47 @@ def _paper_tools(user_wallet: Optional[str] = None):
         horizon_days = kwargs.get("horizon_days")
         if horizon_days is None:
             horizon_days = parse_horizon_days(notes)
+        capital = kwargs.get("capital_usd")
+        if capital is None and notes:
+            capital = _extract_capital(notes)
         return create_strategy(
             user_wallet=wallet,
             symbols=tokens,
             name=kwargs.get("name") or "",
             mode=mode,
             rules=rules,
-            capital_usd=kwargs.get("capital_usd"),
+            capital_usd=capital,
             created_by=created_by,
             horizon_days=int(horizon_days) if horizon_days else None,
             horizon_text=notes,
+            require_confirm=True,
+            deploy=False,
+        )
+
+    def confirm_paper_strategy(**kwargs):
+        if not wallet:
+            return {"error": "Wallet sign-in required"}
+        cap = kwargs.get("capital_usd")
+        hz = kwargs.get("horizon_days")
+        return confirm_strategy(
+            kwargs.get("strategy_id", ""),
+            wallet,
+            capital_usd=float(cap) if cap is not None else None,
+            horizon_days=int(hz) if hz is not None else None,
+        )
+
+    def get_strategy_live_pnl(**kwargs):
+        if not wallet:
+            return {"error": "Wallet sign-in required"}
+        return strategy_live_pnl(kwargs.get("strategy_id", ""), wallet)
+
+    def liquidate_paper_strategy(**kwargs):
+        if not wallet:
+            return {"error": "Wallet sign-in required"}
+        return liquidate_strategy(
+            kwargs.get("strategy_id", ""),
+            wallet,
+            reason=kwargs.get("reason") or "User requested liquidation to USDC",
         )
 
     def update_paper_strategy(**kwargs):
@@ -294,6 +417,14 @@ def _paper_tools(user_wallet: Optional[str] = None):
             symbols=kwargs.get("tokens"),
             name=kwargs.get("name"),
             status=kwargs.get("status"),
+            horizon_days=kwargs.get("horizon_days"),
+            add_capital_usd=kwargs.get("add_capital_usd"),
+        )
+
+    def analyze_live_asset_tool(**kwargs):
+        return analyze_live_asset(
+            kwargs.get("symbol") or "",
+            equity_usd=float(kwargs.get("equity_usd") or HF_MAX_STRATEGY_USDC),
         )
 
     def get_paper_dashboard(**_kwargs):
@@ -304,17 +435,22 @@ def _paper_tools(user_wallet: Optional[str] = None):
     def run_strategy_backtest_tool(**kwargs):
         if not wallet:
             return {"error": "Wallet sign-in required"}
+        cap = float(kwargs.get("capital_usd") or HF_MAX_STRATEGY_USDC)
         return run_strategy_backtest(
             user_wallet=wallet,
             period=kwargs.get("period") or "6m",
             strategy_id=kwargs.get("strategy_id"),
             symbols=kwargs.get("tokens"),
-            capital_usd=float(kwargs.get("capital_usd") or 10_000),
+            capital_usd=min(cap, HF_MAX_STRATEGY_USDC),
         )
 
     return {
         "create_paper_strategy": create_paper_strategy,
+        "confirm_paper_strategy": confirm_paper_strategy,
+        "get_strategy_live_pnl": get_strategy_live_pnl,
+        "liquidate_paper_strategy": liquidate_paper_strategy,
         "update_paper_strategy": update_paper_strategy,
+        "analyze_live_asset": analyze_live_asset_tool,
         "get_paper_dashboard": get_paper_dashboard,
         "run_strategy_backtest": run_strategy_backtest_tool,
         "run_mock_backtest": run_mock_backtest,
@@ -327,22 +463,125 @@ def _paper_tools(user_wallet: Optional[str] = None):
 
 TOOL_REGISTRY = _paper_tools()  # default without wallet; run_* rebuilds per request
 
-SYSTEM_PROMPT = f"""You are **Hedge Fund Agent** — Covenant Framework paper trading (1/10 fees:
-{MANAGEMENT_FEE_RATE*100:.0f}% mgmt + {PERFORMANCE_FEE_RATE*100:.0f}% performance).
+SYSTEM_PROMPT = f"""You are **Hedge Fund Agent** — PAPER trading only (no real deposits yet).
+Fees (1/10): {MANAGEMENT_FEE_RATE*100:.0f}% mgmt + {PERFORMANCE_FEE_RATE*100:.0f}% performance.
 
-Architecture (deterministic — LLM never required for trade decisions):
-- 18 analysts: Quant(5) + Value(6) + Macro(7) → confidence-weighted synthesis → Risk Engine → paper fills
-- Optional LLM is commentary only
+Flow:
+1. User asks to create a strategy (or names stocks/crypto) → `create_paper_strategy` (pending).
+   - Stocks/crypto are mandatory (agent may pick if user says "whatever").
+   - Duration optional (open-ended if omitted — user liquidates anytime).
+   - Paper capital sleeve max **${HF_MAX_STRATEGY_USDC:.0f} USDC**.
+   - Show symbols + Jupiter/xStocks mints and ask to **confirm**.
+2. On confirm → `confirm_paper_strategy` deploys paper fills and show assets + live marks.
+3. Live PnL for hs… → `get_strategy_live_pnl` ONLY (never mock backtest for that).
+4. Edit duration / add capital → `update_paper_strategy` (horizon_days, add_capital_usd).
+5. Analyze a ticker with live price → `analyze_live_asset`.
+6. Close → `liquidate_paper_strategy` (paper → USDC cash).
+7. Historical sims only via `run_mock_backtest` / `run_strategy_backtest` — label clearly.
 
-Capabilities:
-- `create_paper_strategy` — user tickers OR omit tokens for horizon-based Covenant picker (NOT a fixed book).
-  Pass horizon_days / notes like "trade for 6 months". TP/SL stored and editable.
-- Shared Yahoo quotes; positions isolated per strategy (same symbol can appear under multiple strategies).
-- Monitor every {HF_MONITOR_INTERVAL_SECONDS // 3600}h.
-- `run_strategy_backtest` / `run_mock_backtest` — SPY benchmark, Sharpe/Sortino/max drawdown.
-
-Rules: never invent fills/PnL — use tools. Paper only. Not financial advice.
+Monitor every {HF_MONITOR_INTERVAL_SECONDS // 3600}h. Not financial advice.
 """
+
+
+def _format_live_pnl(pnl: dict[str, Any]) -> str:
+    if pnl.get("error"):
+        return f"**Live PnL error:** {pnl['error']}"
+    capital = pnl.get("capital_usd")
+    lines = [
+        f"**Live Paper PnL — `{pnl.get('strategy_id')}`**",
+        f"Status: {pnl.get('status')} · Horizon: "
+        + ("open-ended" if not pnl.get("horizon_days") else f"{pnl.get('horizon_days')}d")
+        + (f" · ends {str(pnl.get('ends_at') or '')[:10]}" if pnl.get("ends_at") else "")
+        + (f" · Sleeve capital: ${_fmt(capital)}" if capital else "")
+        + f" · max ${HF_MAX_STRATEGY_USDC:.0f}",
+        f"Symbols: {', '.join(pnl.get('symbols') or [])}",
+        f"Sleeve value: ${_fmt(pnl.get('sleeve_market_value_usd'))} · "
+        f"Cost: ${_fmt(pnl.get('cost_basis_usd'))} · "
+        f"**Unrealized PnL: ${_fmt(pnl.get('unrealized_pnl_usd'))} ({pnl.get('unrealized_pnl_pct')}%)**",
+    ]
+    if pnl.get("trade_counts", {}).get("buys") or pnl.get("trade_counts", {}).get("sells"):
+        lines.append(
+            f"Realized (approx): ${_fmt(pnl.get('realized_pnl_usd'))}"
+            + (
+                f" · Liquidation proceeds: ${_fmt(pnl.get('liquidation_proceeds_usd'))}"
+                if pnl.get("liquidation_proceeds_usd") is not None
+                else ""
+            )
+        )
+    lines.extend(["", "**Positions (mark-to-market)**"])
+    for p in pnl.get("positions") or []:
+        mint = p.get("mint") or "—"
+        lines.append(
+            f"- **{p.get('symbol')}**: {p.get('units')} @ ${_fmt(p.get('avg_entry_usd'))} → "
+            f"${_fmt(p.get('mark_price_usd'))} · PnL ${_fmt(p.get('unrealized_pnl_usd'))} "
+            f"({p.get('unrealized_pnl_pct')}%) · mint `{mint}`"
+        )
+    if not pnl.get("positions"):
+        if pnl.get("never_deployed"):
+            lines.append("- no open positions — **never deployed** (no buys yet)")
+        else:
+            lines.append("- no open positions (already liquidated)")
+    counts = pnl.get("trade_counts") or {}
+    lines.extend(
+        [
+            "",
+            f"Trades: {counts.get('buys', 0)} buys / {counts.get('sells', 0)} sells",
+            f"Liquidation target: {pnl.get('liquidation_asset')} (`{pnl.get('liquidation_mint')}`)",
+            "",
+            "_Live paper marks — not a mock historical backtest._",
+        ]
+    )
+    if pnl.get("hint"):
+        lines.append(f"\n⚠️ {pnl['hint']}")
+    elif pnl.get("expired") and pnl.get("status") == "active":
+        lines.append("\n⚠️ Horizon expired — say **liquidate " + str(pnl.get("strategy_id")) + "** to close to USDC.")
+    return "\n".join(lines)
+
+
+def _format_strategy_proposal(result: dict[str, Any]) -> str:
+    if result.get("error"):
+        return f"**Could not propose strategy:** {result['error']}"
+    sid = result.get("id") or (result.get("strategy") or {}).get("id")
+    lines = [
+        f"**Strategy proposed — awaiting confirmation** `{sid}`",
+        f"- Status: `{result.get('status')}` (no fills yet)",
+        f"- Mode: {result.get('mode')} · Horizon: "
+        + (
+            "open-ended (close anytime)"
+            if result.get("open_ended") or not result.get("horizon_days")
+            else f"{result.get('horizon_days')}d ({result.get('horizon_label')})"
+        ),
+        f"- Capital sleeve: ${_fmt(result.get('capital_usd'))} paper USDC "
+        f"(max ${_fmt(result.get('max_capital_usd') or HF_MAX_STRATEGY_USDC)})",
+        f"- Symbols: {', '.join(result.get('symbols') or [])}",
+        "- Paper mode — no deposit required yet",
+        "",
+        "**Solana mints (Jupiter / xStocks)**",
+    ]
+    for a in result.get("solana_assets") or []:
+        lines.append(
+            f"- **{a.get('display_symbol') or a.get('symbol')}** → `{a.get('symbol')}` "
+            f"mint `{a.get('mint')}`"
+            + (" (xStock)" if a.get("is_xstock") else "")
+        )
+    if not result.get("solana_assets"):
+        mint_map = result.get("mint_map") or {}
+        if mint_map:
+            for sym, mint in mint_map.items():
+                lines.append(f"- **{sym}** mint `{mint}`")
+        else:
+            lines.append("- (mint lookup pending — confirm still allowed; mints resolve on deploy)")
+    lines.extend(
+        [
+            f"- Liquidation: USDC `{result.get('usdc_mint')}` when horizon ends or you close",
+            "",
+            f"**Reply `confirm {sid}` to activate and deploy paper fills.**",
+            "Or edit TP/SL / symbols before confirming.",
+        ]
+    )
+    if result.get("errors"):
+        lines.extend(["", "**Warnings**", *[f"- {e}" for e in result["errors"]]])
+    return "\n".join(lines)
 
 
 def _extract_tokens(text: str) -> list[str]:
@@ -380,8 +619,9 @@ def _extract_capital(text: str) -> float:
             val *= 1000
         elif re.search(r"\b[\d,]+(?:\.\d+)?\s*[kK]\b", text) and "$" in (m.group(0) or ""):
             pass
-        return max(100.0, val)
-    return 10_000.0
+        # Paper sleeve cap
+        return max(1.0, min(HF_MAX_STRATEGY_USDC, val))
+    return float(HF_MAX_STRATEGY_USDC)
 
 
 def _parse_month_year(text: str) -> Optional[date]:
@@ -556,7 +796,7 @@ def _format_backtest_reply(result: dict[str, Any]) -> str:
     fees = result.get("fees") or {}
     counts = result.get("trade_counts") or {}
     lines = [
-        "**Covenant Hedge Fund — Mock Backtest / PnL Report**",
+        "**Hedge Fund — Mock Backtest / PnL Report**",
         f"Window: `{result.get('start_date')}` → `{result.get('end_date')}`",
         f"Strategy: equal-weight + quarterly rebalance · Capital: ${_fmt(result.get('capital_usd', 0))}",
         f"Book: {', '.join(result.get('selected_assets') or [])}",
@@ -662,8 +902,11 @@ def _fmt(value: Any) -> str:
 
 
 def _try_backtest_shortcut(user_input: str) -> Optional[tuple[str, list[dict[str, Any]]]]:
-    if not BACKTEST_INTENT_RE.search(user_input) and not OPEN_MANDATE_RE.search(user_input):
-        # Still allow pure ISO date-range PnL asks
+    # Mock historical only — never for live strategy-id PnL, and not for open-mandate picks
+    if STRATEGY_ID_RE.search(user_input) and LIVE_PNL_INTENT_RE.search(user_input):
+        return None
+    if not BACKTEST_INTENT_RE.search(user_input):
+        # Still allow pure ISO date-range historical asks
         if not re.search(r"20\d{2}-\d{2}-\d{2}.*20\d{2}-\d{2}-\d{2}", user_input):
             return None
     tokens = _extract_tokens(user_input)
@@ -807,8 +1050,98 @@ def _format_paper_dashboard(dash: dict[str, Any]) -> str:
 def _try_paper_shortcut(
     user_input: str, user_wallet: Optional[str]
 ) -> Optional[tuple[str, list[dict[str, Any]]]]:
-    if not PAPER_INTENT_RE.search(user_input) and not re.search(
-        r"\b(create|start).{0,20}(paper|strategy|fund)\b", user_input, re.I
+    sid_m = STRATEGY_ID_RE.search(user_input)
+    strategy_id = sid_m.group(1).lower() if sid_m else None
+
+    # Live PnL for strategy id — highest priority (never mock backtest)
+    if strategy_id and LIVE_PNL_INTENT_RE.search(user_input) and not re.search(r"\bbacktest\b", user_input, re.I):
+        if not user_wallet:
+            return ("Sign in with your wallet to view live strategy PnL.", [])
+        pnl = strategy_live_pnl(strategy_id, user_wallet)
+        return _format_live_pnl(pnl), [
+            {"tool": "get_strategy_live_pnl", "args": {"strategy_id": strategy_id}, "result": json.dumps(pnl, default=str)}
+        ]
+
+    # Confirm pending strategy
+    if CONFIRM_INTENT_RE.search(user_input):
+        if not user_wallet:
+            return ("Sign in to confirm a strategy.", [])
+        sid = strategy_id
+        if not sid:
+            pending = [s for s in list_strategies(user_wallet) if s.get("status") == "pending"]
+            sid = pending[0]["id"] if pending else None
+        if not sid:
+            return ("No pending strategy to confirm. Create one first.", [])
+        capital_kw = re.search(r"\$|\busd\b|\bcapital\b|\baum\b", user_input, re.I)
+        hz = parse_horizon_days(user_input, None)
+        # Only override horizon if user mentioned a duration / open-ended phrase
+        hz_kw = re.search(
+            r"\b(\d+\s*(?:day|days|week|weeks|month|months|year|years)|open[- ]?ended|no\s+horizon|indefinite)\b",
+            user_input,
+            re.I,
+        )
+        result = confirm_strategy(
+            sid,
+            user_wallet,
+            capital_usd=_extract_capital(user_input) if capital_kw else None,
+            horizon_days=hz if hz_kw else None,
+        )
+        if result.get("error"):
+            return f"**Confirm failed:** {result['error']}", [
+                {"tool": "confirm_paper_strategy", "args": {"strategy_id": sid}, "result": json.dumps(result, default=str)}
+            ]
+        try:
+            monitor_cycle(force_prices=False)
+        except Exception:
+            pass
+        hz_note = (
+            "Open-ended — liquidate anytime"
+            if result.get("open_ended") or not result.get("horizon_days")
+            else f"Horizon {result.get('horizon_days')}d — auto-liquidate at end or liquidate early"
+        )
+        reply = (
+            f"**Confirmed & deployed** `{sid}`\n"
+            f"- Paper sleeve ${_fmt(result.get('capital_usd'))} (max ${HF_MAX_STRATEGY_USDC:.0f})\n"
+            f"- Assets: {', '.join(result.get('symbols') or [])}\n"
+            f"- {hz_note}\n\n"
+            + _format_live_pnl(strategy_live_pnl(sid, user_wallet))
+        )
+        return reply, [
+            {"tool": "confirm_paper_strategy", "args": {"strategy_id": sid}, "result": json.dumps(result, default=str)}
+        ]
+
+    # Liquidate
+    if LIQUIDATE_INTENT_RE.search(user_input):
+        if not user_wallet:
+            return ("Sign in to liquidate.", [])
+        sid = strategy_id
+        if not sid:
+            active = [s for s in list_strategies(user_wallet) if s.get("status") == "active"]
+            sid = active[0]["id"] if active else None
+        if not sid:
+            return ("No active strategy to liquidate.", [])
+        result = liquidate_strategy(sid, user_wallet)
+        return (
+            result.get("message") or json.dumps(result, default=str),
+            [{"tool": "liquidate_paper_strategy", "args": {"strategy_id": sid}, "result": json.dumps(result, default=str)}],
+        )
+
+    # Strategy id alone / "status of hs…" → live pnl
+    if strategy_id and re.search(r"\b(status|show|for|of)\b", user_input, re.I):
+        if not user_wallet:
+            return ("Sign in with your wallet.", [])
+        pnl = strategy_live_pnl(strategy_id, user_wallet)
+        return _format_live_pnl(pnl), [
+            {"tool": "get_strategy_live_pnl", "args": {"strategy_id": strategy_id}, "result": json.dumps(pnl, default=str)}
+        ]
+
+    if (
+        not PAPER_INTENT_RE.search(user_input)
+        and not re.search(r"\b(create|start).{0,20}(paper|strategy|fund)\b", user_input, re.I)
+        and not OPEN_MANDATE_RE.search(user_input)
+        and not CONFIRM_INTENT_RE.search(user_input)
+        and not LIQUIDATE_INTENT_RE.search(user_input)
+        and not (strategy_id and LIVE_PNL_INTENT_RE.search(user_input))
     ):
         return None
     if not user_wallet:
@@ -817,14 +1150,14 @@ def _try_paper_shortcut(
             [],
         )
 
-    # Dashboard / monitor / positions
+    # Dashboard
     if re.search(r"\b(dashboard|positions|decisions|my\s+strateg|monitor\s+status)\b", user_input, re.I):
         dash = paper_dashboard(user_wallet)
         return _format_paper_dashboard(dash), [
             {"tool": "get_paper_dashboard", "args": {}, "result": json.dumps(dash, default=str)}
         ]
 
-    # Period backtest on saved strategy or tokens
+    # Explicit historical backtest only
     period_m = re.search(r"\b(1w|1m|3m|6m|1y|1\s*week|1\s*month|6\s*months?|1\s*year)\b", user_input, re.I)
     if period_m and re.search(r"\bbacktest\b", user_input, re.I):
         raw = period_m.group(1).lower().replace(" ", "")
@@ -837,27 +1170,25 @@ def _try_paper_shortcut(
         }
         period = period_map.get(raw, raw if raw in ("1w", "1m", "3m", "6m", "1y") else "6m")
         tokens = _extract_tokens(user_input)
-        sid_m = re.search(r"\b(str_[a-f0-9]+|[a-f0-9]{8})\b", user_input, re.I)
         result = run_strategy_backtest(
             user_wallet=user_wallet,
             period=period,
-            strategy_id=sid_m.group(1) if sid_m else None,
+            strategy_id=strategy_id,
             symbols=tokens or None,
             capital_usd=_extract_capital(user_input),
         )
-        # Prefer mock backtest formatting if nested
         bt = result.get("result") or result
         reply = _format_backtest_reply(bt if isinstance(bt, dict) else result)
         return reply, [
             {
                 "tool": "run_strategy_backtest",
-                "args": {"period": period, "tokens": tokens},
+                "args": {"period": period, "tokens": tokens, "strategy_id": strategy_id},
                 "result": json.dumps(result, default=str),
             }
         ]
 
-    # Create strategy (agent or user symbols)
-    if re.search(r"\b(create|start|new|set\s*up)\b", user_input, re.I) or OPEN_MANDATE_RE.search(
+    # Propose strategy (pending confirm)
+    if re.search(r"\b(create|start|new|set\s*up|propose)\b", user_input, re.I) or OPEN_MANDATE_RE.search(
         user_input
     ):
         tokens = _extract_tokens(user_input)
@@ -880,29 +1211,16 @@ def _try_paper_shortcut(
             created_by=created_by,
             horizon_days=parse_horizon_days(user_input),
             horizon_text=user_input,
+            require_confirm=True,
+            deploy=False,
         )
         if result.get("error"):
-            return f"**Could not create strategy:** {result['error']}", [
+            return f"**Could not propose strategy:** {result['error']}", [
                 {"tool": "create_paper_strategy", "args": {}, "result": json.dumps(result, default=str)}
             ]
-        # Kick one monitor pass so user sees initial decisions sooner
-        try:
-            monitor_cycle(force_prices=False)
-        except Exception:
-            pass
-        dash = paper_dashboard(user_wallet)
-        pick_note = (result.get("picker") or {}).get("note") or ""
-        reply = (
-            f"**Paper strategy created** `{result.get('id')}`\n"
-            f"- Mode: {result.get('mode')} · Horizon: {result.get('horizon_days')}d "
-            f"({result.get('horizon_label')})\n"
-            f"- Symbols: {', '.join(result.get('symbols') or [])}\n"
-            f"- TP {rules['take_profit_pct']}% / SL {rules['stop_loss_pct']}%\n"
-            f"- Covenant 18-analyst decisions · LLM not required\n"
-            + (f"- {pick_note}\n" if pick_note else "")
-            + f"- Market monitor every {HF_MONITOR_INTERVAL_SECONDS // 3600}h\n\n"
-            + _format_paper_dashboard(dash)
-        )
+        reply = _format_strategy_proposal(result)
+        if rules:
+            reply += f"\n- TP {rules['take_profit_pct']}% / SL {rules['stop_loss_pct']}%"
         return reply, [
             {
                 "tool": "create_paper_strategy",
@@ -911,34 +1229,92 @@ def _try_paper_shortcut(
             }
         ]
 
-    # Update TP/SL
-    if re.search(r"\b(update|edit|change|set)\b.*\b(tp|sl|take|stop|strategy)\b", user_input, re.I):
+    # Update TP/SL / horizon / add capital
+    if re.search(
+        r"\b(update|edit|change|set|add)\b.*\b(tp|sl|take|stop|strategy|horizon|duration|capital)\b",
+        user_input,
+        re.I,
+    ) or re.search(r"\badd\s+(?:more\s+)?(?:capital|\$|\d)", user_input, re.I):
         strategies = list_strategies(user_wallet)
         if not strategies:
             return "No strategies yet — say e.g. `create paper strategy with BTC ETH TP 20 SL 10`.", []
-        sid_m = re.search(r"\b(str_[a-f0-9]+|[a-f0-9]{8})\b", user_input, re.I)
-        strategy_id = sid_m.group(1) if sid_m else strategies[0].get("id")
+        sid = strategy_id or strategies[0].get("id")
         tp, sl = _extract_tp_sl(user_input)
         rules = {}
         if tp is not None:
             rules["take_profit_pct"] = tp
         if sl is not None:
             rules["stop_loss_pct"] = sl
-        if not rules:
-            return "Specify TP/SL like `set TP 20 SL 8` for your strategy.", []
-        result = update_strategy_rules(strategy_id=strategy_id, user_wallet=user_wallet, rules=rules)
+        hz_kw = re.search(
+            r"\b(\d+\s*(?:day|days|week|weeks|month|months|year|years)|open[- ]?ended|no\s+horizon)\b",
+            user_input,
+            re.I,
+        )
+        horizon_days = parse_horizon_days(user_input, None) if hz_kw else None
+        if hz_kw and re.search(r"open[- ]?ended|no\s+horizon", user_input, re.I):
+            horizon_days = 0
+        add_cap = None
+        if re.search(r"\badd\b.*\b(capital|usd|\$)|more\s+capital", user_input, re.I) or (
+            re.search(r"\$|\busd\b", user_input, re.I) and re.search(r"\badd\b", user_input, re.I)
+        ):
+            add_cap = _extract_capital(user_input)
+        if not rules and horizon_days is None and add_cap is None:
+            return "Specify TP/SL, horizon (e.g. `set horizon 30 days`), or `add capital $25`.", []
+        result = update_strategy_rules(
+            strategy_id=sid,
+            user_wallet=user_wallet,
+            rules=rules or None,
+            horizon_days=horizon_days,
+            add_capital_usd=add_cap,
+        )
+        msg = f"**Updated** `{sid}`"
+        if rules:
+            msg += f" · rules {rules}"
+        if horizon_days is not None:
+            msg += f" · horizon {'open' if horizon_days == 0 else str(horizon_days) + 'd'}"
+        if result.get("add_capital"):
+            msg += f" · {result['add_capital'].get('message') or result['add_capital']}"
         return (
-            f"**Updated** `{strategy_id}` → {rules}\n\n" + _format_paper_dashboard(paper_dashboard(user_wallet)),
-            [{"tool": "update_paper_strategy", "args": {"strategy_id": strategy_id, **rules}, "result": json.dumps(result, default=str)}],
+            msg + "\n\n" + _format_paper_dashboard(paper_dashboard(user_wallet)),
+            [{"tool": "update_paper_strategy", "args": {"strategy_id": sid}, "result": json.dumps(result, default=str)}],
         )
 
-    # Generic paper → dashboard
     if PAPER_INTENT_RE.search(user_input):
         dash = paper_dashboard(user_wallet)
         return _format_paper_dashboard(dash), [
             {"tool": "get_paper_dashboard", "args": {}, "result": json.dumps(dash, default=str)}
         ]
     return None
+
+
+def _format_live_analysis(data: dict[str, Any]) -> str:
+    if data.get("error"):
+        return f"**Analysis error:** {data['error']}"
+    a = data.get("analysis") or {}
+    if a.get("error"):
+        return f"**Analysis error:** {a['error']}"
+    synth = a.get("synthesis") or {}
+    lines = [
+        f"**Live analysis — {data.get('symbol') or a.get('symbol')}**",
+        f"Price: ${_fmt(data.get('live_price_usd') or (a.get('features') or {}).get('last'))}"
+        + (f" · 24h {data.get('change_24h_pct')}%" if data.get("change_24h_pct") is not None else ""),
+        f"Action: **{synth.get('action', 'n/a')}** · confidence {synth.get('confidence', '—')}",
+        f"Asset class: {a.get('asset_class') or '—'}",
+    ]
+    sol = data.get("solana") or {}
+    if sol.get("mint"):
+        lines.append(
+            f"Solana mint: `{sol.get('mint')}`"
+            + (" (xStock)" if sol.get("is_xstock") else "")
+        )
+    feats = a.get("features") or {}
+    if feats:
+        lines.append(
+            f"Features: ret_5d {feats.get('ret_5d')} · ret_21d {feats.get('ret_21d')} · "
+            f"vol {feats.get('vol_21d')}"
+        )
+    lines.append("\n_Paper mode · live Yahoo marks · not financial advice._")
+    return "\n".join(lines)
 
 
 def run_hedge_fund_agent(
@@ -968,6 +1344,7 @@ def run_hedge_fund_agent(
             conversation_history.append({"role": "assistant", "content": reply})
             return reply, conversation_history, [{"tool": "get_fee_structure", "args": {}, "result": json.dumps(fees)}]
 
+    # Live PnL / confirm / liquidate / propose — before any mock backtest
     paper = _try_paper_shortcut(prompt, user_wallet)
     if paper:
         reply, actions = paper
@@ -975,13 +1352,42 @@ def run_hedge_fund_agent(
         conversation_history.append({"role": "assistant", "content": reply})
         return reply, conversation_history, actions
 
-    # Prefer saved-strategy period backtests before ad-hoc date backtests when user says paper/strategy
-    backtest = _try_backtest_shortcut(prompt)
-    if backtest and not PAPER_INTENT_RE.search(prompt):
-        reply, actions = backtest
+    # Analyze ticker with live marks (before portfolio / backtest)
+    if re.search(r"\b(analy[sz]e|analysis|research|what\s+about)\b", prompt, re.I) and not STRATEGY_ID_RE.search(prompt):
+        tokens = _extract_tokens(prompt)
+        if tokens:
+            data = analyze_live_asset(tokens[0], equity_usd=HF_MAX_STRATEGY_USDC)
+            reply = _format_live_analysis(data)
+            if len(tokens) > 1:
+                for t in tokens[1:4]:
+                    reply += "\n\n" + _format_live_analysis(analyze_live_asset(t, equity_usd=HF_MAX_STRATEGY_USDC))
+            conversation_history.append({"role": "user", "content": prompt})
+            conversation_history.append({"role": "assistant", "content": reply})
+            return reply, conversation_history, [
+                {"tool": "analyze_live_asset", "args": {"symbol": tokens[0]}, "result": json.dumps(data, default=str)}
+            ]
+
+    # Strategy-id + pnl without PAPER_INTENT still caught above via LIVE_PNL; if only "pnl hs…"
+    sid_m = STRATEGY_ID_RE.search(prompt)
+    if sid_m and LIVE_PNL_INTENT_RE.search(prompt) and user_wallet:
+        pnl = strategy_live_pnl(sid_m.group(1).lower(), user_wallet)
+        reply = _format_live_pnl(pnl)
         conversation_history.append({"role": "user", "content": prompt})
         conversation_history.append({"role": "assistant", "content": reply})
-        return reply, conversation_history, actions
+        return reply, conversation_history, [
+            {"tool": "get_strategy_live_pnl", "args": {"strategy_id": sid_m.group(1).lower()}, "result": json.dumps(pnl, default=str)}
+        ]
+
+    # Historical mock only — never when asking live PnL for hs…
+    if sid_m and LIVE_PNL_INTENT_RE.search(prompt):
+        pass  # already handled
+    else:
+        backtest = _try_backtest_shortcut(prompt)
+        if backtest and not PAPER_INTENT_RE.search(prompt) and not LIVE_PNL_INTENT_RE.search(prompt):
+            reply, actions = backtest
+            conversation_history.append({"role": "user", "content": prompt})
+            conversation_history.append({"role": "assistant", "content": reply})
+            return reply, conversation_history, actions
 
     shortcut = _try_portfolio_shortcut(prompt)
     if shortcut:
@@ -1004,24 +1410,40 @@ def run_hedge_fund_agent(
 
     for action in reversed(actions):
         tool = action.get("tool")
-        if tool not in ("run_mock_backtest", "run_strategy_backtest", "get_paper_dashboard", "create_paper_strategy"):
+        if tool not in (
+            "run_mock_backtest",
+            "run_strategy_backtest",
+            "get_paper_dashboard",
+            "create_paper_strategy",
+            "get_strategy_live_pnl",
+            "confirm_paper_strategy",
+        ):
             continue
         try:
             data = json.loads(action.get("result") or "{}")
         except json.JSONDecodeError:
             break
-        if tool == "get_paper_dashboard" or tool == "create_paper_strategy":
-            if tool == "create_paper_strategy" and not data.get("error"):
-                formatted = (
-                    f"**Paper strategy `{data.get('id')}` created**\n\n"
-                    + _format_paper_dashboard(paper_dashboard(user_wallet or ""))
-                )
-            else:
-                formatted = _format_paper_dashboard(data if tool == "get_paper_dashboard" else paper_dashboard(user_wallet or ""))
+        if tool == "get_strategy_live_pnl":
+            formatted = _format_live_pnl(data)
+            history[-1] = {"role": "assistant", "content": formatted}
+            return formatted, history, actions
+        if tool == "create_paper_strategy":
+            formatted = _format_strategy_proposal(data)
+            history[-1] = {"role": "assistant", "content": formatted}
+            return formatted, history, actions
+        if tool == "confirm_paper_strategy" and not data.get("error"):
+            sid = (data.get("strategy") or {}).get("id") or ""
+            formatted = f"**Confirmed** `{sid}`\n\n" + (
+                _format_live_pnl(strategy_live_pnl(sid, user_wallet or "")) if sid and user_wallet else ""
+            )
+            history[-1] = {"role": "assistant", "content": formatted}
+            return formatted, history, actions
+        if tool == "get_paper_dashboard":
+            formatted = _format_paper_dashboard(data)
             history[-1] = {"role": "assistant", "content": formatted}
             return formatted, history, actions
         bt = data.get("result") if tool == "run_strategy_backtest" else data
-        if isinstance(bt, dict):
+        if isinstance(bt, dict) and tool in ("run_mock_backtest", "run_strategy_backtest"):
             formatted = _format_backtest_reply(bt)
             history[-1] = {"role": "assistant", "content": formatted}
             return formatted, history, actions

@@ -59,6 +59,14 @@ export type PaperStrategy = {
     notes?: string;
     objective?: string;
     horizon_days?: number;
+    mint_map?: Record<string, string>;
+    solana_assets?: {
+      symbol?: string;
+      display_symbol?: string;
+      mint?: string;
+      is_xstock?: boolean;
+    }[];
+    liquidation_mint?: string;
   };
   created_by?: string;
   updated_at?: string;
@@ -198,7 +206,7 @@ export async function createPaperStrategy(
     stop_loss_pct?: number;
     capital_usd?: number;
     notes?: string;
-    horizon_days?: number;
+    horizon_days?: number | null;
   }
 ) {
   return authFetch("/api/agents/hedge-fund/paper/strategies", authToken, {
@@ -217,6 +225,8 @@ export async function updatePaperStrategy(
     name?: string;
     status?: string;
     notes?: string;
+    horizon_days?: number | null;
+    add_capital_usd?: number;
   }
 ) {
   return authFetch(`/api/agents/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}`, authToken, {
@@ -237,6 +247,56 @@ export async function runPaperBacktest(
   return authFetch("/api/agents/hedge-fund/paper/backtest", authToken, {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+export async function confirmPaperStrategy(
+  authToken: string,
+  strategyId: string,
+  body?: { capital_usd?: number; horizon_days?: number | null }
+) {
+  return authFetch(
+    `/api/agents/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/confirm`,
+    authToken,
+    { method: "POST", body: JSON.stringify(body || {}) }
+  );
+}
+
+export async function fetchStrategyLivePnl(authToken: string, strategyId: string) {
+  return authFetch(
+    `/api/agents/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/pnl`,
+    authToken
+  );
+}
+
+export async function liquidatePaperStrategy(authToken: string, strategyId: string) {
+  return authFetch(
+    `/api/agents/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/liquidate`,
+    authToken,
+    { method: "POST" }
+  );
+}
+
+export async function addPaperStrategyCapital(
+  authToken: string,
+  strategyId: string,
+  capitalUsd: number
+) {
+  return authFetch(
+    `/api/agents/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/add-capital`,
+    authToken,
+    { method: "POST", body: JSON.stringify({ capital_usd: capitalUsd }) }
+  );
+}
+
+export async function analyzePaperAsset(
+  authToken: string,
+  symbol: string,
+  equityUsd = 100
+) {
+  return authFetch("/api/agents/hedge-fund/paper/analyze", authToken, {
+    method: "POST",
+    body: JSON.stringify({ symbol, equity_usd: equityUsd }),
   });
 }
 
