@@ -297,15 +297,34 @@ def create_strategy(
     horizon_text: str = "",
     require_confirm: bool = True,
     deploy: bool = False,
+    trading_mode: str = "live",
+    funding_token: str = "USDC",
+    mint_overrides: Optional[dict[str, str]] = None,
+    max_names: Optional[int] = None,
 ) -> dict[str, Any]:
     """
-    Create paper strategy.
-    By default require_confirm=True → status=pending (no fills) until confirm_strategy().
-    Resolves Solana mints via Jupiter (xStocks for equities). Paper only — no deposits.
+    Create strategy (live by default). Pending until confirm_strategy().
+    Live: requires SOL/USDC deposit, Jupiter swaps, 1% start fee / 10% perf on profit.
+    Paper: virtual fills only (trading_mode='paper').
     Capital sleeve capped at HF_MAX_STRATEGY_USDC (default $100).
     """
     from hedge_fund_assets import USDC_MINT, resolve_hf_book_mints
-    from covenant_picker import horizon_days_for_picker, horizon_preset, parse_horizon_days, select_assets_for_horizon
+    from covenant_picker import (
+        filter_real_tickers,
+        horizon_days_for_picker,
+        horizon_preset,
+        parse_asset_class_preference,
+        parse_asset_count,
+        parse_horizon_days,
+        select_assets_for_horizon,
+    )
+
+    trading_mode = (trading_mode or "live").strip().lower()
+    if trading_mode not in ("live", "paper"):
+        trading_mode = "live"
+    funding_token = (funding_token or "USDC").strip().upper()
+    if funding_token not in ("SOL", "USDC"):
+        funding_token = "USDC"
 
     portfolio = get_or_create_portfolio(user_wallet, capital_usd or DEFAULT_PAPER_CAPITAL)
     sleeve_capital = clamp_strategy_capital(capital_usd)
@@ -348,35 +367,81 @@ def create_strategy(
     preset = horizon_preset(pick_days)
     horizon_label = "open" if not days else preset["key"]
     pick_meta: dict[str, Any] = {}
+    notes_blob = f"{horizon_text or ''} {(rules or {}).get('notes') or ''}".strip()
+    asset_pref = parse_asset_class_preference(notes_blob)
+    allow_crypto = asset_pref != "stocks"
+    crypto_only = asset_pref == "crypto"
+    requested_count = max_names if max_names else parse_asset_count(notes_blob)
 
-    syms = [str(s).strip() for s in (symbols or []) if s and str(s).strip()]
+    # Drop mandate words like STOCKS / CRYPTO so agent can auto-select
+    syms = filter_real_tickers(symbols)
+    agent_picked = False
     if not syms:
-        pick_meta = select_assets_for_horizon(horizon_days=pick_days)
+        pick_meta = select_assets_for_horizon(
+            horizon_days=pick_days,
+            max_names=requested_count,
+            allow_crypto=allow_crypto,
+            crypto_only=crypto_only,
+            fast=True,
+        )
         syms = list(pick_meta.get("symbols") or [])
+        agent_picked = True
         created_by = created_by or "agent"
         mode = mode if mode in ("agent", "user", "hybrid") else "agent"
         if not name:
-            name = f"Agent {horizon_label}" + (f" {days}d" if days else " open")
+            label = "stocks" if asset_pref == "stocks" else ("crypto" if asset_pref == "crypto" else "book")
+            name = f"Agent {label} {horizon_label}" + (f" {days}d" if days else " open")
 
-    # Validate symbols via Yahoo
+    # Validate symbols via Yahoo (skip heavy probe when agent-ranked already)
     valid = []
     errors = []
     for s in syms[:10]:
-        r = resolve_yahoo_asset(s, probe=True)
+        r = resolve_yahoo_asset(s, probe=not agent_picked)
         if r.get("error"):
             errors.append(r["error"])
         else:
+            # Honor stocks-only / crypto-only after resolve
+            cls = r.get("asset_class")
+            if asset_pref == "stocks" and cls == "crypto":
+                continue
+            if asset_pref == "crypto" and cls != "crypto":
+                continue
             valid.append(r["symbol"])
+
+    # If user/LLM gave junk tickers, fall back to agent pick instead of failing
+    if not valid:
+        pick_meta = select_assets_for_horizon(
+            horizon_days=pick_days,
+            allow_crypto=allow_crypto,
+            crypto_only=crypto_only,
+            fast=True,
+        )
+        syms = list(pick_meta.get("symbols") or [])
+        agent_picked = True
+        created_by = "agent"
+        mode = "agent"
+        errors = []
+        for s in syms[:10]:
+            r = resolve_yahoo_asset(s, probe=False)
+            if not r.get("error"):
+                valid.append(r["symbol"])
+        if not name:
+            name = f"Agent {horizon_label}" + (f" {days}d" if days else " open")
+
     if not valid:
         return {
             "error": "No valid symbols — stocks or crypto are required",
             "errors": errors,
-            "hint": "Use Yahoo tickers e.g. XRP, SPY (S&P500), AAPL, BTC-USD, ^GSPC",
+            "hint": "Omit tickers to let the agent pick, or use e.g. AAPL, NVDA, BTC",
             "picker": pick_meta,
         }
+    rules_final_pref = dict(rules or {})
+    rules_final_pref["asset_class_preference"] = asset_pref
+    rules_final_pref["agent_picked"] = agent_picked
+    rules = rules_final_pref
 
-    # Jupiter / xStocks mint resolution
-    mint_info = resolve_hf_book_mints(valid)
+    # Jupiter / catalog mint resolution (stocks from hedge-fund-tokens.json)
+    mint_info = resolve_hf_book_mints(valid, mint_overrides=mint_overrides)
     if mint_info.get("errors"):
         # Soft-fail: still propose but flag missing mints
         errors.extend([e.get("error") for e in mint_info["errors"] if e.get("error")])
@@ -395,8 +460,12 @@ def create_strategy(
     rules_final["liquidation_asset"] = "USDC"
     rules_final["liquidation_mint"] = USDC_MINT
     rules_final["objective"] = rules_final.get("objective") or "max_profit"
-    rules_final["paper_mode"] = True
-    rules_final["deposits_required"] = False
+    rules_final["trading_mode"] = trading_mode
+    rules_final["funding_token"] = funding_token
+    rules_final["paper_mode"] = trading_mode == "paper"
+    rules_final["deposits_required"] = trading_mode == "live"
+    rules_final["mgmt_fee_pct"] = 1.0
+    rules_final["perf_fee_pct"] = 10.0
 
     status = "active" if (deploy and not require_confirm) else "pending"
     sid = _new_id("hs")
@@ -407,8 +476,8 @@ def create_strategy(
                 """
                 INSERT INTO hf_strategies (
                     id, portfolio_id, user_wallet, name, mode, status, symbols, allocation_pct,
-                    rules, created_by, horizon_days, horizon_label
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *
+                    rules, created_by, horizon_days, horizon_label, trading_mode
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *
                 """,
                 (
                     sid,
@@ -423,21 +492,37 @@ def create_strategy(
                     created_by if created_by in ("agent", "user") else "agent",
                     days,
                     horizon_label,
+                    trading_mode,
                 ),
             )
             strategy = _row(cur.fetchone())
 
     deploy_result = None
     if status == "active":
-        refresh_symbols(valid, force=False)
-        deploy_result = _deploy_initial_allocations(
-            portfolio["id"], sid, user_wallet, valid, allocation_pct, capital_usd=sleeve_capital
-        )
+        if trading_mode == "live":
+            from hedge_fund_live import deploy_live_allocations
+
+            deploy_result = deploy_live_allocations(
+                strategy,
+                capital_usd=sleeve_capital,
+                funding_token=funding_token,
+                mint_overrides=mint_overrides,
+            )
+        else:
+            refresh_symbols(valid, force=False)
+            deploy_result = _deploy_initial_allocations(
+                portfolio["id"], sid, user_wallet, valid, allocation_pct, capital_usd=sleeve_capital
+            )
 
     horizon_note = (
-        f"Open-ended — close anytime with **liquidate {sid}**."
+        f"Open-ended — liquidate anytime with **liquidate {sid}**."
         if not days
         else f"Horizon {days}d — auto-liquidates to USDC when ended (or liquidate early)."
+    )
+    mode_note = (
+        f"LIVE · deposit SOL/USDC first · 1% fee at start · 10% of profit on liquidate · max ${HF_MAX_STRATEGY_USDC:,.0f}"
+        if trading_mode == "live"
+        else f"PAPER · virtual fills · max ${HF_MAX_STRATEGY_USDC:,.0f}"
     )
     return {
         **strategy,
@@ -445,22 +530,24 @@ def create_strategy(
         "deploy": deploy_result,
         "errors": errors,
         "mode": strategy.get("mode") or mode,
-        "paper": True,
-        "deposits_required": False,
+        "trading_mode": trading_mode,
+        "paper": trading_mode == "paper",
+        "deposits_required": trading_mode == "live",
         "picker": pick_meta,
         "horizon_days": days,
         "horizon_label": horizon_label,
         "open_ended": days is None,
         "capital_usd": sleeve_capital,
         "max_capital_usd": HF_MAX_STRATEGY_USDC,
+        "funding_token": funding_token,
         "solana_assets": mint_info.get("assets") or [],
         "mint_map": mint_info.get("mint_map") or {},
         "usdc_mint": USDC_MINT,
         "status": status,
         "awaiting_confirmation": status == "pending",
         "confirm_hint": (
-            f"Reply **confirm {sid}** (optional: `with $50`, `for 30 days`) to deploy "
-            f"**${sleeve_capital:,.2f}** paper sleeve (max ${HF_MAX_STRATEGY_USDC:,.0f}). {horizon_note}"
+            f"Review mints below. Reply **confirm {sid}** (optional: `with $50`, mint overrides) to deploy. "
+            f"{mode_note}. {horizon_note}"
             if status == "pending"
             else None
         ),
@@ -518,46 +605,121 @@ def _ensure_paper_cash(portfolio_id: str, need_usd: float) -> dict[str, Any]:
             }
 
 
+def _finish_live_deploy(strategy_id: str, rules: dict[str, Any], deploy: dict[str, Any]) -> None:
+    """
+    Persist the outcome of a (possibly backgrounded) live deploy: mark the
+    strategy failed on total failure, or record fills/errors on success.
+    Runs after deploy_live_allocations returns — called from a background
+    thread so confirm_strategy can respond to the user immediately instead
+    of blocking on however long the Jupiter swaps take.
+    """
+    rules = dict(rules)
+    if deploy.get("error") or not deploy.get("ok"):
+        rules["last_error"] = str(deploy.get("error") or "Live deploy failed — could not buy tokens/stocks")
+        rules["deploy_errors"] = deploy.get("errors") or []
+        rules["deploy_failed_at"] = _now().isoformat()
+        init_db()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE hf_strategies
+                    SET status = 'failed', rules = %s, updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (Json(rules), strategy_id),
+                )
+        return
+
+    rules["deploy_usd"] = deploy.get("deploy_usd")
+    rules["mgmt_fee_usd"] = deploy.get("mgmt_fee_usd")
+    rules["mint_map"] = deploy.get("mint_map") or rules.get("mint_map")
+    rules["solana_assets"] = deploy.get("solana_assets") or rules.get("solana_assets")
+    if deploy.get("errors"):
+        rules["deploy_errors"] = deploy.get("errors")
+        rules["partial_deploy_refunded"] = bool(deploy.get("refunded_partial"))
+        rules["last_error"] = (
+            f"{len(deploy['errors'])} buy(s) failed and were skipped"
+            + (" — unspent capital refunded." if deploy.get("refunded_partial") else ".")
+        )
+    else:
+        rules["deploy_errors"] = []
+        rules["last_error"] = None
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE hf_strategies SET rules = %s, updated_at = NOW() WHERE id = %s",
+                (Json(rules), strategy_id),
+            )
+
+
 def confirm_strategy(
     strategy_id: str,
     user_wallet: str,
     capital_usd: Optional[float] = None,
     horizon_days: Optional[int] = None,
+    mint_overrides: Optional[dict[str, str]] = None,
+    funding_token: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Activate a pending (or closed-never-traded) strategy and deploy sleeve capital."""
+    """Activate pending strategy and deploy (live Jupiter or paper fills)."""
     strategy = get_strategy(strategy_id, user_wallet)
     if not strategy:
         return {"error": "Strategy not found"}
 
     status = strategy.get("status")
-    n_trades = _strategy_trade_count(strategy_id, user_wallet)
-    # Allow redeploy of closed/pending strategies that never received fills
-    if status == "active":
-        positions = list_positions_for_strategy(strategy_id)
-        open_units = sum(float(p.get("units") or 0) for p in positions)
-        if open_units > 0 or n_trades > 0:
-            return {"strategy": strategy, "note": "Already active", "confirmed": True}
-    elif status not in ("pending", "paused", "closed"):
+    rules = dict(strategy.get("rules") or {})
+    trading_mode = (strategy.get("trading_mode") or rules.get("trading_mode") or "live").lower()
+
+    if trading_mode == "live":
+        from hedge_fund_live import list_live_positions, list_live_trades
+
+        n_live = len(list_live_trades(strategy_id, limit=5))
+        open_live = sum(float(p.get("units") or 0) for p in list_live_positions(strategy_id))
+        if status == "active" and (open_live > 0 or n_live > 0):
+            return {"strategy": strategy, "note": "Already active (live)", "confirmed": True}
+    else:
+        n_trades = _strategy_trade_count(strategy_id, user_wallet)
+        if status == "active":
+            positions = list_positions_for_strategy(strategy_id)
+            open_units = sum(float(p.get("units") or 0) for p in positions)
+            if open_units > 0 or n_trades > 0:
+                return {"strategy": strategy, "note": "Already active", "confirmed": True}
+        elif status == "closed" and n_trades > 0:
+            return {
+                "error": "Strategy already closed with trade history. Create a new strategy to redeploy.",
+                "strategy_id": strategy_id,
+            }
+
+    if status not in ("pending", "paused", "closed", "active"):
         return {"error": f"Cannot confirm strategy in status={status}"}
-    elif status == "closed" and n_trades > 0:
-        return {
-            "error": "Strategy already closed with trade history. Create a new strategy to redeploy.",
-            "strategy_id": strategy_id,
-        }
 
     symbols = list(strategy.get("symbols") or [])
     if not symbols:
         return {"error": "Strategy has no symbols — stocks/crypto are required before confirm"}
     allocation_pct = dict(strategy.get("allocation_pct") or {})
-    rules = dict(strategy.get("rules") or {})
     if capital_usd is not None:
         sleeve = clamp_strategy_capital(capital_usd)
     else:
         sleeve = clamp_strategy_capital(rules.get("capital_usd"))
     rules["capital_usd"] = sleeve
     rules["max_capital_usd"] = HF_MAX_STRATEGY_USDC
-    rules["paper_mode"] = True
-    rules["deposits_required"] = False
+    rules["trading_mode"] = trading_mode
+    rules["paper_mode"] = trading_mode == "paper"
+    rules["deposits_required"] = trading_mode == "live"
+    if funding_token:
+        rules["funding_token"] = funding_token.upper()
+    funding = (rules.get("funding_token") or "USDC").upper()
+
+    # Apply mint corrections
+    if mint_overrides:
+        from hedge_fund_assets import resolve_hf_book_mints
+
+        mint_info = resolve_hf_book_mints(symbols, mint_overrides=mint_overrides)
+        rules["mint_map"] = mint_info.get("mint_map") or rules.get("mint_map") or {}
+        rules["solana_assets"] = mint_info.get("assets") or rules.get("solana_assets") or []
+        if mint_info.get("errors"):
+            return {"error": "Mint resolution failed", "details": mint_info["errors"]}
 
     if horizon_days is not None:
         days = int(horizon_days) if int(horizon_days) > 0 else None
@@ -581,7 +743,13 @@ def confirm_strategy(
         w = round(100.0 / len(symbols), 4)
         allocation_pct = {s: w for s in symbols}
 
-    # Reset horizon clock on (re)deploy
+    if trading_mode == "live":
+        # Mark deploy as in-progress so a concurrent dashboard refresh (which
+        # triggers reconcile_stuck_live_strategies) doesn't mistake an
+        # in-flight Jupiter swap for an abandoned deploy and refund/dismiss
+        # the strategy out from under this call.
+        rules["deploy_started_at"] = _now().isoformat()
+
     init_db()
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -589,18 +757,53 @@ def confirm_strategy(
                 """
                 UPDATE hf_strategies
                 SET status = 'active', rules = %s, horizon_days = %s, horizon_label = %s,
-                    created_at = NOW(), updated_at = NOW()
+                    trading_mode = %s, created_at = NOW(), updated_at = NOW()
                 WHERE id = %s AND user_wallet = %s RETURNING *
                 """,
                 (
                     Json(rules),
                     days,
                     rules["horizon_label"],
+                    trading_mode,
                     strategy_id,
                     user_wallet.strip(),
                 ),
             )
             strategy = _row(cur.fetchone())
+
+    if trading_mode == "live":
+        import threading
+
+        def _run_deploy_and_finish() -> None:
+            from hedge_fund_live import deploy_live_allocations
+
+            deploy = deploy_live_allocations(
+                strategy,
+                capital_usd=sleeve,
+                funding_token=funding,
+                mint_overrides=mint_overrides or rules.get("mint_map"),
+            )
+            _finish_live_deploy(strategy_id, dict(rules), deploy)
+
+        threading.Thread(target=_run_deploy_and_finish, daemon=True).start()
+
+        symbol_list = ", ".join(symbols)
+        return {
+            "strategy": strategy,
+            "confirmed": True,
+            "deploying": True,
+            "trading_mode": "live",
+            "capital_usd": sleeve,
+            "horizon_days": days,
+            "open_ended": days is None,
+            "symbols": symbols,
+            "message": (
+                f"Confirmed {strategy_id} — buying {len(symbols)} asset(s) via Jupiter now "
+                f"({symbol_list}). Each buy can take up to ~2-3 minutes on-chain. Fills (or "
+                "errors) land in the Strategies tab as they complete — ask me "
+                f"'status {strategy_id}' anytime to check."
+            ),
+        }
 
     refresh_symbols(symbols, force=False)
     deploy = _deploy_initial_allocations(
@@ -615,6 +818,7 @@ def confirm_strategy(
         "strategy": strategy,
         "deploy": deploy,
         "confirmed": True,
+        "trading_mode": "paper",
         "capital_usd": sleeve,
         "max_capital_usd": HF_MAX_STRATEGY_USDC,
         "horizon_days": days,
@@ -631,10 +835,57 @@ def confirm_strategy(
 
 
 def strategy_live_pnl(strategy_id: str, user_wallet: str) -> dict[str, Any]:
-    """Live mark-to-market PnL for a paper strategy (not a historical mock backtest)."""
+    """Live mark-to-market PnL for a strategy (live Jupiter book or paper marks)."""
     strategy = get_strategy(strategy_id, user_wallet)
     if not strategy:
         return {"error": "Strategy not found", "strategy_id": strategy_id}
+
+    rules = strategy.get("rules") or {}
+    trading_mode = (strategy.get("trading_mode") or rules.get("trading_mode") or "live").lower()
+    if trading_mode == "live":
+        from hedge_fund_live import live_strategy_mark
+
+        mark = live_strategy_mark(strategy_id, user_wallet)
+        created = strategy.get("created_at")
+        horizon = int(strategy.get("horizon_days") or rules.get("horizon_days") or 0)
+        ends_at = None
+        expired = False
+        status = strategy.get("status")
+        if created and horizon and status == "active":
+            try:
+                if isinstance(created, str):
+                    created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                else:
+                    created_dt = created
+                if created_dt.tzinfo is None:
+                    created_dt = created_dt.replace(tzinfo=timezone.utc)
+                ends_at = created_dt + timedelta(days=horizon)
+                expired = _now() >= ends_at
+            except Exception:
+                pass
+        return {
+            **mark,
+            "name": strategy.get("name"),
+            "status": status,
+            "symbols": list(strategy.get("symbols") or []),
+            "mint_map": rules.get("mint_map") or {},
+            "solana_assets": rules.get("solana_assets") or [],
+            "capital_usd": rules.get("capital_usd"),
+            "horizon_days": horizon or None,
+            "created_at": created,
+            "ends_at": ends_at.isoformat() if ends_at else None,
+            "expired": expired,
+            "never_deployed": not mark.get("trades"),
+            "hint": (
+                f"No live fills yet — confirm {strategy_id} after depositing SOL/USDC."
+                if not mark.get("trades") and status in ("pending", "closed")
+                else None
+            ),
+            "liquidation_asset": "USDC",
+            "liquidation_mint": rules.get("liquidation_mint"),
+            "trading_mode": "live",
+            "note": "LIVE Jupiter marks — real on-chain positions.",
+        }
 
     symbols = list(strategy.get("symbols") or [])
     refresh_symbols(symbols, force=False)
@@ -775,7 +1026,7 @@ def liquidate_strategy(
     user_wallet: str,
     reason: str = "Horizon ended — liquidate to USDC",
 ) -> dict[str, Any]:
-    """Sell all strategy positions to paper cash (USDC). Marks strategy closed."""
+    """Sell all strategy positions to USDC (live Jupiter or paper). Marks strategy closed."""
     from hedge_fund_assets import USDC_MINT
 
     strategy = get_strategy(strategy_id, user_wallet)
@@ -784,6 +1035,83 @@ def liquidate_strategy(
     if strategy.get("status") == "closed":
         return {"strategy": strategy, "note": "Already closed", "trades": []}
 
+    rules0 = dict(strategy.get("rules") or {})
+    trading_mode = (strategy.get("trading_mode") or rules0.get("trading_mode") or "live").lower()
+    if trading_mode == "live":
+        from hedge_fund_live import liquidate_live_strategy
+
+        live = liquidate_live_strategy(strategy, reason=reason)
+        rules0["liquidated_at"] = _now().isoformat()
+        rules0["liquidation_proceeds_usd"] = live.get("proceeds_usdc")
+        rules0["perf_fee_usd"] = live.get("perf_fee_usd")
+        rules0["liquidation_mint"] = USDC_MINT
+        init_db()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE hf_strategies SET status = 'closed', rules = %s, updated_at = NOW()
+                    WHERE id = %s RETURNING *
+                    """,
+                    (Json(rules0), strategy_id),
+                )
+                strategy = _row(cur.fetchone())
+        return {**live, "strategy": strategy, "trading_mode": "live"}
+
+    return _liquidate_paper(strategy_id, user_wallet, reason)
+
+
+def retry_strategy_deploy(
+    strategy_id: str,
+    user_wallet: str,
+    replace: Optional[dict[str, str]] = None,
+    mint_overrides: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
+    """
+    Retry the Jupiter buy for any leg of a confirmed live strategy that never
+    filled (e.g. "No routes found"). Optionally swap a failed ticker for a
+    different one via `replace` (e.g. {"AAPL": "PLTR"}) before retrying.
+    """
+    strategy = get_strategy(strategy_id, user_wallet)
+    if not strategy:
+        return {"error": "Strategy not found"}
+    trading_mode = (strategy.get("trading_mode") or (strategy.get("rules") or {}).get("trading_mode") or "live").lower()
+    if trading_mode != "live":
+        return {"error": "Retry only applies to live strategies"}
+    if strategy.get("status") not in ("active", "paused"):
+        return {"error": f"Cannot retry while status={strategy.get('status')}"}
+
+    import threading
+
+    from hedge_fund_live import retry_live_deploy
+
+    rules = dict(strategy.get("rules") or {})
+    rules["deploy_started_at"] = _now().isoformat()
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE hf_strategies SET rules = %s, updated_at = NOW() WHERE id = %s",
+                (Json(rules), strategy_id),
+            )
+
+    def _run_retry() -> None:
+        retry_live_deploy(strategy, replace=replace, mint_overrides=mint_overrides)
+
+    threading.Thread(target=_run_retry, daemon=True).start()
+
+    return {
+        "ok": True,
+        "retrying": True,
+        "strategy": strategy,
+        "message": "Retrying the failed leg(s) via Jupiter now — check the Strategies tab or ask 'status' in a moment.",
+    }
+
+
+def _liquidate_paper(strategy_id: str, user_wallet: str, reason: str) -> dict[str, Any]:
+    strategy = get_strategy(strategy_id, user_wallet)
+    if not strategy:
+        return {"error": "Strategy not found"}
     portfolio_id = strategy["portfolio_id"]
     positions = list_positions_for_strategy(strategy_id)
     refresh_symbols([p["symbol"] for p in positions], force=True)
@@ -888,6 +1216,26 @@ def update_strategy_rules(
             row = cur.fetchone()
             if not row:
                 return {"error": "Strategy not found"}
+            if row["status"] == "pending":
+                return {
+                    "error": (
+                        "Strategy is still pending confirmation — mint addresses can be corrected "
+                        "via the mint override fields, but other edits unlock only after you confirm "
+                        "and assets are bought. Reply confirm/dismiss first."
+                    ),
+                }
+            composition_change = (
+                (symbols is not None and list(symbols) != list(row["symbols"] or []))
+                or allocation_pct is not None
+                or (rules or {}).get("mint_overrides") is not None
+            )
+            if composition_change and _successful_live_buys(strategy_id):
+                return {
+                    "error": (
+                        "This strategy has already bought assets on-chain — its symbols/allocation "
+                        "can no longer be edited. Liquidate it and create a new strategy instead."
+                    ),
+                }
             merged_rules = dict(row["rules"] or {})
             if rules:
                 merged_rules.update(rules)
@@ -939,7 +1287,7 @@ def add_capital_to_strategy(
     strategy = get_strategy(strategy_id, user_wallet)
     if not strategy:
         return {"error": "Strategy not found"}
-    if strategy.get("status") not in ("active", "pending"):
+    if strategy.get("status") not in ("active", "paused"):
         return {"error": f"Cannot add capital while status={strategy.get('status')}"}
 
     rules = dict(strategy.get("rules") or {})
@@ -1020,7 +1368,12 @@ def analyze_live_asset(symbol: str, equity_usd: float = HF_MAX_STRATEGY_USDC) ->
     }
 
 
-def list_strategies(user_wallet: str) -> list[dict[str, Any]]:
+def list_strategies(
+    user_wallet: str,
+    *,
+    include_failed: bool = True,
+    include_closed: bool = True,
+) -> list[dict[str, Any]]:
     init_db()
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -1028,7 +1381,160 @@ def list_strategies(user_wallet: str) -> list[dict[str, Any]]:
                 "SELECT * FROM hf_strategies WHERE user_wallet = %s ORDER BY created_at DESC",
                 (user_wallet.strip(),),
             )
-            return [_row(r) for r in cur.fetchall()]
+            rows = [_row(r) for r in cur.fetchall()]
+    if not include_failed:
+        rows = [r for r in rows if r.get("status") != "failed"]
+    if not include_closed:
+        rows = [r for r in rows if r.get("status") != "closed"]
+    return rows
+
+
+def _successful_live_buys(strategy_id: str) -> bool:
+    from hedge_fund_live import list_live_positions, list_live_trades
+
+    if sum(float(p.get("units") or 0) for p in list_live_positions(strategy_id)) > 0:
+        return True
+    for t in list_live_trades(strategy_id, limit=50):
+        if str(t.get("side") or "").upper() == "BUY" and float(t.get("units") or 0) > 0:
+            if t.get("signature"):
+                return True
+            # Paper-like fill without signature still counts as a fill
+            if float(t.get("notional_usd") or 0) > 0:
+                return True
+    return False
+
+
+def reconcile_stuck_live_strategies(user_wallet: str) -> dict[str, Any]:
+    """
+    Failed Jupiter deploys left strategies on the board and ledger spend
+    even though tokens never left the HF wallet. Refund + dismiss those sleeves.
+    """
+    from hedge_fund_ledger import refund_failed_hf_deploy, _strategy_deploy_spend_outstanding
+    from hedge_fund_live import list_live_trades
+
+    # Worst-case deploy time: up to 12 assets * SWAP_TIMEOUT_S(150s) each,
+    # sequential, plus overhead. Anything still mid-flight within this window
+    # is NOT stuck — leave it alone so we don't race a live deploy call.
+    DEPLOY_GRACE_MINUTES = 35
+
+    healed = []
+    for s in list_strategies(user_wallet):
+        status = s.get("status")
+        if status in ("dismissed", "closed"):
+            continue
+        rules = dict(s.get("rules") or {})
+        mode = (s.get("trading_mode") or rules.get("trading_mode") or "live").lower()
+        if mode != "live":
+            continue
+        sid = s["id"]
+        if _successful_live_buys(sid):
+            continue
+
+        deploy_started_at = rules.get("deploy_started_at")
+        if deploy_started_at:
+            try:
+                started = datetime.fromisoformat(str(deploy_started_at))
+                if (_now() - started).total_seconds() < DEPLOY_GRACE_MINUTES * 60:
+                    continue
+            except (TypeError, ValueError):
+                pass
+
+        live_tr = list_live_trades(sid, limit=50)
+        outstanding = _strategy_deploy_spend_outstanding(user_wallet, sid)
+        attempted = bool(
+            live_tr
+            or outstanding
+            or rules.get("last_error")
+            or rules.get("deploy_failed_at")
+            or status in ("failed", "active")
+        )
+        # Clean pending proposal with no deploy attempt — leave for confirm
+        if status == "pending" and not attempted:
+            continue
+        if not attempted:
+            continue
+
+        refund = refund_failed_hf_deploy(user_wallet, sid) if outstanding else {"refunded": False, "credits": []}
+        err_bits = [
+            t.get("reason")
+            for t in live_tr
+            if str(t.get("side") or "").upper() == "ERROR" and t.get("reason")
+        ]
+        rules["last_error"] = rules.get("last_error") or (
+            err_bits[0] if err_bits else "Could not buy tokens/stocks — capital returned to your balance"
+        )
+        rules["ledger_refunded"] = bool(refund.get("refunded") or refund.get("credits"))
+        rules["refund_credits"] = refund.get("credits") or []
+        rules["dismissed"] = True
+        rules["dismissed_at"] = _now().isoformat()
+        rules["dismiss_reason"] = "auto_reconcile_failed_deploy"
+        init_db()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE hf_strategies
+                    SET status = 'dismissed', rules = %s, updated_at = NOW()
+                    WHERE id = %s AND user_wallet = %s
+                    """,
+                    (Json(rules), sid, user_wallet.strip()),
+                )
+        healed.append(
+            {
+                "id": sid,
+                "refunded": rules["ledger_refunded"],
+                "credits": rules["refund_credits"],
+                "error": rules["last_error"],
+            }
+        )
+    return {"healed": healed, "count": len(healed)}
+
+
+def dismiss_strategy(strategy_id: str, user_wallet: str) -> dict[str, Any]:
+    """Remove failed/pending-never-deployed strategies from the board and refund unused spend."""
+    from hedge_fund_ledger import refund_failed_hf_deploy
+
+    strategy = get_strategy(strategy_id, user_wallet)
+    if not strategy:
+        return {"error": "Strategy not found"}
+    status = strategy.get("status")
+    rules = dict(strategy.get("rules") or {})
+    if status not in ("failed", "pending", "closed", "active"):
+        return {
+            "error": "Only failed, pending, closed, or empty active strategies can be dismissed.",
+            "status": status,
+        }
+    if status == "active" and _successful_live_buys(strategy_id):
+        return {"error": "Active strategy has live fills — liquidate instead of dismiss."}
+
+    refund = refund_failed_hf_deploy(user_wallet, strategy_id)
+    rules["ledger_refunded"] = bool(refund.get("refunded") or refund.get("credits"))
+    rules["refund_credits"] = refund.get("credits") or []
+    rules["dismissed"] = True
+    rules["dismissed_at"] = _now().isoformat()
+
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE hf_strategies
+                SET status = 'dismissed', rules = %s, updated_at = NOW()
+                WHERE id = %s AND user_wallet = %s RETURNING *
+                """,
+                (Json(rules), strategy_id, user_wallet.strip()),
+            )
+            row = cur.fetchone()
+    return {
+        "dismissed": True,
+        "strategy_id": strategy_id,
+        "strategy": _row(row) if row else None,
+        "refund": refund,
+        "message": (
+            f"Strategy {strategy_id} dismissed."
+            + (" Unused deploy capital returned to your balance." if refund.get("credits") else "")
+        ),
+    }
 
 
 def get_strategy(strategy_id: str, user_wallet: Optional[str] = None) -> Optional[dict[str, Any]]:
@@ -1351,6 +1857,20 @@ def evaluate_strategy(strategy_id: str, execute: bool = True) -> dict[str, Any]:
     if not strategy or strategy.get("status") != "active":
         return {"error": "Strategy not active", "strategy_id": strategy_id}
 
+    rules0 = strategy.get("rules") or {}
+    trading_mode = (strategy.get("trading_mode") or rules0.get("trading_mode") or "live").lower()
+    if trading_mode == "live":
+        # Live sleeves: only horizon auto-liquidate runs above; no paper fills.
+        return {
+            "strategy_id": strategy_id,
+            "trading_mode": "live",
+            "skipped_paper_eval": True,
+            "decisions": [],
+            "count": 0,
+            "evaluated_at": _now().isoformat(),
+            "note": "Live strategy — marks/trades on-chain; paper covenant loop skipped.",
+        }
+
     symbols = list(strategy.get("symbols") or [])
     rules = strategy.get("rules") or {}
     tp = float(rules.get("take_profit_pct") or 0)
@@ -1634,24 +2154,80 @@ def list_backtests(user_wallet: str, limit: int = 20) -> list[dict[str, Any]]:
 
 
 def paper_dashboard(user_wallet: str) -> dict[str, Any]:
-    summary = portfolio_summary(user_wallet)
-    strategies = list_strategies(user_wallet)
-    decisions = list_decisions(user_wallet, limit=50)
-    trades = list_trades(user_wallet, limit=50)
-    backtests = list_backtests(user_wallet, limit=10)
-    watched = list_watched_symbols()
-    market = get_market_snapshots(watched) if watched else []
+    from hedge_fund_live import list_live_positions, list_live_trades
 
+    reconcile_stuck_live_strategies(user_wallet)
+    summary = portfolio_summary(user_wallet)
+    all_strategies = list_strategies(user_wallet)
+
+    # Hide dismissed + failed from the main board
+    strategies = [s for s in all_strategies if s.get("status") not in ("dismissed", "failed")]
+    failed_strategies = [
+        {
+            **s,
+            "last_error": (s.get("rules") or {}).get("last_error"),
+            "deploy_errors": (s.get("rules") or {}).get("deploy_errors") or [],
+        }
+        for s in all_strategies
+        if s.get("status") == "failed"
+    ]
+    decisions = list_decisions(user_wallet, limit=30)
+    trades = list_trades(user_wallet, limit=30)
+    backtests = list_backtests(user_wallet, limit=5)
+    has_paper = any(
+        (s.get("trading_mode") or (s.get("rules") or {}).get("trading_mode") or "live") == "paper"
+        for s in strategies
+    )
+    # Avoid Yahoo market refresh on live-only dashboards (was making loads ~20s+)
+    market = get_market_snapshots(list_watched_symbols()[:12]) if has_paper else []
+
+    all_live_trades: list[dict[str, Any]] = []
     # Per-strategy breakdown (same asset can appear under multiple strategies)
     by_strategy: list[dict[str, Any]] = []
     for s in strategies:
         sid = s["id"]
+        rules = s.get("rules") or {}
+        trading_mode = (s.get("trading_mode") or rules.get("trading_mode") or "live").lower()
+        # Pending proposals belong on the strategy list, not the live-sleeve board
+        if s.get("status") == "pending":
+            continue
+        if trading_mode == "live":
+            live_pos = list_live_positions(sid)
+            live_tr = list_live_trades(sid, limit=30)
+            all_live_trades.extend(live_tr)
+            sleeve = sum(float(p.get("cost_basis_usd") or 0) for p in live_pos)
+            marked = [
+                {
+                    **p,
+                    "strategy_id": sid,
+                    "strategy_name": s.get("name"),
+                    "market_value_usd": p.get("cost_basis_usd"),
+                    "unrealized_pnl_usd": None,
+                }
+                for p in live_pos
+                if float(p.get("units") or 0) > 0
+            ]
+            by_strategy.append(
+                {
+                    "strategy": s,
+                    "trading_mode": "live",
+                    "positions": marked,
+                    "sleeve_value_usd": round(sleeve, 2),
+                    "trades": [],
+                    "live_trades": live_tr[:15],
+                    "decisions": [d for d in decisions if d.get("strategy_id") == sid][:10],
+                    "symbols": s.get("symbols") or [],
+                    "horizon_days": s.get("horizon_days"),
+                    "horizon_label": s.get("horizon_label"),
+                }
+            )
+            continue
+
         spos = list_positions_for_strategy(sid)
-        snaps = {m["symbol"]: m for m in get_market_snapshots([p["symbol"] for p in spos])} if spos else {}
         marked = []
         sleeve = 0.0
         for p in spos:
-            mark = float((snaps.get(p["symbol"]) or {}).get("price_usd") or p.get("mark_price_usd") or p.get("avg_entry_usd") or 0)
+            mark = float(p.get("mark_price_usd") or p.get("avg_entry_usd") or 0)
             mv = float(p["units"]) * mark
             cost = float(p["units"]) * float(p["avg_entry_usd"] or 0)
             sleeve += mv
@@ -1666,13 +2242,15 @@ def paper_dashboard(user_wallet: str) -> dict[str, Any]:
                 }
             )
         s_trades = [t for t in trades if t.get("strategy_id") == sid][:15]
-        s_decisions = [d for d in decisions if d.get("strategy_id") == sid][:15]
+        s_decisions = [d for d in decisions if d.get("strategy_id") == sid][:10]
         by_strategy.append(
             {
                 "strategy": s,
+                "trading_mode": "paper",
                 "positions": marked,
                 "sleeve_value_usd": round(sleeve, 2),
                 "trades": s_trades,
+                "live_trades": [],
                 "decisions": s_decisions,
                 "symbols": s.get("symbols") or [],
                 "horizon_days": s.get("horizon_days"),
@@ -1687,21 +2265,27 @@ def paper_dashboard(user_wallet: str) -> dict[str, Any]:
             symbol_to_strategies.setdefault(sym, []).append(block["strategy"]["id"])
     overlapping = {k: v for k, v in symbol_to_strategies.items() if len(v) > 1}
 
+    live_count = sum(1 for s in strategies if (s.get("trading_mode") or (s.get("rules") or {}).get("trading_mode") or "live") == "live")
     return {
-        "mode": "paper",
+        "mode": "live" if live_count else "paper",
+        "live_trading": True,
+        "paper_trading": True,
         "governance": "Covenant 18-analyst deterministic",
         "llm_required": False,
         "monitor_interval_seconds": HF_MONITOR_INTERVAL_SECONDS,
         "last_market_refresh_at": _last_market_refresh_at.isoformat() if _last_market_refresh_at else None,
         "portfolio": summary,
         "strategies": strategies,
+        "failed_strategies": failed_strategies,
         "by_strategy": by_strategy,
         "overlapping_assets": overlapping,
         "decisions": decisions,
         "trades": trades,
+        "live_trades": all_live_trades[:50],
         "backtests": backtests,
         "market": market,
-        "news": fetch_yahoo_news([s["symbol"] for s in market[:6]], limit_per_symbol=2) if market else [],
+        # Skip Yahoo news on every dashboard poll — was making the page feel stuck
+        "news": [],
     }
 
 

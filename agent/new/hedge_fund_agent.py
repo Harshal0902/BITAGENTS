@@ -80,8 +80,10 @@ LIQUIDATE_INTENT_RE = re.compile(
 
 OPEN_MANDATE_RE = re.compile(
     r"\b(whatever|any\s+assets?|stocks?\s+or\s+crypto|crypto\s+or\s+stocks?|"
-    r"allowed\s+to\s+trade|trade\s+whatever|pick\s+(?:the\s+)?assets?|"
-    r"name\s+of\s+assets|you\s+would\s+trade)\b",
+    r"only\s+stocks?|stocks?\s+only|only\s+crypto|crypto\s+only|"
+    r"allowed\s+to\s+trade|trade\s+whatever|pick\s+(?:the\s+)?(?:best\s+)?(?:assets?|stocks?|crypto)|"
+    r"choose\s+(?:the\s+)?(?:assets?|stocks?|crypto)|select\s+(?:your|the)\s+(?:own\s+)?(?:assets?|stocks?)|"
+    r"name\s+of\s+assets|you\s+would\s+trade|maximum\s+profits?|max\s+profits?)\b",
     re.I,
 )
 
@@ -125,21 +127,41 @@ TOOLS = [
         "function": {
             "name": "create_paper_strategy",
             "description": (
-                "Propose a PAPER strategy (pending). Stocks/crypto required (or agent picks). "
-                f"Capital max ${HF_MAX_STRATEGY_USDC:.0f} paper USDC. Duration optional (open-ended if omitted). "
-                "Shows Jupiter/xStocks mints. Confirm before deploy."
+                "Propose a LIVE strategy (pending). "
+                "If the user does not name tickers (e.g. 'only stocks', 'pick assets', 'max profit'), "
+                "OMIT tokens and set mode='agent' so the agent selects the book. "
+                "Do NOT pass tokens like STOCKS/CRYPTO — those are not tickers. "
+                f"Capital max ${HF_MAX_STRATEGY_USDC:.0f} USDC from deposited SOL/USDC. "
+                "If the user states how many assets to pick (e.g. 'only 2 stocks', 'pick 3 tokens'), "
+                "set max_names to that exact number. "
+                "Put user wording in notes (including 'only stocks'). Confirm before deploy."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "tokens": {"type": "array", "items": {"type": "string"}},
+                    "tokens": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Real tickers only (AAPL, NVDA…). Omit for agent pick.",
+                    },
                     "name": {"type": "string"},
                     "mode": {"type": "string", "description": "agent | user | hybrid"},
+                    "max_names": {
+                        "type": "number",
+                        "description": "Exact number of assets to pick when agent selects (e.g. user said 'only 2 stocks').",
+                    },
                     "take_profit_pct": {"type": "number"},
                     "stop_loss_pct": {"type": "number"},
-                    "capital_usd": {"type": "number", "description": f"Paper USDC sleeve, max {HF_MAX_STRATEGY_USDC}"},
+                    "capital_usd": {"type": "number", "description": f"USDC sleeve, max {HF_MAX_STRATEGY_USDC}"},
                     "horizon_days": {"type": "number", "description": "Days; omit/0 = open-ended"},
-                    "notes": {"type": "string"},
+                    "notes": {"type": "string", "description": "Include 'only stocks' / 'only crypto' when said"},
+                    "trading_mode": {"type": "string", "description": "live (default) | paper"},
+                    "funding_token": {"type": "string", "description": "USDC or SOL"},
+                    "mint_overrides": {
+                        "type": "object",
+                        "description": "Optional symbol→mint corrections",
+                        "additionalProperties": {"type": "string"},
+                    },
                 },
                 "required": [],
             },
@@ -150,15 +172,27 @@ TOOLS = [
         "function": {
             "name": "confirm_paper_strategy",
             "description": (
-                f"Confirm pending strategy (hs…). Deploys paper sleeve (max ${HF_MAX_STRATEGY_USDC:.0f}). "
-                "Optional capital_usd and horizon_days."
+                "Confirm pending strategy (hs…). Uses the capital sleeve already set when the "
+                "strategy was proposed — DO NOT pass capital_usd unless the user explicitly asks "
+                "to change the funding amount right now (e.g. 'confirm with $50'). Passing a "
+                "capital_usd here OVERRIDES and replaces the strategy's original amount. "
+                "Debits deposit ledger, charges 1% start fee, Jupiter-swaps into book "
+                f"(max ${HF_MAX_STRATEGY_USDC:.0f}). Optional horizon_days, funding_token, mint_overrides."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "strategy_id": {"type": "string"},
-                    "capital_usd": {"type": "number"},
+                    "capital_usd": {
+                        "type": "number",
+                        "description": "ONLY set if the user explicitly wants to change the funding amount now. Omit to keep the strategy's original capital.",
+                    },
                     "horizon_days": {"type": "number"},
+                    "funding_token": {"type": "string"},
+                    "mint_overrides": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                    },
                 },
                 "required": ["strategy_id"],
             },
@@ -169,7 +203,7 @@ TOOLS = [
         "function": {
             "name": "get_strategy_live_pnl",
             "description": (
-                "LIVE paper mark-to-market PnL for a strategy id (hs…). "
+                "LIVE mark-to-market PnL for a strategy id (hs…). "
                 "Do NOT use mock backtest for this."
             ),
             "parameters": {
@@ -183,7 +217,10 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "liquidate_paper_strategy",
-            "description": "Sell all positions to USDC (paper cash) and close the strategy.",
+            "description": (
+                "Liquidate strategy: Jupiter swap holdings to USDC, charge 10% of profit only, "
+                "credit ledger so user can withdraw."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"strategy_id": {"type": "string"}, "reason": {"type": "string"}},
@@ -194,10 +231,40 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "retry_paper_strategy",
+            "description": (
+                "Retry the on-chain Jupiter buy for legs of a LIVE strategy that never filled "
+                "(e.g. an ERROR trade like 'No routes found', RPC timeout). Only touches legs "
+                "with no successful buy yet — already-filled legs are untouched, no double charge. "
+                "Use `replace` to swap a failed ticker for a different one first, e.g. the user "
+                "says 'use PLTR instead of AAPL' -> replace={'AAPL':'PLTR'}. Ask the user before "
+                "picking a replacement ticker on their behalf if they only said 'pick something else'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "strategy_id": {"type": "string"},
+                    "replace": {
+                        "type": "object",
+                        "description": "old_ticker -> new_ticker, only for legs that failed",
+                        "additionalProperties": {"type": "string"},
+                    },
+                    "mint_overrides": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                    },
+                },
+                "required": ["strategy_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "update_paper_strategy",
             "description": (
                 "Edit strategy: TP/SL, symbols, horizon_days (0=open), add_capital_usd "
-                f"(extra paper capital up to ${HF_MAX_STRATEGY_USDC:.0f}), name, status."
+                f"(extra capital up to ${HF_MAX_STRATEGY_USDC:.0f}), name, status."
             ),
             "parameters": {
                 "type": "object",
@@ -236,8 +303,8 @@ TOOLS = [
         "function": {
             "name": "get_paper_dashboard",
             "description": (
-                "Paper portfolio with per-strategy positions/trades/decisions "
-                "(same asset can appear under multiple strategies)."
+                "Portfolio dashboard with per-strategy positions; paper trades and live trades "
+                "are separate tables (same asset can appear under multiple strategies)."
             ),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
@@ -344,6 +411,8 @@ def _paper_tools(user_wallet: Optional[str] = None):
     def create_paper_strategy(**kwargs):
         if not wallet:
             return {"error": "Wallet sign-in required for paper trading"}
+        from covenant_picker import filter_real_tickers
+
         notes = kwargs.get("notes") or ""
         rules = {
             "take_profit_pct": kwargs.get("take_profit_pct", 15),
@@ -351,18 +420,22 @@ def _paper_tools(user_wallet: Optional[str] = None):
             "notes": notes,
             "objective": "max_profit",
         }
-        tokens = kwargs.get("tokens")
-        created_by = "user" if tokens else "agent"
+        tokens = filter_real_tickers(kwargs.get("tokens"))
+        # mode=agent or empty tokens → agent selects stocks/crypto
         mode = kwargs.get("mode") or ("user" if tokens else "agent")
+        if mode == "agent":
+            tokens = []
+        created_by = "user" if tokens else "agent"
         horizon_days = kwargs.get("horizon_days")
         if horizon_days is None:
             horizon_days = parse_horizon_days(notes)
         capital = kwargs.get("capital_usd")
         if capital is None and notes:
             capital = _extract_capital(notes)
+        max_names = kwargs.get("max_names")
         return create_strategy(
             user_wallet=wallet,
-            symbols=tokens,
+            symbols=tokens or None,
             name=kwargs.get("name") or "",
             mode=mode,
             rules=rules,
@@ -372,6 +445,10 @@ def _paper_tools(user_wallet: Optional[str] = None):
             horizon_text=notes,
             require_confirm=True,
             deploy=False,
+            trading_mode=(kwargs.get("trading_mode") or "live"),
+            funding_token=(kwargs.get("funding_token") or "USDC"),
+            mint_overrides=kwargs.get("mint_overrides"),
+            max_names=int(max_names) if max_names else None,
         )
 
     def confirm_paper_strategy(**kwargs):
@@ -384,6 +461,8 @@ def _paper_tools(user_wallet: Optional[str] = None):
             wallet,
             capital_usd=float(cap) if cap is not None else None,
             horizon_days=int(hz) if hz is not None else None,
+            mint_overrides=kwargs.get("mint_overrides"),
+            funding_token=kwargs.get("funding_token"),
         )
 
     def get_strategy_live_pnl(**kwargs):
@@ -398,6 +477,18 @@ def _paper_tools(user_wallet: Optional[str] = None):
             kwargs.get("strategy_id", ""),
             wallet,
             reason=kwargs.get("reason") or "User requested liquidation to USDC",
+        )
+
+    def retry_paper_strategy(**kwargs):
+        if not wallet:
+            return {"error": "Wallet sign-in required"}
+        from hedge_fund_paper import retry_strategy_deploy
+
+        return retry_strategy_deploy(
+            kwargs.get("strategy_id", ""),
+            wallet,
+            replace=kwargs.get("replace"),
+            mint_overrides=kwargs.get("mint_overrides"),
         )
 
     def update_paper_strategy(**kwargs):
@@ -449,6 +540,7 @@ def _paper_tools(user_wallet: Optional[str] = None):
         "confirm_paper_strategy": confirm_paper_strategy,
         "get_strategy_live_pnl": get_strategy_live_pnl,
         "liquidate_paper_strategy": liquidate_paper_strategy,
+        "retry_paper_strategy": retry_paper_strategy,
         "update_paper_strategy": update_paper_strategy,
         "analyze_live_asset": analyze_live_asset_tool,
         "get_paper_dashboard": get_paper_dashboard,
@@ -463,21 +555,38 @@ def _paper_tools(user_wallet: Optional[str] = None):
 
 TOOL_REGISTRY = _paper_tools()  # default without wallet; run_* rebuilds per request
 
-SYSTEM_PROMPT = f"""You are **Hedge Fund Agent** — PAPER trading only (no real deposits yet).
-Fees (1/10): {MANAGEMENT_FEE_RATE*100:.0f}% mgmt + {PERFORMANCE_FEE_RATE*100:.0f}% performance.
+SYSTEM_PROMPT = f"""You are **Hedge Fund Agent** — LIVE trading by default (real deposits + Jupiter swaps).
+Fees: **1% at strategy start** + **10% of profit only on liquidate** (1/10).
 
 Flow:
-1. User asks to create a strategy (or names stocks/crypto) → `create_paper_strategy` (pending).
-   - Stocks/crypto are mandatory (agent may pick if user says "whatever").
-   - Duration optional (open-ended if omitted — user liquidates anytime).
-   - Paper capital sleeve max **${HF_MAX_STRATEGY_USDC:.0f} USDC**.
-   - Show symbols + Jupiter/xStocks mints and ask to **confirm**.
-2. On confirm → `confirm_paper_strategy` deploys paper fills and show assets + live marks.
-3. Live PnL for hs… → `get_strategy_live_pnl` ONLY (never mock backtest for that).
-4. Edit duration / add capital → `update_paper_strategy` (horizon_days, add_capital_usd).
-5. Analyze a ticker with live price → `analyze_live_asset`.
-6. Close → `liquidate_paper_strategy` (paper → USDC cash).
-7. Historical sims only via `run_mock_backtest` / `run_strategy_backtest` — label clearly.
+1. User must deposit **SOL or USDC** to the Hedge Fund wallet first.
+2. Create strategy → `create_paper_strategy` (pending, trading_mode=live).
+   - If user says "only stocks" / "pick assets" / "max profit" without tickers:
+     omit `tokens`, set mode=agent, put wording in `notes` — agent selects the book.
+   - Never pass STOCKS/CRYPTO as tokens.
+   - Stocks resolve from hedge-fund-tokens.json; crypto via Jupiter.
+   - Show mint addresses; user may correct via mint_overrides.
+   - Capital sleeve max **${HF_MAX_STRATEGY_USDC:.0f} USDC**.
+3. Confirm → `confirm_paper_strategy` spends deposit, takes 1% fee, then buys the book
+   IN THE BACKGROUND — the tool call returns immediately (does not wait for the Jupiter
+   swaps to finish), so relay its `message` as-is; do not imply the buys are already done.
+   Each swap can take up to ~2-3 minutes, so tell the user fills land in the Strategies
+   tab or via a status check, not instantly.
+3.5. When the user asks for status ("status <id>", "did it work", "any fills yet") on a
+   live strategy, call `get_strategy_live_pnl` — it reports fills, still-buying legs, and
+   any buy errors with the reason. If it shows a buy error (e.g. "No routes found" —
+   Jupiter has no liquidity route for that token right now, not a bug), state plainly
+   which ticker failed and why, then ask if they want to (a) retry the same ticker,
+   (b) swap it for a different one, or (c) leave it unfilled. On their reply, call
+   `retry_paper_strategy` directly — do NOT ask them to type "confirm <id>" again or go
+   to the Strategies tab, confirm already ran. Pass replace=(old ticker -> new ticker)
+   only when they named a replacement ticker. `retry_paper_strategy` also runs in the
+   background — its response confirms the retry started, not that it finished.
+4. While active, funds are reserved — withdraw only after liquidate/complete.
+5. Live PnL → `get_strategy_live_pnl` (never mock backtest for that).
+6. Liquidate → swap to USDC, 10% of profit fee, unlock withdraw.
+7. Horizon end auto-liquidates to USDC.
+8. Paper mode only if user explicitly asks (`trading_mode=paper`).
 
 Monitor every {HF_MONITOR_INTERVAL_SECONDS // 3600}h. Not financial advice.
 """
@@ -488,7 +597,7 @@ def _format_live_pnl(pnl: dict[str, Any]) -> str:
         return f"**Live PnL error:** {pnl['error']}"
     capital = pnl.get("capital_usd")
     lines = [
-        f"**Live Paper PnL — `{pnl.get('strategy_id')}`**",
+        f"**Live PnL — `{pnl.get('strategy_id')}`** ({pnl.get('trading_mode') or 'live'})",
         f"Status: {pnl.get('status')} · Horizon: "
         + ("open-ended" if not pnl.get("horizon_days") else f"{pnl.get('horizon_days')}d")
         + (f" · ends {str(pnl.get('ends_at') or '')[:10]}" if pnl.get("ends_at") else "")
@@ -507,6 +616,19 @@ def _format_live_pnl(pnl: dict[str, Any]) -> str:
                 if pnl.get("liquidation_proceeds_usd") is not None
                 else ""
             )
+        )
+    error_trades = [t for t in (pnl.get("trades") or []) if str(t.get("side") or "").upper() == "ERROR"]
+    filled_symbols = {t.get("symbol") for t in (pnl.get("trades") or []) if str(t.get("side") or "").upper() == "BUY"}
+    still_missing = [s for s in (pnl.get("symbols") or []) if s not in filled_symbols]
+    if pnl.get("status") == "active" and not error_trades and still_missing and not pnl.get("positions"):
+        lines.append(f"\n⏳ Still buying {', '.join(still_missing)} via Jupiter — no fills yet, check back shortly.")
+    if error_trades:
+        lines.append("\n⚠️ **Buy errors:**")
+        for t in error_trades[:6]:
+            lines.append(f"- {t.get('symbol')}: {t.get('reason') or 'buy failed'}")
+        lines.append(
+            "Reply with a replacement ticker (e.g. \"use PLTR instead of AAPL\") or \"retry "
+            f"{pnl.get('strategy_id')}\" to try again."
         )
     lines.extend(["", "**Positions (mark-to-market)**"])
     for p in pnl.get("positions") or []:
@@ -528,9 +650,12 @@ def _format_live_pnl(pnl: dict[str, Any]) -> str:
             f"Trades: {counts.get('buys', 0)} buys / {counts.get('sells', 0)} sells",
             f"Liquidation target: {pnl.get('liquidation_asset')} (`{pnl.get('liquidation_mint')}`)",
             "",
-            "_Live paper marks — not a mock historical backtest._",
+            "_Live marks — not a mock historical backtest._",
         ]
     )
+    if pnl.get("trading_mode") == "live" or pnl.get("note"):
+        note = pnl.get("note") or "LIVE Jupiter positions."
+        lines[-1] = f"_{note}_"
     if pnl.get("hint"):
         lines.append(f"\n⚠️ {pnl['hint']}")
     elif pnl.get("expired") and pnl.get("status") == "active":
@@ -551,12 +676,13 @@ def _format_strategy_proposal(result: dict[str, Any]) -> str:
             if result.get("open_ended") or not result.get("horizon_days")
             else f"{result.get('horizon_days')}d ({result.get('horizon_label')})"
         ),
-        f"- Capital sleeve: ${_fmt(result.get('capital_usd'))} paper USDC "
+        f"- Capital sleeve: ${_fmt(result.get('capital_usd'))} USDC "
         f"(max ${_fmt(result.get('max_capital_usd') or HF_MAX_STRATEGY_USDC)})",
         f"- Symbols: {', '.join(result.get('symbols') or [])}",
-        "- Paper mode — no deposit required yet",
+        f"- Trading: **{result.get('trading_mode') or 'live'}** · funding: {result.get('funding_token') or 'USDC'}",
+        "- Deposit SOL/USDC to the Hedge Fund wallet before confirm (1% fee on start)",
         "",
-        "**Solana mints (Jupiter / xStocks)**",
+        "**Solana mints (catalog / Jupiter) — correct before confirm if needed**",
     ]
     for a in result.get("solana_assets") or []:
         lines.append(
@@ -573,10 +699,10 @@ def _format_strategy_proposal(result: dict[str, Any]) -> str:
             lines.append("- (mint lookup pending — confirm still allowed; mints resolve on deploy)")
     lines.extend(
         [
-            f"- Liquidation: USDC `{result.get('usdc_mint')}` when horizon ends or you close",
+            f"- Liquidation: USDC `{result.get('usdc_mint')}` when horizon ends or you close (10% of profit)",
             "",
-            f"**Reply `confirm {sid}` to activate and deploy paper fills.**",
-            "Or edit TP/SL / symbols before confirming.",
+            f"**Reply `confirm {sid}` to deploy live Jupiter buys** (after depositing).",
+            "Or edit TP/SL / symbols / mint_overrides before confirming.",
         ]
     )
     if result.get("errors"):
@@ -1191,7 +1317,15 @@ def _try_paper_shortcut(
     if re.search(r"\b(create|start|new|set\s*up|propose)\b", user_input, re.I) or OPEN_MANDATE_RE.search(
         user_input
     ):
-        tokens = _extract_tokens(user_input)
+        from covenant_picker import filter_real_tickers
+
+        tokens = filter_real_tickers(_extract_tokens(user_input))
+        # "only stocks" / open mandate → force agent pick even if junk tickers leaked
+        if OPEN_MANDATE_RE.search(user_input) and (
+            not tokens
+            or re.search(r"\b(only\s+stocks?|stocks?\s+only|pick|choose|select)\b", user_input, re.I)
+        ):
+            tokens = []
         tp, sl = _extract_tp_sl(user_input)
         rules = {
             "take_profit_pct": tp if tp is not None else 15,
@@ -1213,6 +1347,8 @@ def _try_paper_shortcut(
             horizon_text=user_input,
             require_confirm=True,
             deploy=False,
+            trading_mode="live",
+            funding_token="USDC",
         )
         if result.get("error"):
             return f"**Could not propose strategy:** {result['error']}", [

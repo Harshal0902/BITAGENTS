@@ -202,12 +202,51 @@ export async function proxyHedgeFundPaperStrategyPnl(
   );
 }
 
+export async function proxyHedgeFundDebugSwap(
+  authToken: string,
+  body: Record<string, unknown>
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/debug/swap`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyHedgeFundPaperRetryStrategy(
+  strategyId: string,
+  authToken: string,
+  body: Record<string, unknown> = {}
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/retry`,
+    {
+      method: "POST",
+      headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    }
+  );
+}
+
 export async function proxyHedgeFundPaperLiquidateStrategy(
   strategyId: string,
   authToken: string
 ): Promise<Response> {
   return fetch(
     `${getAgentsBaseUrl()}/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/liquidate`,
+    {
+      method: "POST",
+      headers: buildHeaders(authToken),
+    }
+  );
+}
+
+export async function proxyHedgeFundPaperDismissStrategy(
+  strategyId: string,
+  authToken: string
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/dismiss`,
     {
       method: "POST",
       headers: buildHeaders(authToken),
@@ -238,6 +277,68 @@ export async function proxyHedgeFundPaperAnalyze(
     method: "POST",
     headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
     body: JSON.stringify(body),
+  });
+}
+
+export async function proxyHedgeFundLiveTrades(
+  strategyId: string,
+  authToken: string,
+  limit = 100
+): Promise<Response> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return fetch(
+    `${getAgentsBaseUrl()}/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/live-trades?${params}`,
+    {
+      cache: "no-store",
+      headers: buildHeaders(authToken),
+    }
+  );
+}
+
+export async function proxyHedgeFundWalletAgent(): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/wallet/agent`, {
+    cache: "no-store",
+    headers: buildHeaders(),
+  });
+}
+
+export async function proxyHedgeFundWalletBalance(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/wallet/balance`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyHedgeFundDepositVerify(
+  body: { signature: string },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/wallet/deposit/verify`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyHedgeFundWithdraw(
+  body: { token: string; amount: number },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/wallet/withdraw`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyHedgeFundWalletLedger(
+  authToken: string,
+  limit = 50
+): Promise<Response> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/wallet/ledger?${params}`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
   });
 }
 

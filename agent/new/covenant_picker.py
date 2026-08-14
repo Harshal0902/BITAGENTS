@@ -79,6 +79,27 @@ def parse_horizon_days(text: str = "", horizon_days: Optional[int] = None) -> Op
     return None
 
 
+def parse_asset_count(text: str = "") -> Optional[int]:
+    """
+    Extract an explicit "N stocks/tokens/assets/names/coins" count from free text,
+    e.g. "choose only 2 stocks" -> 2. Returns None when no count is stated.
+    """
+    import re
+
+    t = text or ""
+    m = re.search(
+        r"\b(\d{1,2})\s+(?:stocks?|tokens?|coins?|assets?|names?|tickers?|equities|companies)\b",
+        t,
+        re.I,
+    )
+    if not m:
+        return None
+    n = int(m.group(1))
+    if n <= 0:
+        return None
+    return min(n, 12)
+
+
 def horizon_days_for_picker(days: Optional[int]) -> int:
     """Asset picker needs a lookback tilt even when strategy is open-ended."""
     return int(days) if days and days > 0 else 90
@@ -111,19 +132,139 @@ def _tilt(features: dict[str, Any], prefer: str) -> float:
     return 0.001 * float(features.get("alpha_21d") or 0)
 
 
+def parse_asset_class_preference(text: str = "") -> str:
+    """Return 'stocks', 'crypto', or 'any' from user wording."""
+    import re
+
+    t = text or ""
+    if re.search(
+        r"\b(only\s+(?:\d+\s+)?stocks?|stocks?\s+only|equit(?:y|ies)\s+only|no\s+crypto|"
+        r"stock(?:s)?\s+(?:and\s+)?(?:not|no)\s+crypto|just\s+(?:\d+\s+)?stocks?)\b",
+        t,
+        re.I,
+    ):
+        return "stocks"
+    if re.search(
+        r"\b(only\s+(?:\d+\s+)?crypto|crypto\s+only|no\s+stocks?|just\s+(?:\d+\s+)?crypto|tokens?\s+only)\b",
+        t,
+        re.I,
+    ):
+        return "crypto"
+    return "any"
+
+
+# Words the LLM / user may pass that are NOT tickers
+MANDATE_NON_TICKERS = frozenset(
+    {
+        "STOCK",
+        "STOCKS",
+        "CRYPTO",
+        "CRYPTOS",
+        "EQUITY",
+        "EQUITIES",
+        "TOKEN",
+        "TOKENS",
+        "ASSET",
+        "ASSETS",
+        "COIN",
+        "COINS",
+        "SHARE",
+        "SHARES",
+        "ETF",
+        "ETFS",
+        "INDEX",
+        "INDEXES",
+        "INDICES",
+        "USDC",
+        "USDT",
+        "USD",
+        "CASH",
+        "LIVE",
+        "PAPER",
+        "MAX",
+        "PROFIT",
+        "PROFITS",
+        "HORIZON",
+        "CAPITAL",
+        "STRATEGY",
+        "FUND",
+        "AGENT",
+        "PICK",
+        "PICKS",
+        "ONLY",
+        "ANY",
+        "BEST",
+    }
+)
+
+
+def filter_real_tickers(symbols: Optional[list[str]]) -> list[str]:
+    """Drop empty / mandate words so agent pick can run."""
+    out: list[str] = []
+    for s in symbols or []:
+        sym = str(s or "").strip().upper()
+        if not sym or sym in MANDATE_NON_TICKERS:
+            continue
+        if sym in out:
+            continue
+        out.append(sym)
+    return out
+
+
+def _fallback_book(allow_crypto: bool, crypto_only: bool, n_take: int) -> list[str]:
+    """Instant liquid book when Yahoo ranking is empty/slow."""
+    crypto = {"BTC", "ETH", "SOL", "XRP", "AVAX", "LINK"}
+    equities = [s for s in CANDIDATE_UNIVERSE if s.upper() not in crypto]
+    if crypto_only:
+        return list(crypto)[: max(2, n_take)]
+    if not allow_crypto:
+        return equities[: max(2, n_take)]
+    # Mixed: mostly stocks + light crypto
+    book = equities[: max(2, n_take - 1)]
+    for c in ("BTC", "ETH"):
+        if len(book) >= n_take:
+            break
+        book.append(c)
+    return book[:n_take]
+
+
 def select_assets_for_horizon(
     horizon_days: int = 90,
     max_names: Optional[int] = None,
     allow_crypto: bool = True,
+    crypto_only: bool = False,
     universe: Optional[list[str]] = None,
     exclude: Optional[list[str]] = None,
+    fast: Optional[bool] = None,
 ) -> dict[str, Any]:
     preset = horizon_preset(horizon_days)
     lookback = int(preset["lookback"])
     n_take = int(max_names or preset["max_names"])
     prefer = preset["prefer"]
+    # Short horizons: skip news pass (was ~40s+) so chat agent pick stays responsive
+    use_fast = True if fast is None and horizon_days <= 14 else bool(fast)
     exclude_set = {s.upper() for s in (exclude or [])}
     candidates = [c for c in (universe or CANDIDATE_UNIVERSE) if c.upper() not in exclude_set]
+    if crypto_only:
+        allow_crypto = True
+        crypto_set = {"BTC", "ETH", "SOL", "XRP", "AVAX", "LINK"}
+        candidates = [c for c in candidates if c.upper() in crypto_set] or list(crypto_set)
+    elif not allow_crypto:
+        crypto_set = {"BTC", "ETH", "SOL", "XRP", "AVAX", "LINK"}
+        candidates = [c for c in candidates if c.upper() not in crypto_set]
+    # Fast path: score a liquid core book only (chat must stay under ~10s)
+    if use_fast and universe is None:
+        core_stocks = [
+            "NVDA", "AAPL", "MSFT", "META", "AMZN", "GOOGL", "TSLA", "AMD",
+            "AVGO", "JPM", "XOM", "LLY", "PLTR", "UBER", "SPY", "QQQ",
+        ]
+        core_crypto = ["BTC", "ETH", "SOL", "XRP"]
+        if crypto_only:
+            candidates = core_crypto
+        elif not allow_crypto:
+            candidates = [c for c in core_stocks if c not in exclude_set]
+        else:
+            candidates = [c for c in (core_stocks + core_crypto) if c not in exclude_set]
 
     end = date.today()
     start = end - timedelta(days=lookback + 5)
@@ -139,8 +280,10 @@ def select_assets_for_horizon(
     resolved_cache: dict[str, dict[str, Any]] = {}
 
     for raw in candidates:
-        resolved = resolve_yahoo_asset(raw)
+        resolved = resolve_yahoo_asset(raw, probe=False)
         if resolved.get("error"):
+            continue
+        if crypto_only and resolved.get("asset_class") != "crypto":
             continue
         if not allow_crypto and resolved.get("asset_class") == "crypto":
             continue
@@ -149,7 +292,7 @@ def select_assets_for_horizon(
             errors.append(f"{resolved['symbol']}: {hist['error']}")
             continue
         closes = closes_from_prices(hist["prices"])
-        if len(closes) < 20:
+        if len(closes) < 10:
             continue
         features = compute_features(closes, spy_closes=spy_closes or None, news_titles=[])
         if features.get("error"):
@@ -169,34 +312,60 @@ def select_assets_for_horizon(
     prelim.sort(key=lambda r: r["proxy"], reverse=True)
     shortlist = prelim[: max(12, n_take * 3)]
 
-    # Pass 2 — full 18 analysts + news on shortlist
     ranked: list[dict[str, Any]] = []
-    for row in shortlist:
-        sym = row["symbol"]
-        news = fetch_yahoo_news([sym], limit_per_symbol=2)
-        titles = [n.get("title") or "" for n in news]
-        features = compute_features(closes_cache[sym], spy_closes=spy_closes or None, news_titles=titles)
-        signals = run_all_analysts(features)
-        synthesis = synthesize_signals(signals)
-        score = float(synthesis["composite_score"]) + _tilt(features, prefer)
-        ranked.append(
-            {
-                "symbol": sym,
-                "yahoo_symbol": resolved_cache[sym]["yahoo_symbol"],
-                "asset_class": row["asset_class"],
-                "score": round(score, 4),
-                "action": synthesis["action"],
-                "confidence": synthesis["confidence"],
-                "composite_score": synthesis["composite_score"],
-                "features_summary": {
-                    "ret_21d": features.get("ret_21d"),
-                    "vol_63": features.get("vol_63"),
-                    "rsi_14": features.get("rsi_14"),
-                    "distance_from_high_pct": features.get("distance_from_high_pct"),
-                },
-                "domain_scores": synthesis.get("domain_scores"),
-            }
-        )
+    if use_fast:
+        for row in shortlist:
+            sym = row["symbol"]
+            features = row["features"]
+            signals = run_all_analysts(features)
+            synthesis = synthesize_signals(signals)
+            score = float(synthesis["composite_score"]) + _tilt(features, prefer)
+            ranked.append(
+                {
+                    "symbol": sym,
+                    "yahoo_symbol": resolved_cache[sym]["yahoo_symbol"],
+                    "asset_class": row["asset_class"],
+                    "score": round(score, 4),
+                    "action": synthesis["action"],
+                    "confidence": synthesis["confidence"],
+                    "composite_score": synthesis["composite_score"],
+                    "features_summary": {
+                        "ret_21d": features.get("ret_21d"),
+                        "vol_63": features.get("vol_63"),
+                        "rsi_14": features.get("rsi_14"),
+                        "distance_from_high_pct": features.get("distance_from_high_pct"),
+                    },
+                    "domain_scores": synthesis.get("domain_scores"),
+                }
+            )
+    else:
+        # Pass 2 — full 18 analysts + news on shortlist
+        for row in shortlist:
+            sym = row["symbol"]
+            news = fetch_yahoo_news([sym], limit_per_symbol=2)
+            titles = [n.get("title") or "" for n in news]
+            features = compute_features(closes_cache[sym], spy_closes=spy_closes or None, news_titles=titles)
+            signals = run_all_analysts(features)
+            synthesis = synthesize_signals(signals)
+            score = float(synthesis["composite_score"]) + _tilt(features, prefer)
+            ranked.append(
+                {
+                    "symbol": sym,
+                    "yahoo_symbol": resolved_cache[sym]["yahoo_symbol"],
+                    "asset_class": row["asset_class"],
+                    "score": round(score, 4),
+                    "action": synthesis["action"],
+                    "confidence": synthesis["confidence"],
+                    "composite_score": synthesis["composite_score"],
+                    "features_summary": {
+                        "ret_21d": features.get("ret_21d"),
+                        "vol_63": features.get("vol_63"),
+                        "rsi_14": features.get("rsi_14"),
+                        "distance_from_high_pct": features.get("distance_from_high_pct"),
+                    },
+                    "domain_scores": synthesis.get("domain_scores"),
+                }
+            )
 
     ranked.sort(key=lambda r: (r["action"] == "buy", r["score"]), reverse=True)
 
@@ -206,7 +375,9 @@ def select_assets_for_horizon(
         if len(selected) >= n_take:
             break
         if row["asset_class"] == "crypto":
-            if crypto_count >= max(1, n_take // 3):
+            if crypto_only:
+                pass
+            elif crypto_count >= max(1, n_take // 3):
                 continue
             crypto_count += 1
         if row["action"] == "sell" and len(selected) >= max(2, n_take // 2):
@@ -221,6 +392,28 @@ def select_assets_for_horizon(
             if len(selected) >= 2:
                 break
 
+    # Hard fallback so agent pick never returns empty
+    if len(selected) < 2:
+        for sym in _fallback_book(allow_crypto, crypto_only, n_take):
+            if any(s["symbol"] == sym for s in selected):
+                continue
+            selected.append(
+                {
+                    "symbol": sym,
+                    "yahoo_symbol": f"{sym}-USD" if crypto_only or sym in {"BTC", "ETH", "SOL", "XRP", "AVAX", "LINK"} else sym,
+                    "asset_class": "crypto" if sym in {"BTC", "ETH", "SOL", "XRP", "AVAX", "LINK"} else "equity",
+                    "score": 0.0,
+                    "action": "hold",
+                    "confidence": 0.4,
+                    "composite_score": 0.0,
+                    "features_summary": {},
+                    "domain_scores": {},
+                }
+            )
+            if len(selected) >= n_take:
+                break
+
+    method = "covenant_18_analyst_fast" if use_fast else "covenant_18_analyst_horizon_rank"
     return {
         "horizon_days": horizon_days,
         "preset": preset,
@@ -230,9 +423,14 @@ def select_assets_for_horizon(
         "universe_size": len(candidates),
         "shortlist_size": len(shortlist),
         "errors": errors[:8],
-        "method": "covenant_18_analyst_horizon_rank",
+        "method": method,
+        "allow_crypto": allow_crypto,
+        "crypto_only": crypto_only,
         "note": (
             f"Selected {len(selected)} assets for {horizon_days}d horizon "
-            f"({preset['key']}, prefer={prefer}) via 18-analyst ranking — not a fixed default book."
+            f"({preset['key']}, prefer={prefer}"
+            f"{', stocks-only' if not allow_crypto else ''}"
+            f"{', crypto-only' if crypto_only else ''}"
+            f") via {method}."
         ),
     }

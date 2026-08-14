@@ -441,6 +441,45 @@ MIGRATION_STATEMENTS = [
     # Retrofit existing Neon DBs
     "ALTER TABLE hf_strategies ADD COLUMN IF NOT EXISTS horizon_days INTEGER",
     "ALTER TABLE hf_strategies ADD COLUMN IF NOT EXISTS horizon_label VARCHAR(32)",
+    "ALTER TABLE hf_strategies ADD COLUMN IF NOT EXISTS trading_mode VARCHAR(16) DEFAULT 'paper'",
+    """
+    CREATE TABLE IF NOT EXISTS hf_live_positions (
+        id                  VARCHAR(16) PRIMARY KEY,
+        strategy_id         VARCHAR(16) NOT NULL REFERENCES hf_strategies(id) ON DELETE CASCADE,
+        user_wallet         VARCHAR(64) NOT NULL,
+        symbol              VARCHAR(32) NOT NULL,
+        mint                VARCHAR(64) NOT NULL,
+        units               DOUBLE PRECISION NOT NULL DEFAULT 0,
+        avg_entry_usd       DOUBLE PRECISION NOT NULL DEFAULT 0,
+        cost_basis_usd      DOUBLE PRECISION NOT NULL DEFAULT 0,
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (strategy_id, mint)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_hf_live_positions_strategy ON hf_live_positions (strategy_id)",
+    "CREATE INDEX IF NOT EXISTS idx_hf_live_positions_user ON hf_live_positions (user_wallet)",
+    """
+    CREATE TABLE IF NOT EXISTS hf_live_trades (
+        id                  VARCHAR(16) PRIMARY KEY,
+        strategy_id         VARCHAR(16) NOT NULL,
+        user_wallet         VARCHAR(64) NOT NULL,
+        symbol              VARCHAR(32) NOT NULL,
+        mint                VARCHAR(64),
+        side                VARCHAR(8) NOT NULL,
+        units               DOUBLE PRECISION NOT NULL,
+        price_usd           DOUBLE PRECISION,
+        notional_usd        DOUBLE PRECISION NOT NULL,
+        fee_usd             DOUBLE PRECISION NOT NULL DEFAULT 0,
+        input_mint          VARCHAR(64),
+        output_mint         VARCHAR(64),
+        signature           TEXT,
+        explorer_url        TEXT,
+        reason              TEXT,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_hf_live_trades_strategy ON hf_live_trades (strategy_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_hf_live_trades_user ON hf_live_trades (user_wallet, created_at DESC)",
     "ALTER TABLE hf_decisions ADD COLUMN IF NOT EXISTS signals JSONB NOT NULL DEFAULT '[]'::jsonb",
     "ALTER TABLE hf_decisions ADD COLUMN IF NOT EXISTS decision_graph JSONB NOT NULL DEFAULT '{}'::jsonb",
     "ALTER TABLE hf_paper_positions DROP CONSTRAINT IF EXISTS hf_paper_positions_portfolio_id_symbol_key",

@@ -3,27 +3,33 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Panel } from "@/components/AppShell";
+import { HedgeFundDeposit } from "@/components/agents/HedgeFundDeposit";
 import {
   addPaperStrategyCapital,
   analyzePaperAsset,
   createPaperStrategy,
-  confirmPaperStrategy,
+  dismissPaperStrategy,
   fetchHedgeFundHealth,
   fetchPaperDashboard,
   fetchStrategyLivePnl,
+  debugHedgeFundSwap,
   liquidatePaperStrategy,
   mapHedgeFundActions,
+  retryPaperStrategy,
   runPaperBacktest,
   runPaperMonitor,
   sendHedgeFundMessage,
   updatePaperStrategy,
+  type DebugSwapResult,
   type HedgeFundHealth,
   type PaperDashboard,
 } from "@/lib/hedgeFundClient";
 import { HEDGE_FUND } from "@/lib/hedgeFundConfig";
+import { explorerUrlForSignature } from "@/lib/dcaActionResults";
 import { useKickstartWalletAuth } from "@/hooks/useKickstartWalletAuth";
 import type { AgentAction } from "@/lib/dcaAgentClient";
 import { useWallet } from "@solana/wallet-adapter-react";
+import type { HfUserDepositBalances } from "@/lib/hedgeFundWalletClient";
 
 type ChatMessage = { id: string; role: "user" | "assistant"; content: string };
 
@@ -63,9 +69,19 @@ export function HedgeFundConsole() {
   const [editSl, setEditSl] = useState<Record<string, string>>({});
   const [editHorizon, setEditHorizon] = useState<Record<string, string>>({});
   const [editAddCap, setEditAddCap] = useState<Record<string, string>>({});
+  const [depositTick, setDepositTick] = useState(0);
+  const [hfBalances, setHfBalances] = useState<HfUserDepositBalances | null>(null);
   const [lastBacktest, setLastBacktest] = useState<string | null>(null);
   const [lastLivePnl, setLastLivePnl] = useState<string | null>(null);
   const [lastAnalysis, setLastAnalysis] = useState<string | null>(null);
+  const [lastRetryMsg, setLastRetryMsg] = useState<string | null>(null);
+  const [debugInMint, setDebugInMint] = useState("");
+  const [debugOutMint, setDebugOutMint] = useState("");
+  const [debugAmount, setDebugAmount] = useState("");
+  const [debugDecimals, setDebugDecimals] = useState("6");
+  const [debugSlippage, setDebugSlippage] = useState("150");
+  const [debugBusy, setDebugBusy] = useState(false);
+  const [debugResult, setDebugResult] = useState<DebugSwapResult | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const refreshDashboard = useCallback(async () => {
@@ -151,9 +167,12 @@ export function HedgeFundConsole() {
         capital_usd: capital,
         horizon_days: horizon === 0 ? null : horizon,
         notes: agentPick
-          ? `Agent pick · paper $${capital}${horizon ? ` · ${horizon}d` : " · open-ended"}`
-          : `User symbols · paper $${capital}${horizon ? ` · ${horizon}d` : " · open-ended"}`,
+          ? `Agent pick · live $${capital}${horizon ? ` · ${horizon}d` : " · open-ended"}`
+          : `User symbols · live $${capital}${horizon ? ` · ${horizon}d` : " · open-ended"}`,
+        trading_mode: "live",
+        funding_token: "USDC",
       });
+      setDepositTick((t) => t + 1);
       await refreshDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Create strategy failed");
@@ -220,20 +239,6 @@ export function HedgeFundConsole() {
     }
   }
 
-  async function onConfirm(strategyId: string) {
-    if (!token) return;
-    setDashBusy(true);
-    try {
-      const capital = Math.min(100, Math.max(1, Number(capitalInput) || 100));
-      await confirmPaperStrategy(token, strategyId, { capital_usd: capital });
-      await refreshDashboard();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Confirm failed");
-    } finally {
-      setDashBusy(false);
-    }
-  }
-
   async function onAddCapital(strategyId: string) {
     if (!token) return;
     const add = Math.min(100, Math.max(1, Number(editAddCap[strategyId] || 0)));
@@ -287,6 +292,7 @@ export function HedgeFundConsole() {
     setDashBusy(true);
     try {
       await liquidatePaperStrategy(token, strategyId);
+      setDepositTick((t) => t + 1);
       await refreshDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Liquidate failed");
@@ -295,17 +301,72 @@ export function HedgeFundConsole() {
     }
   }
 
+  async function onRetryFailedBuys(strategyId: string) {
+    if (!token) return;
+    setDashBusy(true);
+    try {
+      const res = (await retryPaperStrategy(token, strategyId)) as Record<string, unknown>;
+      setLastRetryMsg(typeof res.message === "string" ? res.message : "Retry finished.");
+      setDepositTick((t) => t + 1);
+      await refreshDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Retry failed");
+    } finally {
+      setDashBusy(false);
+    }
+  }
+
+  async function onDebugSwap() {
+    if (!token) return;
+    const amount = Number(debugAmount);
+    if (!debugInMint.trim() || !debugOutMint.trim() || !amount || amount <= 0) {
+      setError("Enter token_in mint, token_out mint, and a positive amount");
+      return;
+    }
+    setDebugBusy(true);
+    setDebugResult(null);
+    try {
+      const res = await debugHedgeFundSwap(token, {
+        input_mint: debugInMint.trim(),
+        output_mint: debugOutMint.trim(),
+        amount,
+        input_decimals: Number(debugDecimals) || 6,
+        slippage_bps: Number(debugSlippage) || 150,
+      });
+      setDebugResult(res);
+    } catch (err) {
+      setDebugResult({ error: err instanceof Error ? err.message : "Swap failed" });
+    } finally {
+      setDebugBusy(false);
+    }
+  }
+
+  async function onDismiss(strategyId: string) {
+    if (!token) return;
+    setDashBusy(true);
+    try {
+      await dismissPaperStrategy(token, strategyId);
+      await refreshDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Dismiss failed");
+    } finally {
+      setDashBusy(false);
+    }
+  }
+
   const port = dashboard?.portfolio;
   const positions = port?.positions || [];
   const hours = Math.round((health?.monitor_interval_seconds || dashboard?.monitor_interval_seconds || 14400) / 3600);
+  const freeUsdc =
+    hfBalances?.balances?.find((b) => b.token === "USDC")?.available ?? null;
 
   return (
     <div className="space-y-6">
       <div className="border border-grid bg-surface/40 px-4 py-4">
         <p className="text-sm leading-relaxed text-muted-foreground">{HEDGE_FUND.description}</p>
         <p className="mt-2 font-mono text-xs text-signal">
-          18-analyst · paper only (no deposits yet) · max $100 USDC/sleeve · monitor every {hours}h · fees{" "}
-          {HEDGE_FUND.managementFeePct}/{HEDGE_FUND.performanceFeePct} ·{" "}
+          18-analyst · live trading · max $100 USDC/sleeve · 1% start / 10% profit · monitor every{" "}
+          {hours}h ·{" "}
           <Link href="/agents/hedge-fund/pricing" className="underline hover:text-foreground">
             Pricing
           </Link>
@@ -320,7 +381,15 @@ export function HedgeFundConsole() {
         <span>·</span>
         <span>{health?.model ?? HEDGE_FUND.model}</span>
         <span>·</span>
-        <span className="text-signal">paper trading</span>
+        <span className="text-signal">
+          {health?.trading_wallet_configured ? "live wallet ready" : "wallet not configured"}
+        </span>
+        {freeUsdc != null && (
+          <>
+            <span>·</span>
+            <span>{freeUsdc} USDC free</span>
+          </>
+        )}
         {dashBusy && <span className="text-muted-foreground">· refreshing…</span>}
       </div>
 
@@ -333,9 +402,16 @@ export function HedgeFundConsole() {
         </div>
       )}
 
-      {/* Paper monitor */}
+      <HedgeFundDeposit
+        cluster={HEDGE_FUND.cluster}
+        authToken={token}
+        refreshTick={depositTick}
+        onBalancesChange={setHfBalances}
+      />
+
+      {/* Live / paper monitor */}
       <div className="grid gap-4 lg:grid-cols-4">
-        <Panel title="Paper book">
+        <Panel title="Paper book (sim)">
           <div className="space-y-2 font-mono text-xs">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Cash</span>
@@ -372,7 +448,7 @@ export function HedgeFundConsole() {
           </div>
         </Panel>
 
-        <Panel title="New strategy" className="lg:col-span-3">
+        <Panel title="New live strategy" className="lg:col-span-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
             <label className="flex items-center gap-2 font-mono text-xs">
               <input
@@ -396,7 +472,7 @@ export function HedgeFundConsole() {
                 value={capitalInput}
                 onChange={(e) => setCapitalInput(e.target.value)}
                 className="w-24 border border-grid bg-background px-2 py-2 font-mono text-sm"
-                title="Paper capital USDC (max 100)"
+                title="Capital USDC (max 100)"
                 placeholder="$ USDC"
               />
               <input
@@ -431,7 +507,7 @@ export function HedgeFundConsole() {
             </div>
           </div>
           <p className="mt-2 font-mono text-[10px] text-muted-foreground">
-            Paper mode: capital max $100 USDC. Leave days blank for open-ended (close anytime). Confirm to deploy fills.
+            Live mode: deposit first · max $100 · 1% on confirm · edit mints before confirm · auto-liquidate when days end.
           </p>
         </Panel>
       </div>
@@ -439,38 +515,25 @@ export function HedgeFundConsole() {
       <div className="grid gap-6 lg:grid-cols-2">
         <Panel title="Strategies">
           <div className="max-h-72 space-y-3 overflow-y-auto">
-            {(dashboard?.strategies || []).length === 0 && (
-              <p className="font-mono text-xs text-muted-foreground">No strategies yet — create one above or ask in chat.</p>
+            {(dashboard?.strategies || []).filter((s) => s.status !== "pending").length === 0 && (
+              <p className="font-mono text-xs text-muted-foreground">
+                No confirmed strategies yet — pending proposals only show in chat until confirmed.
+              </p>
             )}
-            {(dashboard?.strategies || []).map((s) => {
-              const mintMap = s.rules?.mint_map || {};
-              const mintHint = (s.symbols || [])
-                .slice(0, 3)
-                .map((sym) => (mintMap[sym] ? `${sym}…${String(mintMap[sym]).slice(-4)}` : sym))
-                .join(" · ");
+            {(dashboard?.strategies || [])
+              .filter((s) => s.status !== "pending")
+              .map((s) => {
+              const mode = s.trading_mode || s.rules?.trading_mode || "live";
               return (
               <div key={s.id} className="border border-grid bg-surface/30 p-3 font-mono text-[11px]">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-signal">
-                    {s.name} · {s.mode}/{s.status} · {s.horizon_days || s.rules?.horizon_days || "?"}d
+                    {s.name} · {mode}/{s.mode}/{s.status} · {s.horizon_days || s.rules?.horizon_days || "open"}d
                   </span>
                   <span className="text-muted-foreground">{s.id}</span>
                 </div>
                 <p className="mt-1 text-muted-foreground">{(s.symbols || []).join(", ")}</p>
-                {mintHint && (
-                  <p className="mt-0.5 text-[10px] text-muted-foreground/80">mints: {mintHint}</p>
-                )}
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                  {s.status === "pending" && (
-                    <button
-                      type="button"
-                      disabled={!token || dashBusy}
-                      onClick={() => void onConfirm(s.id)}
-                      className="border border-signal bg-signal/15 px-2 py-0.5 uppercase text-signal disabled:opacity-40"
-                    >
-                      Confirm
-                    </button>
-                  )}
                   {(s.status === "active" || s.status === "paused") && (
                     <>
                       <button
@@ -568,6 +631,7 @@ export function HedgeFundConsole() {
             })}
             {lastLivePnl && <p className="font-mono text-[11px] text-signal">Live PnL: {lastLivePnl}</p>}
             {lastAnalysis && <p className="font-mono text-[11px] text-signal">Analysis: {lastAnalysis}</p>}
+            {lastRetryMsg && <p className="font-mono text-[11px] text-signal">Retry: {lastRetryMsg}</p>}
             {lastBacktest && <p className="font-mono text-[11px] text-muted-foreground">Mock backtest: {lastBacktest}</p>}
           </div>
         </Panel>
@@ -588,23 +652,73 @@ export function HedgeFundConsole() {
         </Panel>
       </div>
 
-      <Panel title="By strategy — positions, trades, decisions">
+      {(dashboard?.failed_strategies || []).length > 0 && (
+        <Panel title="Failed strategies (dismiss to clear)">
+          <div className="max-h-48 space-y-2 overflow-y-auto">
+            {(dashboard?.failed_strategies || []).map((s) => (
+              <div key={s.id} className="border border-warn/40 bg-warn/5 p-3 font-mono text-[11px]">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-warn">
+                    {s.name || s.id} · failed · {(s.symbols || []).join(", ")}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={!token || dashBusy}
+                    onClick={() => void onDismiss(s.id)}
+                    className="border border-warn/40 px-2 py-0.5 uppercase text-warn disabled:opacity-40"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+                <p className="mt-1 text-muted-foreground">{s.last_error || "Could not buy tokens/stocks"}</p>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">{s.id}</p>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      <Panel title="By strategy — positions, live trades, paper trades">
         <div className="max-h-[28rem] space-y-4 overflow-y-auto">
           {(dashboard?.by_strategy || []).length === 0 && (
             <p className="font-mono text-xs text-muted-foreground">Create a strategy to see sleeves.</p>
           )}
           {(dashboard?.by_strategy || []).map((block) => {
             const s = block.strategy;
+            const mode = block.trading_mode || s.trading_mode || s.rules?.trading_mode || "live";
+            const liveTrades = (block.live_trades || []).filter(
+              (t) => String(t.side || "").toUpperCase() !== "FEE"
+            );
             return (
               <div key={s.id} className="border border-grid bg-surface/20 p-3 font-mono text-[11px]">
                 <div className="mb-2 flex flex-wrap justify-between gap-2 text-signal">
                   <span>
-                    {s.name} · sleeve {money(block.sleeve_value_usd)} · horizon{" "}
-                    {block.horizon_days || s.horizon_days || "?"}d
+                    {s.name} · {mode} · sleeve {money(block.sleeve_value_usd)} · horizon{" "}
+                    {block.horizon_days || s.horizon_days || "open"}d
                   </span>
                   <span className="text-muted-foreground">{s.id}</span>
                 </div>
                 <p className="mb-2 text-muted-foreground">Assets: {(block.symbols || []).join(", ") || "—"}</p>
+                {(s.rules?.deploy_errors || []).length > 0 && (
+                  <div className="mb-2 space-y-1">
+                    {(s.rules?.deploy_errors || []).map((e, i) => (
+                      <p key={i} className="text-warn">
+                        {e.symbol ? `${e.symbol}: ` : ""}
+                        {e.error || "Buy failed"}
+                      </p>
+                    ))}
+                    {mode === "live" && (s.status === "active" || s.status === "paused") && (
+                      <button
+                        type="button"
+                        disabled={!token || dashBusy}
+                        onClick={() => void onRetryFailedBuys(s.id)}
+                        className="border border-signal/40 px-2 py-0.5 uppercase text-signal disabled:opacity-40"
+                      >
+                        Retry failed buys
+                      </button>
+                    )}
+                  </div>
+                )}
                 <div className="grid gap-3 md:grid-cols-3">
                   <div>
                     <div className="mb-1 text-muted-foreground">Positions</div>
@@ -616,13 +730,46 @@ export function HedgeFundConsole() {
                     ))}
                   </div>
                   <div>
-                    <div className="mb-1 text-muted-foreground">Trades</div>
-                    {(block.trades || []).slice(0, 5).map((t, i) => (
-                      <div key={t.id || i}>
-                        {t.side} {t.symbol} {money(t.notional_usd)}
-                      </div>
-                    ))}
-                    {(block.trades || []).length === 0 && <p>—</p>}
+                    <div className="mb-1 text-muted-foreground">
+                      {mode === "live" ? "Live trades · tx" : "Paper trades"}
+                    </div>
+                    {mode === "live"
+                      ? liveTrades.slice(0, 10).map((t, i) => {
+                          const sig = t.signature ? String(t.signature) : "";
+                          const href =
+                            t.explorer_url ||
+                            (sig ? explorerUrlForSignature(sig, HEDGE_FUND.cluster) : "");
+                          return (
+                            <div key={t.id || i} className="mb-1.5 border-b border-grid/40 pb-1">
+                              <div>
+                                <span className={String(t.side).toUpperCase() === "ERROR" ? "text-warn" : ""}>
+                                  {t.side} {t.symbol}
+                                </span>{" "}
+                                {money(t.notional_usd)}
+                              </div>
+                              {sig ? (
+                                <a
+                                  href={href}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="break-all text-[10px] text-signal hover:underline"
+                                  title={sig}
+                                >
+                                  tx {sig.slice(0, 12)}…{sig.slice(-8)} ↗
+                                </a>
+                              ) : (
+                                <span className="text-[10px] text-muted-foreground">no tx hash</span>
+                              )}
+                            </div>
+                          );
+                        })
+                      : (block.trades || []).slice(0, 5).map((t, i) => (
+                          <div key={t.id || i}>
+                            {t.side} {t.symbol} {money(t.notional_usd)}
+                          </div>
+                        ))}
+                    {mode === "live" && liveTrades.length === 0 && <p>—</p>}
+                    {mode !== "live" && (block.trades || []).length === 0 && <p>—</p>}
                   </div>
                   <div>
                     <div className="mb-1 text-muted-foreground">Decisions</div>
@@ -697,7 +844,50 @@ export function HedgeFundConsole() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Panel title="Trades">
+        <Panel title="Live trades (tx hash)">
+          <div className="max-h-56 space-y-2 overflow-y-auto font-mono text-[11px]">
+            {(dashboard?.live_trades || []).filter((t) => String(t.side).toUpperCase() !== "FEE").length ===
+              0 && <p className="text-muted-foreground">No live Jupiter fills yet.</p>}
+            {(dashboard?.live_trades || [])
+              .filter((t) => String(t.side).toUpperCase() !== "FEE")
+              .slice(0, 25)
+              .map((t, i) => {
+                const sig = t.signature ? String(t.signature) : "";
+                const href =
+                  t.explorer_url || (sig ? explorerUrlForSignature(sig, HEDGE_FUND.cluster) : "");
+                return (
+                  <div key={t.id || i} className="border-b border-grid/40 pb-1.5">
+                    <div>
+                      <span className="text-muted-foreground">[{t.strategy_id}]</span>{" "}
+                      <span
+                        className={
+                          String(t.side).toUpperCase() === "ERROR" ? "text-warn" : "text-signal"
+                        }
+                      >
+                        {t.side}
+                      </span>{" "}
+                      {t.symbol} {money(t.notional_usd)}
+                    </div>
+                    {sig ? (
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="break-all text-[10px] text-signal hover:underline"
+                      >
+                        {sig} ↗
+                      </a>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground">
+                        {t.reason || "no tx hash"}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+        </Panel>
+        <Panel title="Paper trades">
           <div className="max-h-56 space-y-2 overflow-y-auto font-mono text-[11px]">
             {(dashboard?.trades || []).length === 0 && (
               <p className="text-muted-foreground">No paper fills yet.</p>
@@ -705,13 +895,13 @@ export function HedgeFundConsole() {
             {(dashboard?.trades || []).slice(0, 20).map((t, i) => (
               <div key={t.id || i} className="border-b border-grid/40 pb-1.5">
                 <span className="text-muted-foreground">[{t.strategy_id}]</span>{" "}
-                <span className="text-signal">{t.side}</span> {t.symbol} {money(t.notional_usd)} @ {money(t.price_usd)}{" "}
+                <span className="text-signal">{t.side}</span> {t.symbol} {money(t.notional_usd)} @{" "}
+                {money(t.price_usd)}{" "}
                 <span className="text-muted-foreground">{t.reason}</span>
               </div>
             ))}
           </div>
         </Panel>
-        <div />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -817,6 +1007,75 @@ export function HedgeFundConsole() {
           )}
         </div>
       </div>
+
+      <Panel title="Debug: manual Jupiter swap (HF wallet)">
+        <div className="space-y-2 font-mono text-[11px]">
+          <p className="text-muted-foreground">
+            Fires one real swap on-chain using the Hedge Fund agent&apos;s own wallet and the
+            exact same swap path strategies use — for diagnosing routing/liquidity errors like
+            &quot;No routes found&quot;. Spends the HF wallet&apos;s own balance directly; does
+            NOT touch any user ledger or strategy.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <input
+              value={debugInMint}
+              onChange={(e) => setDebugInMint(e.target.value)}
+              placeholder="token_in mint (e.g. USDC)"
+              className="min-w-[220px] flex-1 border border-grid bg-background px-2 py-1"
+            />
+            <input
+              value={debugOutMint}
+              onChange={(e) => setDebugOutMint(e.target.value)}
+              placeholder="token_out mint"
+              className="min-w-[220px] flex-1 border border-grid bg-background px-2 py-1"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span>Amount (token_in units)</span>
+            <input
+              value={debugAmount}
+              onChange={(e) => setDebugAmount(e.target.value)}
+              placeholder="e.g. 0.5"
+              className="w-24 border border-grid bg-background px-2 py-1"
+            />
+            <span>Decimals</span>
+            <input
+              value={debugDecimals}
+              onChange={(e) => setDebugDecimals(e.target.value)}
+              className="w-14 border border-grid bg-background px-2 py-1"
+            />
+            <span>Slippage bps</span>
+            <input
+              value={debugSlippage}
+              onChange={(e) => setDebugSlippage(e.target.value)}
+              className="w-16 border border-grid bg-background px-2 py-1"
+            />
+            <button
+              type="button"
+              disabled={!token || debugBusy}
+              onClick={() => void onDebugSwap()}
+              className="border border-warn bg-warn/10 px-3 py-1 uppercase text-warn disabled:opacity-40"
+            >
+              {debugBusy ? "Swapping…" : "Execute swap"}
+            </button>
+          </div>
+          {debugResult && (
+            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap border border-grid bg-surface/40 p-2 text-[10px]">
+              {JSON.stringify(debugResult, null, 2)}
+            </pre>
+          )}
+          {debugResult?.explorer_url ? (
+            <a
+              href={debugResult.explorer_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block text-signal hover:underline"
+            >
+              View tx ↗
+            </a>
+          ) : null}
+        </div>
+      </Panel>
 
       {!publicKey && (
         <div className="border border-grid bg-surface/40 px-4 py-3 font-mono text-xs text-muted-foreground">

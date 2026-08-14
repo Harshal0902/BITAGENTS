@@ -118,6 +118,16 @@ from due_diligence_agent import (
 from cache_store import cache_backend
 from hedge_fund_agent import HEDGE_FUND_MODEL, run_hedge_fund_agent
 from hedge_fund_core import get_fee_structure
+from hedge_fund_ledger import (
+    get_hf_agent_wallet_info,
+    get_hf_user_balances,
+    get_hf_wallet_pubkey,
+    list_hf_user_ledger,
+    verify_and_record_hf_deposit,
+    withdraw_hf_tokens,
+)
+from hedge_fund_live import execute_hf_jupiter_swap as hf_execute_jupiter_swap
+from hedge_fund_live import list_live_trades as hf_list_live_trades
 from hedge_fund_paper import (
     HF_MAX_STRATEGY_USDC,
     HF_MONITOR_INTERVAL_SECONDS,
@@ -125,10 +135,12 @@ from hedge_fund_paper import (
     analyze_live_asset as hf_analyze_live_asset,
     confirm_strategy as hf_confirm_strategy,
     create_strategy as hf_create_strategy,
+    dismiss_strategy as hf_dismiss_strategy,
     list_strategies as hf_list_strategies,
     liquidate_strategy as hf_liquidate_strategy,
     monitor_cycle as hf_monitor_cycle,
     paper_dashboard as hf_paper_dashboard,
+    retry_strategy_deploy as hf_retry_strategy_deploy,
     run_strategy_backtest as hf_run_strategy_backtest,
     scheduler_status as hf_scheduler_status,
     start_hedge_fund_scheduler,
@@ -1321,6 +1333,10 @@ class HfPaperStrategyCreate(BaseModel):
     notes: str = ""
     horizon_days: Optional[int] = None
     allocation_pct: Optional[dict[str, float]] = None
+    trading_mode: str = "live"
+    funding_token: str = "USDC"
+    mint_overrides: Optional[dict[str, str]] = None
+    max_names: Optional[int] = None
 
 
 class HfPaperStrategyUpdate(BaseModel):
@@ -1338,6 +1354,8 @@ class HfPaperStrategyUpdate(BaseModel):
 class HfPaperConfirmRequest(BaseModel):
     capital_usd: Optional[float] = None
     horizon_days: Optional[int] = None
+    funding_token: Optional[str] = None
+    mint_overrides: Optional[dict[str, str]] = None
 
 
 class HfPaperBacktestRequest(BaseModel):
@@ -1352,12 +1370,57 @@ class HfPaperAnalyzeRequest(BaseModel):
     equity_usd: Optional[float] = None
 
 
+@app.get("/hedge-fund/wallet/agent")
+def hedge_fund_wallet_agent(_: None = Depends(require_internal_key)) -> dict[str, Any]:
+    return get_hf_agent_wallet_info()
+
+
+@app.get("/hedge-fund/wallet/balance")
+def hedge_fund_wallet_balance(
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    return get_hf_user_balances(auth_wallet)
+
+
+@app.post("/hedge-fund/wallet/deposit/verify")
+def hedge_fund_deposit_verify(
+    body: DepositVerifyRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = verify_and_record_hf_deposit(body.signature.strip(), auth_wallet)
+    if result.get("error") and result.get("status") != "already_recorded":
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/hedge-fund/wallet/withdraw")
+def hedge_fund_wallet_withdraw(
+    body: WithdrawRequest,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = withdraw_hf_tokens(auth_wallet, body.token.strip(), body.amount)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.get("/hedge-fund/wallet/ledger")
+def hedge_fund_wallet_ledger(
+    auth_wallet: str = Depends(require_wallet_session),
+    limit: int = Query(50, ge=1, le=100),
+) -> dict[str, Any]:
+    entries = list_hf_user_ledger(auth_wallet, limit=limit)
+    return {"user_wallet": auth_wallet, "entries": entries, "count": len(entries)}
+
+
 @app.get("/hedge-fund/health")
 def hedge_fund_health() -> dict[str, Any]:
     return {
         "status": "ok",
         "agent": "Hedge Fund Agent",
         "model": HEDGE_FUND_MODEL,
+        "trading_wallet_configured": bool(get_hf_wallet_pubkey()),
+        "trading_wallet": get_hf_wallet_pubkey(),
         "llm": llm_provider(),
         "llm_configured": llm_configured(),
         "auth_required": True,
@@ -1368,8 +1431,12 @@ def hedge_fund_health() -> dict[str, Any]:
         "pricing": "1% AUM + 10% performance (vs 2/20)",
         "governance": "Covenant 18-analyst deterministic (LLM optional)",
         "paper_trading": True,
-        "deposits_required": False,
+        "live_trading": True,
+        "deposits_required": True,
         "max_strategy_usdc": HF_MAX_STRATEGY_USDC,
+        "management_fee_on_start_pct": 1.0,
+        "performance_fee_on_profit_pct": 10.0,
+        "allowed_deposit_tokens": ["SOL", "USDC"],
         "analysts": 18,
         "llm_required_for_trades": False,
         "monitor_interval_seconds": HF_MONITOR_INTERVAL_SECONDS,
@@ -1429,6 +1496,10 @@ def hedge_fund_paper_create_strategy(
         created_by=created_by,
         horizon_days=body.horizon_days,
         horizon_text=body.notes or "",
+        trading_mode=body.trading_mode or "live",
+        funding_token=body.funding_token or "USDC",
+        mint_overrides=body.mint_overrides,
+        max_names=body.max_names,
     )
 
 
@@ -1479,6 +1550,8 @@ def hedge_fund_paper_confirm_strategy(
         auth_wallet,
         capital_usd=body.capital_usd,
         horizon_days=body.horizon_days,
+        mint_overrides=body.mint_overrides,
+        funding_token=body.funding_token,
     )
 
 
@@ -1490,12 +1563,84 @@ def hedge_fund_paper_strategy_pnl(
     return hf_strategy_live_pnl(strategy_id, auth_wallet)
 
 
+@app.get("/hedge-fund/paper/strategies/{strategy_id}/live-trades")
+def hedge_fund_live_trades(
+    strategy_id: str,
+    auth_wallet: str = Depends(require_wallet_session),
+    limit: int = Query(100, ge=1, le=200),
+) -> dict[str, Any]:
+    strategy = next((s for s in hf_list_strategies(auth_wallet) if s.get("id") == strategy_id), None)
+    if not strategy:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    trades = hf_list_live_trades(strategy_id, limit=limit)
+    return {
+        "strategy_id": strategy_id,
+        "trading_mode": strategy.get("trading_mode") or (strategy.get("rules") or {}).get("trading_mode"),
+        "trades": trades,
+        "count": len(trades),
+    }
+
+
 @app.post("/hedge-fund/paper/strategies/{strategy_id}/liquidate")
 def hedge_fund_paper_liquidate(
     strategy_id: str,
     auth_wallet: str = Depends(require_wallet_session),
 ) -> dict[str, Any]:
     return hf_liquidate_strategy(strategy_id, auth_wallet)
+
+
+class HfRetryDeployBody(BaseModel):
+    replace: Optional[dict[str, str]] = None
+    mint_overrides: Optional[dict[str, str]] = None
+
+
+@app.post("/hedge-fund/paper/strategies/{strategy_id}/retry")
+def hedge_fund_paper_retry(
+    strategy_id: str,
+    body: Optional[HfRetryDeployBody] = None,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    body = body or HfRetryDeployBody()
+    return hf_retry_strategy_deploy(strategy_id, auth_wallet, replace=body.replace, mint_overrides=body.mint_overrides)
+
+
+class HfDebugSwapBody(BaseModel):
+    input_mint: str
+    output_mint: str
+    amount: float
+    input_decimals: int = 6
+    slippage_bps: int = 150
+
+
+@app.post("/hedge-fund/debug/swap")
+def hedge_fund_debug_swap(
+    body: HfDebugSwapBody,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    """
+    Manual one-off Jupiter swap using the Hedge Fund agent's own wallet — for
+    debugging routing/liquidity issues (e.g. "No routes found") against the
+    exact same swap path strategies use. Spends the HF wallet's own on-chain
+    balance directly; does NOT touch any user's ledger or strategy state.
+    """
+    return hf_execute_jupiter_swap(
+        input_mint=body.input_mint,
+        output_mint=body.output_mint,
+        amount=body.amount,
+        input_decimals=body.input_decimals,
+        slippage_bps=body.slippage_bps,
+    )
+
+
+@app.post("/hedge-fund/paper/strategies/{strategy_id}/dismiss")
+def hedge_fund_paper_dismiss(
+    strategy_id: str,
+    auth_wallet: str = Depends(require_wallet_session),
+) -> dict[str, Any]:
+    result = hf_dismiss_strategy(strategy_id, auth_wallet)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
 
 
 @app.post("/hedge-fund/paper/strategies/{strategy_id}/add-capital")

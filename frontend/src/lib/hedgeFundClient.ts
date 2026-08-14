@@ -13,9 +13,17 @@ export type HedgeFundHealth = {
   fee_model?: string;
   management_fee_annual_pct?: number;
   performance_fee_pct?: number;
+  management_fee_on_start_pct?: number;
+  performance_fee_on_profit_pct?: number;
   pricing?: string;
   auth_required: boolean;
   paper_trading?: boolean;
+  live_trading?: boolean;
+  deposits_required?: boolean;
+  trading_wallet?: string | null;
+  trading_wallet_configured?: boolean;
+  max_strategy_usdc?: number;
+  allowed_deposit_tokens?: string[];
   monitor_interval_seconds?: number;
 };
 
@@ -53,12 +61,15 @@ export type PaperStrategy = {
   symbols: string[];
   horizon_days?: number;
   horizon_label?: string;
+  trading_mode?: string;
   rules?: {
     take_profit_pct?: number;
     stop_loss_pct?: number;
     notes?: string;
     objective?: string;
     horizon_days?: number;
+    trading_mode?: string;
+    funding_token?: string;
     mint_map?: Record<string, string>;
     solana_assets?: {
       symbol?: string;
@@ -67,6 +78,10 @@ export type PaperStrategy = {
       is_xstock?: boolean;
     }[];
     liquidation_mint?: string;
+    capital_usd?: number;
+    last_error?: string;
+    deploy_errors?: { symbol?: string; error?: string }[];
+    partial_deploy_refunded?: boolean;
   };
   created_by?: string;
   updated_at?: string;
@@ -92,21 +107,34 @@ export type PaperTrade = {
   price_usd?: number;
   created_at?: string;
   reason?: string;
+  mint?: string;
+  signature?: string;
+  explorer_url?: string;
+  fee_usd?: number;
 };
 
 export type StrategyBlock = {
   strategy: PaperStrategy;
+  trading_mode?: string;
   positions: PaperPosition[];
   sleeve_value_usd?: number;
   trades: PaperTrade[];
+  live_trades?: PaperTrade[];
   decisions: PaperDecision[];
   symbols: string[];
   horizon_days?: number;
   horizon_label?: string;
 };
 
+export type FailedStrategy = PaperStrategy & {
+  last_error?: string;
+  deploy_errors?: { symbol?: string; error?: string }[];
+};
+
 export type PaperDashboard = {
   mode: string;
+  live_trading?: boolean;
+  paper_trading?: boolean;
   monitor_interval_seconds: number;
   last_market_refresh_at?: string | null;
   governance?: string;
@@ -120,10 +148,12 @@ export type PaperDashboard = {
     portfolio?: Record<string, unknown>;
   };
   strategies: PaperStrategy[];
+  failed_strategies?: FailedStrategy[];
   by_strategy?: StrategyBlock[];
   overlapping_assets?: Record<string, string[]>;
   decisions: PaperDecision[];
   trades: PaperTrade[];
+  live_trades?: PaperTrade[];
   backtests?: Record<string, unknown>[];
   market?: { symbol: string; price_usd?: number; change_24h_pct?: number }[];
   news?: { symbol?: string; title?: string; publisher?: string }[];
@@ -168,20 +198,38 @@ export async function fetchHedgeFundFees(): Promise<HedgeFundFeeStructure | null
   }
 }
 
+const CHAT_TIMEOUT_MS = 170_000;
+
 export async function sendHedgeFundMessage(
   message: string,
   authToken: string,
   sessionId?: string,
   history?: { role: "user" | "assistant"; content: string }[]
 ): Promise<HedgeFundChatResponse> {
-  const res = await fetch("/api/agents/hedge-fund/chat", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${authToken}`,
-    },
-    body: JSON.stringify({ message, session_id: sessionId, history }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch("/api/agents/hedge-fund/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ message, session_id: sessionId, history }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error(
+        "Still working on-chain (Jupiter swaps can take a while) — the strategy is being processed in " +
+          "the background. Check the Strategies list below in a bit instead of resending."
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   const data = await res.json();
   if (!res.ok) {
@@ -207,11 +255,14 @@ export async function createPaperStrategy(
     capital_usd?: number;
     notes?: string;
     horizon_days?: number | null;
+    trading_mode?: string;
+    funding_token?: string;
+    mint_overrides?: Record<string, string>;
   }
 ) {
   return authFetch("/api/agents/hedge-fund/paper/strategies", authToken, {
     method: "POST",
-    body: JSON.stringify(body),
+    body: JSON.stringify({ trading_mode: "live", funding_token: "USDC", ...body }),
   });
 }
 
@@ -253,12 +304,61 @@ export async function runPaperBacktest(
 export async function confirmPaperStrategy(
   authToken: string,
   strategyId: string,
-  body?: { capital_usd?: number; horizon_days?: number | null }
+  body?: {
+    capital_usd?: number;
+    horizon_days?: number | null;
+    funding_token?: string;
+    mint_overrides?: Record<string, string>;
+  }
 ) {
   return authFetch(
     `/api/agents/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/confirm`,
     authToken,
     { method: "POST", body: JSON.stringify(body || {}) }
+  );
+}
+
+export type DebugSwapResult = {
+  status?: string;
+  error?: string;
+  signature?: string;
+  explorer_url?: string;
+  output_amount_raw?: number;
+  [key: string]: unknown;
+};
+
+export async function debugHedgeFundSwap(
+  authToken: string,
+  body: {
+    input_mint: string;
+    output_mint: string;
+    amount: number;
+    input_decimals?: number;
+    slippage_bps?: number;
+  }
+): Promise<DebugSwapResult> {
+  return authFetch("/api/agents/hedge-fund/debug/swap", authToken, {
+    method: "POST",
+    body: JSON.stringify(body),
+  }) as Promise<DebugSwapResult>;
+}
+
+export async function retryPaperStrategy(
+  authToken: string,
+  strategyId: string,
+  body?: { replace?: Record<string, string>; mint_overrides?: Record<string, string> }
+) {
+  return authFetch(
+    `/api/agents/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/retry`,
+    authToken,
+    { method: "POST", body: JSON.stringify(body || {}) }
+  );
+}
+
+export async function fetchLiveTrades(authToken: string, strategyId: string) {
+  return authFetch(
+    `/api/agents/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/live-trades`,
+    authToken
   );
 }
 
@@ -272,6 +372,14 @@ export async function fetchStrategyLivePnl(authToken: string, strategyId: string
 export async function liquidatePaperStrategy(authToken: string, strategyId: string) {
   return authFetch(
     `/api/agents/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/liquidate`,
+    authToken,
+    { method: "POST" }
+  );
+}
+
+export async function dismissPaperStrategy(authToken: string, strategyId: string) {
+  return authFetch(
+    `/api/agents/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/dismiss`,
     authToken,
     { method: "POST" }
   );

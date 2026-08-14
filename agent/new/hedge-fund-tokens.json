@@ -1,0 +1,2052 @@
+[
+    {
+        "symbol": "tKalshi",
+        "name": "Kalshi",
+        "address": "TKLSidmLVt3cqGaaodG8tyRzoANfQwoh67AccjmubeZ"
+    },
+    {
+        "symbol": "COINx",
+        "name": "Coinbase",
+        "address": "Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu"
+    },
+    {
+        "symbol": "GOOGLx",
+        "name": "Alphabet",
+        "address": "XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN"
+    },
+    {
+        "symbol": "SPCXon",
+        "name": "SpaceX",
+        "address": "wzAyQTorWyoVXuJKj2x8EqKEGJpS13z6EWE9z5Aondo"
+    },
+    {
+        "symbol": "MSFTx",
+        "name": "Microsoft",
+        "address": "XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX"
+    },
+    {
+        "symbol": "STRCx",
+        "name": "Strategy PP Variable",
+        "address": "Xs78JED6PFZxWc2wCEPspZW9kL3Se5J7L5TChKgsidH"
+    },
+    {
+        "symbol": "HOODx",
+        "name": "Robinhood",
+        "address": "XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg"
+    },
+    {
+        "symbol": "AMZNx",
+        "name": "Amazon",
+        "address": "Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg"
+    },
+    {
+        "symbol": "METAx",
+        "name": "Meta",
+        "address": "Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu"
+    },
+    {
+        "symbol": "INTCx",
+        "name": "Intel",
+        "address": "XshPgPdXFRWB8tP1j82rebb2Q9rPgGX37RuqzohmArM"
+    },
+    {
+        "symbol": "MRVLx",
+        "name": "Marvell",
+        "address": "XsuxRGDzbLjnJ72v74b7p9VY6N66uYgTCyfwwRjVCJA"
+    },
+    {
+        "symbol": "PLTRx",
+        "name": "Palantir",
+        "address": "XsoBhf2ufR8fTyNSjqfU71DYGaE6Z3SUGAidpzriAA4"
+    },
+    {
+        "symbol": "SPACEX",
+        "name": "SpaceX",
+        "address": "PreANxuXjsy2pvisWWMNB6YaJNzr7681wJJr2rHsfTh"
+    },
+    {
+        "symbol": "KOx",
+        "name": "Coca-Cola",
+        "address": "XsaBXg8dU5cPM6ehmVctMkVqoiRG2ZjMo1cyBJ3AykQ"
+    },
+    {
+        "symbol": "LLYon",
+        "name": "Eli Lilly",
+        "address": "eGGxZwNSfuNKRqQLKaz2hc4QkA2mau7skyxPdj7ondo"
+    },
+    {
+        "symbol": "DRAMon",
+        "name": "Roundhill Memory ETF",
+        "address": "oXeD5ZesXfJQ3mxtuZdMaccUsWrE8r1SnpYRP2Bondo"
+    },
+    {
+        "symbol": "SLVon",
+        "name": "iShares Silver Trust",
+        "address": "iy11ytbSGcUnrjE6Lfv78TFqxKyUESfku1FugS9ondo"
+    },
+    {
+        "symbol": "CVXx",
+        "name": "Chevron",
+        "address": "XsNNMt7WTNA2sV3jrb1NNfNgapxRF5i4i6GcnTRRHts"
+    },
+    {
+        "symbol": "TSL2L",
+        "name": "Tesla 2x Long",
+        "address": "6afjZE5Qv9WF5K1adBgTxtWyenJ7ZerH6BVAzmoSHFT"
+    },
+    {
+        "symbol": "TSL1S",
+        "name": "Tesla 1x Short",
+        "address": "bNPXng6hSVas7LWiNQyvpGcPYtY1ZmFY6WP49ymSHFT"
+    },
+    {
+        "symbol": "SPX3L",
+        "name": "S&P500 3x Long",
+        "address": "12y35E6btjazuaSjjwq99MobbycbkFsFvm8s5QpaSHFT"
+    },
+    {
+        "symbol": "KALSHI",
+        "name": "Kalshi",
+        "address": "PreLWGkkeqG1s4HEfFZSy9moCrJ7btsHuUtfcCeoRua"
+    },
+    {
+        "symbol": "INTCon",
+        "name": "Intel",
+        "address": "cJpUMp5R7rZ6fGeLHbHhrRuJzK9mkyKDjZqNpT3ondo"
+    },
+    {
+        "symbol": "METAon",
+        "name": "Meta Platforms",
+        "address": "fDxs5y12E7x7jBwCKBXGqt71uJmCWsAQ3Srkte6ondo"
+    },
+    {
+        "symbol": "SNDKon",
+        "name": "SanDisk",
+        "address": "EJmUVvDqAdfH5zEohkdS4234bi3c6iunqEMobjmondo"
+    },
+    {
+        "symbol": "SMCIon",
+        "name": "Super Micro Computer",
+        "address": "jLca79XzcewRuBZyaJxVxuKpUHcEix1X4CP1RP9ondo"
+    },
+    {
+        "symbol": "NVDAon",
+        "name": "NVIDIA",
+        "address": "gEGtLTPNQ7jcg25zTetkbmF7teoDLcrfTnQfmn2ondo"
+    },
+    {
+        "symbol": "SNDKx",
+        "name": "Sandisk Corporation",
+        "address": "Xswbpc8UqU6e1j9QZEWCjBMjyvz4twqD7PCy6j2e7jj"
+    },
+    {
+        "symbol": "COHRon",
+        "name": "Coherent",
+        "address": "BXMkru8ded26p71gJ3AMMwJmwZaYYfQjRo8vbZzondo"
+    },
+    {
+        "symbol": "CRWVon",
+        "name": "CoreWeave",
+        "address": "BfPGpgNyxe6rjAru1EJarjSBAcCABuMF5L32v7nondo"
+    },
+    {
+        "symbol": "AVGOx",
+        "name": "Broadcom",
+        "address": "XsgSaSvNSqLTtFuyWPBhK9196Xb9Bbdyjj4fH3cPJGo"
+    },
+    {
+        "symbol": "MUon",
+        "name": "Micron Technology",
+        "address": "Fz9edBpaURPPzpKVRR1A8PENYDEgHqwx5D5th28ondo"
+    },
+    {
+        "symbol": "AMDx",
+        "name": "AMD",
+        "address": "XsXcJ6GZ9kVnjqGsjBnktRcuwMBmvKWh8S93RefZ1rF"
+    },
+    {
+        "symbol": "PEPx",
+        "name": "PepsiCo",
+        "address": "Xsv99frTRUeornyvCfvhnDesQDWuvns1M852Pez91vF"
+    },
+    {
+        "symbol": "GLDon",
+        "name": "SPDR Gold Shares",
+        "address": "hWfiw4mcxT8rnNFkk6fsCQSxoxgZ9yVhB6tyeVcondo"
+    },
+    {
+        "symbol": "BMNRx",
+        "name": "Bitmine",
+        "address": "XsrBCwaH8c46xiqXBChzobgufRKxQxAWUWbndgBNzFn"
+    },
+    {
+        "symbol": "DFDVx",
+        "name": "DFDV",
+        "address": "Xs2yquAgsHByNzx68WJC55WHjHBvG9JsMB7CWjTLyPy"
+    },
+    {
+        "symbol": "AAPLon",
+        "name": "Apple",
+        "address": "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp"
+    },
+    {
+        "symbol": "IRENon",
+        "name": "IREN",
+        "address": "13QHuepdhtJ3urNsV9i1hdL8nQoca2G7ZaLzb5FYondo"
+    },
+    {
+        "symbol": "ORCLx",
+        "name": "Oracle",
+        "address": "XsjFwUPiLofddX5cWFHW35GCbXcSu1BCUGfxoQAQjeL"
+    },
+    {
+        "symbol": "BSPx",
+        "name": "Bending Spoons",
+        "address": "XsYMHtwJcWon5GkPHzdDbCCztKtKzEurJnbydxgjsqS"
+    },
+    {
+        "symbol": "MUx",
+        "name": "Micron Technology",
+        "address": "XsQLZycSZ7QnBBdBXQaTbQdiUcbRqjNJgyBGAMzhHav"
+    },
+    {
+        "symbol": "QCOMon",
+        "name": "Qualcomm",
+        "address": "hrmX7MV5hifoaBVjnrdpz698yABxrbBNAcWtWo9ondo"
+    },
+    {
+        "symbol": "COPXon",
+        "name": "Global X Copper Miners ETF",
+        "address": "X7j77hTmjZJbepkXXBcsEapM8qNgdfihkFj6CZ5ondo"
+    },
+    {
+        "symbol": "JDon",
+        "name": "JD.com",
+        "address": "E1aUS5nyv7kaBzdQzPVJW5zfaMgoUJpKYzdnFS2ondo"
+    },
+    {
+        "symbol": "WDCon",
+        "name": "Western Digital",
+        "address": "FLqH2jB2DZPJP5nnVFAakRKaNTcDZtq71Pnpp6Aondo"
+    },
+    {
+        "symbol": "ONDSon",
+        "name": "Ondas Holdings",
+        "address": "7qy1j4Mechfyr6uAST3djH4vk4kiEYC2cjEytXdondo"
+    },
+    {
+        "symbol": "ASTSon",
+        "name": "AST SpaceMobile",
+        "address": "B6ry9goGNvVbhq7gWHzs3p6emJ1gLaMhu4By9TTondo"
+    },
+    {
+        "symbol": "SBUXon",
+        "name": "Starbucks",
+        "address": "iPFqjcZQTNMNXA4kbShbMhfAVD8yr8Uq9UtXMV6ondo"
+    },
+    {
+        "symbol": "SKHYx",
+        "name": "SK hynix",
+        "address": "XsnhgGRQwhExfS2bmWzR6EYddKGPRGDEjeJsatkmKqU"
+    },
+    {
+        "symbol": "SMCIx",
+        "name": "Super Micro Computer, Inc.",
+        "address": "XsMxAoJP47FQGLsVUvSS2QfBaHdNsd7DRU6nWRL8RSa"
+    },
+    {
+        "symbol": "BEon",
+        "name": "Bloom Energy",
+        "address": "bBMTGF7atoCizHMT3KCeqJzqR2gXFSUXr53AEDgondo"
+    },
+    {
+        "symbol": "TSMon",
+        "name": "Taiwan Semiconductor Manufacturing",
+        "address": "keybg184d4vyXeQdFqs4o99YsMg7xBthxTJ6Ky3ondo"
+    },
+    {
+        "symbol": "AMATon",
+        "name": "Applied Materials",
+        "address": "7eRX747PSbVtGVx3qD5UFdkNM2BfTy86ikUiCMhondo"
+    },
+    {
+        "symbol": "NOWon",
+        "name": "ServiceNow",
+        "address": "G7pTVoSECz5RQWubEnTP7AC83KHUsSyoiqYR1R2ondo"
+    },
+    {
+        "symbol": "QQQon",
+        "name": "Invesco QQQ",
+        "address": "HrYNm6jTQ71LoFphjVKBTdAE4uja7WsmLG8VxB8ondo"
+    },
+    {
+        "symbol": "BTGOx",
+        "name": "Bitgo",
+        "address": "XsvHMmbDcd14DHHW16PkxPGW7ks77ehxUv1E9Zmxgj4"
+    },
+    {
+        "symbol": "NEEon",
+        "name": "NextEra Energy",
+        "address": "t7eN6cGwRMFaZvsNW2SmVwkedmHtDdrxA4ycNE5ondo"
+    },
+    {
+        "symbol": "XOMx",
+        "name": "Exxon Mobil",
+        "address": "XsaHND8sHyfMfsWPj6kSdd5VwvCayZvjYgKmmcNL5qh"
+    },
+    {
+        "symbol": "STRKx",
+        "name": "Strategy PP Fixed",
+        "address": "XsaQGz41BEQkS9xAB44uvUtuXcdLJAXEU1dogEzWMZ8"
+    },
+    {
+        "symbol": "SKHYon",
+        "name": "SK Hynix",
+        "address": "Huyb2fyDDjSuDKCRWsN9ci2rmcgPo6NFiLbx9ZDondo"
+    },
+    {
+        "symbol": "MSFTon",
+        "name": "Microsoft",
+        "address": "FRmH6iRkMr33DLG6zVLR7EM4LojBFAuq6NtFzG6ondo"
+    },
+    {
+        "symbol": "USOon",
+        "name": "United States Oil Fund",
+        "address": "rpydAzWdCy85HEmoQkH5PVxYtDYQWjmLxgHHadxondo"
+    },
+    {
+        "symbol": "TQQQon",
+        "name": "ProShares UltraPro QQQ",
+        "address": "14W1itEkV7k1W819mLSknFTaMmkCtPokbF2tRkPUondo"
+    },
+    {
+        "symbol": "GOOGLon",
+        "name": "Alphabet Class A",
+        "address": "bbahNA5vT9WJeYft8tALrH1LXWffjwqVoUbqYa1ondo"
+    },
+    {
+        "symbol": "BTBTx",
+        "name": "Bit Digital",
+        "address": "XsPLBFy59Q3hY59KLAJur8QyvziMF4xUxGTxXqXE7cT"
+    },
+    {
+        "symbol": "BABAon",
+        "name": "Alibaba",
+        "address": "1zvb9ELBFShBCWKEk5jRTJAaPAwtVt7quEXx1X4ondo"
+    },
+    {
+        "symbol": "IEFon",
+        "name": "iShares 7-10 Year Treasury Bond ETF",
+        "address": "D4uWxzR5StYC6sTRhVts8Eboy3pmVtHeNC62dnQondo"
+    },
+    {
+        "symbol": "TSLAon",
+        "name": "Tesla",
+        "address": "KeGv7bsfR4MheC1CkmnAVceoApjrkvBhHYjWb67ondo"
+    },
+    {
+        "symbol": "STRCon",
+        "name": "Strategy Stretch Preferred",
+        "address": "y6kSRF4i9tfMMjZziPHtQE1PeUS6bWEHTzZMFgXondo"
+    },
+    {
+        "symbol": "PLTRon",
+        "name": "Palantir Technologies",
+        "address": "HfsnTS5qtdStwec9DfBrunRqnAMYMMz1kjv9Hu9ondo"
+    },
+    {
+        "symbol": "BOTon",
+        "name": "RoboStrategy",
+        "address": "b8UDyp3Yx19rcdaBUNegoojyUdhPpiPQ46bFrtQQQon"
+    },
+    {
+        "symbol": "ABNBon",
+        "name": "Airbnb",
+        "address": "128qNYovdGv2YqayErcJgU7gDwbNVX1VuoxbtWz8ondo"
+    },
+    {
+        "symbol": "SBETon",
+        "name": "SharpLink Gaming",
+        "address": "iLDu2jjp2i3Uqc2Vm7K7GLiUj3hR4Un49MtD7c4ondo"
+    },
+    {
+        "symbol": "SPCX2L",
+        "name": "SpaceX 2x Long",
+        "address": "BcVDiSc5DTp8imZE4Nx2abUhhgA3KCxJ4M5g7aHLSHFT"
+    },
+    {
+        "symbol": "OKLOon",
+        "name": "Oklo",
+        "address": "m6oDLvJT7rY7M1TxuLWP3pWmAPg2cCWDQR1NKiEondo"
+    },
+    {
+        "symbol": "CIFRon",
+        "name": "Cipher Mining",
+        "address": "WNZBSkNBNP3Ct1pcFn6Fu4sZQFhnu48EsM9voCEondo"
+    },
+    {
+        "symbol": "HOODon",
+        "name": "Robinhood Markets",
+        "address": "BVdXGvmgi6A9oAiwWvBvP76fyTqcCNRJMM7zMN6ondo"
+    },
+    {
+        "symbol": "Vx",
+        "name": "Visa",
+        "address": "XsqgsbXwWogGJsNcVZ3TyVouy2MbTkfCFhCGGGcQZ2p"
+    },
+    {
+        "symbol": "MARAx",
+        "name": "MARA",
+        "address": "XsguBZPkM9BDmxspmWe29EmrYZBv21ENcC27Pqh7grB"
+    },
+    {
+        "symbol": "GSx",
+        "name": "Goldman Sachs",
+        "address": "XsgaUyp4jd1fNBCxgtTKkW64xnnhQcvgaxzsbAq5ZD1"
+    },
+    {
+        "symbol": "SBETx",
+        "name": "SharpLink Gaming",
+        "address": "XsEoih2x6nZuUjFwzGoba6MFmtzCkzW2c4YAm6baQbq"
+    },
+    {
+        "symbol": "PLUGon",
+        "name": "Plug Power",
+        "address": "TnfswqdE1jAJ8sfnf5J7kSVLEH1cfpAYZ8MWmKfondo"
+    },
+    {
+        "symbol": "VRTon",
+        "name": "Vertiv",
+        "address": "MkN2TZSYTFBdMRLf9EVcfhstTwnazH8knd9hpepondo"
+    },
+    {
+        "symbol": "FUTUon",
+        "name": "Futu Holdings",
+        "address": "Ao5rKFRQ54W3DKSAtqfhBRPNHewwWRLNLao2JL9ondo"
+    },
+    {
+        "symbol": "TQQQx",
+        "name": "TQQQ",
+        "address": "XsjQP3iMAaQ3kQScQKthQpx9ALRbjKAjQtHg6TFomoc"
+    },
+    {
+        "symbol": "ETNon",
+        "name": "Eaton",
+        "address": "BpYiU1dBXU1fdB64jbR93wHEw3Y47QeRLZvUyLQondo"
+    },
+    {
+        "symbol": "TIPon",
+        "name": "iShares TIPS Bond ETF",
+        "address": "k6BPp2Xmf2TYgrZiUyWfUoZBKeqaDbvPoAVgSx2ondo"
+    },
+    {
+        "symbol": "MPon",
+        "name": "MP Materials",
+        "address": "XwFm5GiKPVTvPiEbQpdc6vJbFEpsUXRMf6TcSxnondo"
+    },
+    {
+        "symbol": "AZNx",
+        "name": "AstraZeneca",
+        "address": "Xs3ZFkPYT2BN7qBMqf1j1bfTeTm1rFzEFSsQ1z3wAKU"
+    },
+    {
+        "symbol": "ADBEx",
+        "name": "Adobe",
+        "address": "XsDZMGEU8zadWFCkTtPBoPWYcUX3JHVmghnwf2Mve2q"
+    },
+    {
+        "symbol": "ALABon",
+        "name": "Astera Labs",
+        "address": "cskxd6aqyqJMYgLZmFYfYecWkjasRJDEtm1QVxsondo"
+    },
+    {
+        "symbol": "CATon",
+        "name": "Caterpillar",
+        "address": "AErxJJxGbc9cZzZoZepN62BNfg5RXns8tmEc3Zpondo"
+    },
+    {
+        "symbol": "IAUon",
+        "name": "iShares Gold Trust",
+        "address": "M77ZvkZ8zW5udRbuJCbuwSwavRa7bGAZYMTwru8ondo"
+    },
+    {
+        "symbol": "SLVx",
+        "name": "iShares Silver Trust",
+        "address": "XsxAd6okt8y1RRK6gNg7iJaqiWNiq5Md5EDf3ZrF2dm"
+    },
+    {
+        "symbol": "FIGRon",
+        "name": "Figure Technology Solutions",
+        "address": "ZmHxc6Gt27RJKxD2ay6UL4n9yQ7mKAq4XZQUeVhondo"
+    },
+    {
+        "symbol": "SPOTon",
+        "name": "Spotify",
+        "address": "jzCvs2Pk8tDcfsFRqnEMjurgaQW4iQfEkandUR8ondo"
+    },
+    {
+        "symbol": "SOX3L",
+        "name": "Semiconductor 3x Long",
+        "address": "Hyhxfb6riaqCV333GynmnCXCEQK3goTznFj7k4dSHFT"
+    },
+    {
+        "symbol": "EWJon",
+        "name": "iShares MSCI Japan ETF",
+        "address": "C6c7VcxuUYcV5YTsky5HM4PUmfwHTwsDD5DNwwPondo"
+    },
+    {
+        "symbol": "EEMon",
+        "name": "iShares MSCI Emerging Markets ETF",
+        "address": "916SDKz7y5ZcEZC9CtnQ5Djs1Y8Yv3UAPb6bak8ondo"
+    },
+    {
+        "symbol": "NKEon",
+        "name": "Nike",
+        "address": "g646pcdG2Rt5DH9WZzL7VVnVDWCCMTTrnktwE74ondo"
+    },
+    {
+        "symbol": "KOon",
+        "name": "Coca-Cola",
+        "address": "e6G4pfFcrdKxJuZ4YXixRFfMbpMvgXG2Mjcus71ondo"
+    },
+    {
+        "symbol": "NFLXx",
+        "name": "Netflix",
+        "address": "XsEH7wWfJJu2ZT3UCFeVfALnVA6CP5ur7Ee11KmzVpL"
+    },
+    {
+        "symbol": "AMZNon",
+        "name": "Amazon",
+        "address": "14Tqdo8V1FhzKsE3W2pFsZCzYPQxxupXRcqw9jv6ondo"
+    },
+    {
+        "symbol": "AVGOon",
+        "name": "Broadcom",
+        "address": "1FWZtdWN7y38BSXGzbs8D6Shk88oL9atDNgbVz9ondo"
+    },
+    {
+        "symbol": "CVXon",
+        "name": "Chevron",
+        "address": "7tgKziACteG26VjV5xKufojKxwTgCFyTwmWUmz5ondo"
+    },
+    {
+        "symbol": "CEGon",
+        "name": "Constellation Energy",
+        "address": "7NWHifsBnn9DimUeNnsHdEXkTZhXmJTiXxcCngBondo"
+    },
+    {
+        "symbol": "SOX3S",
+        "name": "Semiconductor 3x Short",
+        "address": "7GoxZQ7gCh1mg1b3AUqd7cyPqiUp4y2NRxM9A5zSHFT"
+    },
+    {
+        "symbol": "LLYx",
+        "name": "Eli Lilly",
+        "address": "Xsnuv4omNoHozR6EEW5mXkw8Nrny5rB3jVfLqi6gKMH"
+    },
+    {
+        "symbol": "IONQon",
+        "name": "IonQ",
+        "address": "DDZQijTbaSd3Kas1r1bgCnHPayk8vTP8SfZWp5Tondo"
+    },
+    {
+        "symbol": "APLDon",
+        "name": "Applied Digital",
+        "address": "B6WqvLGXdGqpw7qgxeb5EGiRZEYo2apWpQybjYuondo"
+    },
+    {
+        "symbol": "XYZon",
+        "name": "Block",
+        "address": "BWxe2FVciUbwrCUZQPUKiREBh5LmVa5AiUqNLAkondo"
+    },
+    {
+        "symbol": "RKLBon",
+        "name": "Rocket Lab",
+        "address": "E9VQY3VnrpVSekFByzRmfeK1kxgM3UiKCoVVbdUondo"
+    },
+    {
+        "symbol": "NFLXon",
+        "name": "Netflix",
+        "address": "g4KnPrxPLeeKkwvDmZFMtYQPM64eHeShbD55vK6ondo"
+    },
+    {
+        "symbol": "SOXXon",
+        "name": "iShares Semiconductor ETF",
+        "address": "EN5pHc1LccUSojxb7kkyQi7v7iJN5RpDq6qz3DHondo"
+    },
+    {
+        "symbol": "AMDon",
+        "name": "AMD",
+        "address": "14diAn5z8kjrKwSC8WLqvBqqe5YmihJhjxRxd8Z6ondo"
+    },
+    {
+        "symbol": "BACx",
+        "name": "Bank of America",
+        "address": "XswsQk4duEQmCbGzfqUUWYmi7pV7xpJ9eEmLHXCaEQP"
+    },
+    {
+        "symbol": "AALon",
+        "name": "American Airlines Group",
+        "address": "9wYZetvT8J2ptfsRca5gzLBGvcUug38mp9yT3xaondo"
+    },
+    {
+        "symbol": "NOKon",
+        "name": "Nokia",
+        "address": "amE2ANm5dyG6RTkJHdtzvWcuR8ChBZCEm5Jiqwdondo"
+    },
+    {
+        "symbol": "JPMx",
+        "name": "JPMorgan Chase",
+        "address": "XsMAqkcKsUewDrzVkait4e5u4y8REgtyS7jWgCpLV2C"
+    },
+    {
+        "symbol": "IVVon",
+        "name": "iShares Core S&P 500 ETF",
+        "address": "CqW2pd6dCPG9xKZfAsTovzDsMmAGKJSDBNcwM96ondo"
+    },
+    {
+        "symbol": "ABTx",
+        "name": "Abbott",
+        "address": "XsHtf5RpxsQ7jeJ9ivNewouZKJHbPxhPoEy6yYvULr7"
+    },
+    {
+        "symbol": "UBERon",
+        "name": "Uber",
+        "address": "KJNeFW3kk3ycPjXpC6cbuyckjeYHacc2ekhtAi5ondo"
+    },
+    {
+        "symbol": "BLKon",
+        "name": "Blackrock, Inc.",
+        "address": "5H1VpMzRuoNtRbPTRCz35ETtEUtnkt8hJuQb9v7ondo"
+    },
+    {
+        "symbol": "PANWon",
+        "name": "Palo Alto Networks",
+        "address": "M7hVQomhw4Q2D2op3HvBrZjHu9SryjNvD5haEZ1ondo"
+    },
+    {
+        "symbol": "WMTx",
+        "name": "Walmart",
+        "address": "Xs151QeqTCiuKtinzfRATnUESM2xTU6V9Wy8Vy538ci"
+    },
+    {
+        "symbol": "CRWDon",
+        "name": "CrowdStrike",
+        "address": "cdKfoNjbXgnSuxvoajhtH3uixfZhq1YXhQsS1Rwondo"
+    },
+    {
+        "symbol": "WMTon",
+        "name": "Walmart",
+        "address": "LZddqAqKqJW9oMZSjTxCUmbmzBRQtv9gMkD9hZ3ondo"
+    },
+    {
+        "symbol": "FCELon",
+        "name": "FuelCell Energy",
+        "address": "dYDS22uTX8CtiyixnXY9fMVGAkxbemVAjbCaWVbondo"
+    },
+    {
+        "symbol": "AMCon",
+        "name": "AMC Entertainment",
+        "address": "C9xNaNujcF1a5fidWAAFReFYqhLRVbyk4yPyGqzondo"
+    },
+    {
+        "symbol": "SPX3S",
+        "name": "S&P500 3x Short",
+        "address": "67ik3PpEXBJA1km29rZMMKwhgvvjrKpNMoaZyTsSHFT"
+    },
+    {
+        "symbol": "PEPon",
+        "name": "PepsiCo",
+        "address": "gud6b3fYekjhMG5F818BALwbg2vt4JKoow59Md9ondo"
+    },
+    {
+        "symbol": "JPMon",
+        "name": "JPMorgan Chase",
+        "address": "E5Gczsavxcomqf6Cw1sGCKLabL1xYD2FzKxVoB4ondo"
+    },
+    {
+        "symbol": "IBMon",
+        "name": "IBM",
+        "address": "C8bZkgSxXkyT1RgxByp2teJ24hgimPLoyEYoNa9ondo"
+    },
+    {
+        "symbol": "CRMon",
+        "name": "Salesforce",
+        "address": "7D7ukbcnUNYt7Et5vtsDZhAy28MKu9pkHka1Hp9ondo"
+    },
+    {
+        "symbol": "APPon",
+        "name": "AppLovin",
+        "address": "14Z8rQQe2Aza33YgEUmj3g3QGNz8DXLiFPuCnsD1ondo"
+    },
+    {
+        "symbol": "SGOVon",
+        "name": "iShares 0-3 Month Treasury Bond ETF",
+        "address": "HjrN6ChZK2QRL6hMXayjGPLFvxhgjwKEy135VRjondo"
+    },
+    {
+        "symbol": "ASMLon",
+        "name": "ASML Holding NV",
+        "address": "1eLZPRsn8bAKmoxsqDMH9Q2m2k7GMNp6RLSQGm8ondo"
+    },
+    {
+        "symbol": "BTGOon",
+        "name": "BitGo Holdings",
+        "address": "bgJWGuQxyoyFeXwzYZKBmoujVdatGFYPNFnv1a6ondo"
+    },
+    {
+        "symbol": "CRMx",
+        "name": "Salesforce",
+        "address": "XsczbcQ3zfcgAEt9qHQES8pxKAVG5rujPSHQEXi4kaN"
+    },
+    {
+        "symbol": "TSMx",
+        "name": "TSMC",
+        "address": "XsafvsGtzFqqHgTnA3aPC83EAMkacU5mcGtcSayhpVV"
+    },
+    {
+        "symbol": "VTIon",
+        "name": "Vanguard Total Stock Market ETF",
+        "address": "jCCU4GwukjNxAXJowG2S4KCrr5g6YyUB61WHYvGondo"
+    },
+    {
+        "symbol": "LINx",
+        "name": "Linde",
+        "address": "XsSr8anD1hkvNMu8XQiVcmiaTP7XGvYu7Q58LdmtE8Z"
+    },
+    {
+        "symbol": "HIMSon",
+        "name": "Hims & Hers Health",
+        "address": "bdh3njeo19d2TBLAKTGvCWdSoArfVw8uZBAJHY4ondo"
+    },
+    {
+        "symbol": "NVOon",
+        "name": "Novo Nordisk",
+        "address": "GeV7S8vjP8qdYZpdGv2Xi6e7MUMCk8NAAp2z7g5ondo"
+    },
+    {
+        "symbol": "CMGon",
+        "name": "Chipotle",
+        "address": "5owVsVFSHACQuippFYdLp3qWRobp2EGcwxMmsr6ondo"
+    },
+    {
+        "symbol": "Con",
+        "name": "Citigroup",
+        "address": "PjtfUiw6Hwd8PZ94EcUw8mBSYxp7SjjzSLeNTDKondo"
+    },
+    {
+        "symbol": "XLEx",
+        "name": "Energy Select Sector SPDR Fund",
+        "address": "Xs54CrhmpVp6uxZXwgSTegrRH2kShh88XFPzgf4BExu"
+    },
+    {
+        "symbol": "Ton",
+        "name": "AT&T",
+        "address": "WKMZummev5UcXz5nNKQZvTD6QjNSM2X58uwmDReondo"
+    },
+    {
+        "symbol": "SHYon",
+        "name": "iShares 1-3 Year Treasury Bond ETF",
+        "address": "EEy57xbaLcUrN1HXj2vz8VWxeWFK1eZQZo4aWbrondo"
+    },
+    {
+        "symbol": "MAx",
+        "name": "Mastercard",
+        "address": "XsApJFV9MAktqnAc6jqzsHVujxkGm9xcSUffaBoYLKC"
+    },
+    {
+        "symbol": "UNHx",
+        "name": "UnitedHealth",
+        "address": "XszvaiXGPwvk2nwb3o9C1CX4K6zH8sez11E6uyup6fe"
+    },
+    {
+        "symbol": "BAon",
+        "name": "Boeing",
+        "address": "1YVZ4LGpq8CAhpdpm3mgy7GgPb83gJczCpxLUQ3ondo"
+    },
+    {
+        "symbol": "BIDUon",
+        "name": "Baidu",
+        "address": "54CoRF2FYMZNJg9tS36xq5BUcLZ7rju1r59jGc2ondo"
+    },
+    {
+        "symbol": "GEVon",
+        "name": "GE Vernova",
+        "address": "CgZSv89BL58ybWfWobANKEU8nV9jYfFw23G2DZEondo"
+    },
+    {
+        "symbol": "DISon",
+        "name": "Disney",
+        "address": "mJf1xT3suXtkXBCfZcE9oUUuyxkvSgqYBWiX7v1ondo"
+    },
+    {
+        "symbol": "PGon",
+        "name": "Procter & Gamble",
+        "address": "GZ8v4NdSG7CTRZqHMgNsTPRULeVi8CpdWd9wZY8ondo"
+    },
+    {
+        "symbol": "ISRGon",
+        "name": "Intuitive Surgical",
+        "address": "1MGRpPrkhEsCm2GCWD3rsvEU77xTTLAzfKXeFgFondo"
+    },
+    {
+        "symbol": "JNJon",
+        "name": "Johnson & Johnson",
+        "address": "KUXt7LzHWSQXp5eyqMZRxWjAP6yM8BUh4LRHwiwondo"
+    },
+    {
+        "symbol": "ABTon",
+        "name": "Abbott",
+        "address": "129gRoHKhVg7CvPMrqVsEB4uYZo6zV4yDZX6NBg9ondo"
+    },
+    {
+        "symbol": "URAon",
+        "name": "Global X Uranium ETF",
+        "address": "EvzskrQ3vUUkiMGG1DzfSDyG6H2WCMy3v9G8fzzondo"
+    },
+    {
+        "symbol": "DEon",
+        "name": "Deere",
+        "address": "CqQyAZjB9LGFTG95eiadGTkfhd9QA12ProeKsQmondo"
+    },
+    {
+        "symbol": "GMEon",
+        "name": "GameStop",
+        "address": "aznKt8v32CwYMEcTcB4bGTv8DXWStCpHrcCtyy7ondo"
+    },
+    {
+        "symbol": "NOCon",
+        "name": "Northrop Grumman",
+        "address": "Dm6FpQ76SsbVmAZ4NvD2mjZP7cxbw1CASr4WwCiondo"
+    },
+    {
+        "symbol": "MARAon",
+        "name": "MARA Holdings",
+        "address": "ETCJUmuhs5aY62xgEVWCZ5JR8KPdeXUaJz3LuC5ondo"
+    },
+    {
+        "symbol": "LMTon",
+        "name": "Lockheed",
+        "address": "EoReHwUnGGekbXFHLj5rbCVKiwWqu32GrETMfw4ondo"
+    },
+    {
+        "symbol": "TLTon",
+        "name": "iShares 20+ Year Treasury Bond ETF",
+        "address": "KaSLSWByKy6b9FrCYXPEJoHmLpuFZtTCJk1F1Z9ondo"
+    },
+    {
+        "symbol": "VSTon",
+        "name": "Vistra",
+        "address": "h6MW8GFpfzxFa1JNn6hZNnBF3t4fj9SHAXKy6LXondo"
+    },
+    {
+        "symbol": "BTGon",
+        "name": "B2Gold",
+        "address": "cBnVXDyZgaaLZM18wAmqsUKnRUFAEJWbq6VuUoaondo"
+    },
+    {
+        "symbol": "GEon",
+        "name": "General Electric",
+        "address": "aTBfDuLRqYHBiG82bHA7DzwjSDTFre2dRtGH3S5ondo"
+    },
+    {
+        "symbol": "COPon",
+        "name": "ConocoPhillips",
+        "address": "X68p9qTpEMkR1TLpXUP2ZJo8PG4Qge2Y2ZLdjA2ondo"
+    },
+    {
+        "symbol": "PGx",
+        "name": "Procter & Gamble",
+        "address": "XsYdjDjNUygZ7yGKfQaB6TxLh2gC6RRjzLtLAGJrhzV"
+    },
+    {
+        "symbol": "FIGon",
+        "name": "Figma",
+        "address": "aLDdFsr3VTUQaHFK6yNvQxztvxQ8nxW4AMuSGC7ondo"
+    },
+    {
+        "symbol": "ADBEon",
+        "name": "Adobe",
+        "address": "12Rh6JhfW4X5fKP16bbUdb4pcVCKDHFB48x8GG33ondo"
+    },
+    {
+        "symbol": "ENPHon",
+        "name": "Enphase Energy",
+        "address": "Bp26APthMuM46gMFTo5KYpo7b92GN2xSCor7f9oondo"
+    },
+    {
+        "symbol": "RTXon",
+        "name": "RTX",
+        "address": "12BvLZtzjdssAycxPeBQUjukhmgQpULAvy6SroYdondo"
+    },
+    {
+        "symbol": "XOMon",
+        "name": "Exxon Mobil",
+        "address": "qCYD74QnXzd9pzv6pGHQKJVwoibL6sNcPQDnpDiondo"
+    },
+    {
+        "symbol": "MRVLon",
+        "name": "Marvell Technology",
+        "address": "FovBwhoV5KQjZCdhoM6jgXYwXLX3F8vgAfvmLH7ondo"
+    },
+    {
+        "symbol": "CLOIon",
+        "name": "VanEck CLO ETF",
+        "address": "ucQ3VfWAx9pkCN4Kg84zE56FtB4FJN2kQH4ArYYondo"
+    },
+    {
+        "symbol": "MRKx",
+        "name": "Merck",
+        "address": "XsnQnU7AdbRZYe2akqqpibDdXjkieGFfSkbkjX1Sd1X"
+    },
+    {
+        "symbol": "PYPLx",
+        "name": "PayPal",
+        "address": "XshWQWYVp5ff8CrAEsGmLVKD47nBWi3Ygn5v8wXK27G"
+    },
+    {
+        "symbol": "ACNx",
+        "name": "Accenture",
+        "address": "Xs5UJzmCRQ8DWZjskExdSQDnbE6iLkRu2jjrRAB1JSU"
+    },
+    {
+        "symbol": "FCXon",
+        "name": "Freeport-McMoRan",
+        "address": "CY8ttw5rYCT6fFBJwqXofefqa7Ji9E8zfLmhRLmondo"
+    },
+    {
+        "symbol": "MELIon",
+        "name": "MercadoLibre",
+        "address": "EWwdgGshGngcMpDV34pWZRSu5bkAuiKuKTTHKQ8ondo"
+    },
+    {
+        "symbol": "BBAIon",
+        "name": "BigBear.ai Holdings",
+        "address": "YXE7mph6XhsgnyezkMEcTuohSuWhbLWfwx2Hh6mondo"
+    },
+    {
+        "symbol": "CRDOon",
+        "name": "Credo Technology Group Holding",
+        "address": "d4Rc6KvP3nQT8zC86Z31zM1DJCSfUD6y424cKnZondo"
+    },
+    {
+        "symbol": "ITAon",
+        "name": "iShares US Aerospace and Defense ETF",
+        "address": "DDcAL93Urf7KrPntvKULnZoFs4Wdee1LkkJqLpjondo"
+    },
+    {
+        "symbol": "QBTSon",
+        "name": "D-Wave Quantum",
+        "address": "hqJXutLF6f7DxStrWCrnZDfXzbNTZmvi3KheVi6ondo"
+    },
+    {
+        "symbol": "COINon",
+        "name": "Coinbase",
+        "address": "5u6KDiNJXxX4rGMfYT4BApZQC5CuDNrG6MHkwp1ondo"
+    },
+    {
+        "symbol": "Von",
+        "name": "Visa",
+        "address": "kxEW4oJL75K37VeXaZF1ynbHQATQwhECQKN1374ondo"
+    },
+    {
+        "symbol": "URAx",
+        "name": "Global X Uranium ETF",
+        "address": "Xsq9sEQjYiUTSZ55RrbHAzVfz8HotwFGrqgxkgiv4LB"
+    },
+    {
+        "symbol": "RBLXx",
+        "name": "Roblox",
+        "address": "Xss5RAku5EH6UViFdvW7ss9xQjwQLsrs2opPMhb3k43"
+    },
+    {
+        "symbol": "CSCOx",
+        "name": "Cisco",
+        "address": "Xsr3pdLQyXvDJBFgpR5nexCEZwXvigb8wbPYp4YoNFf"
+    },
+    {
+        "symbol": "VTIx",
+        "name": "Vanguard",
+        "address": "XsssYEQjzxBCFgvYFFNuhJFBeHNdLWYeUSP8F45cDr9"
+    },
+    {
+        "symbol": "NIOon",
+        "name": "NIO",
+        "address": "yQ37dFiGAbzrb2FRAEhGNzRy5zFfoYGWYhAepFEondo"
+    },
+    {
+        "symbol": "LRCXon",
+        "name": "Lam Research",
+        "address": "wFJoeEYpKg9oRhyJy6BWTT3J95gmXBLvoeikDQNondo"
+    },
+    {
+        "symbol": "SOUNon",
+        "name": "SoundHound AI",
+        "address": "vE2qArmjto6VfeMngyGAnzp2ipLYeXsxiARDnnXondo"
+    },
+    {
+        "symbol": "LIon",
+        "name": "Li Auto",
+        "address": "v12TwfofSbvVqQ5N5KGG4d3J8rtEi4BjGfn2apyondo"
+    },
+    {
+        "symbol": "SILon",
+        "name": "Global X Silver Miners ETF",
+        "address": "uiSLmtLdqxtbQq5gkwYBvBrZpnSNXZn8h6sjLsDondo"
+    },
+    {
+        "symbol": "QYLDon",
+        "name": "Global X NASDAQ 100 Covered Call ETF",
+        "address": "ueEYw3Djy9GVu9mrP6jum8qNpxshgcy7gMfmntWondo"
+    },
+    {
+        "symbol": "REMXon",
+        "name": "VanEck Rare Earth and Strategic Metals ETF",
+        "address": "tiitb2Z1HtpB2DpVr6V7tdCFS3jmTinLeuGj9EVondo"
+    },
+    {
+        "symbol": "DBCon",
+        "name": "Invesco DB Commodity Index Tracking Fund",
+        "address": "td1aY5AvYQuwGD75qNq9aPipMexraN9mQXJwqifondo"
+    },
+    {
+        "symbol": "CLOAon",
+        "name": "iShares AAA CLO Active ETF",
+        "address": "t71FyTYHVkPAb5g48adDHmkVxXYbUuP2eq6jDZLondo"
+    },
+    {
+        "symbol": "PINSon",
+        "name": "Pinterest",
+        "address": "sxyg1VTSzy5zYANUK7hntNtmFAWoXGJq95AcHuVondo"
+    },
+    {
+        "symbol": "BOTZon",
+        "name": "Global X Robotics & Artificial Intelligence ETF",
+        "address": "soLM6jRVdG1PdurSAQDz5qRtwWxXPM6EBvwrkBjondo"
+    },
+    {
+        "symbol": "SECUon",
+        "name": "iShares Securitized Income Active ETF",
+        "address": "sDtEN5uwUJJCFJ95x2rPjPqNx5UWUbHQ2ucceUzondo"
+    },
+    {
+        "symbol": "PSQon",
+        "name": "ProShares Short QQQ",
+        "address": "qKtU9A7ij34XmtxaSzYfxCpkgAZzzFsqnUb2kW2ondo"
+    },
+    {
+        "symbol": "TMUSon",
+        "name": "T-Mobile US",
+        "address": "pDY4GPJfZcNETPG7myXeafQfgJqqVkn81bMYDyfondo"
+    },
+    {
+        "symbol": "OPENon",
+        "name": "Opendoor Technologies",
+        "address": "ou1uE526v7zmUYP2qCb2LJgfXAyWAtWS9SETtr8ondo"
+    },
+    {
+        "symbol": "USFRon",
+        "name": "WisdomTree Floating Rate Treasury Fund",
+        "address": "o6U1Sm6Vd7EofMyCrL28mrp2QLzgYGgjveHiEQ5ondo"
+    },
+    {
+        "symbol": "SOFIon",
+        "name": "SoFi Technologies",
+        "address": "mqL8yXQpeSvc7NgrAtLLPtRvUiWyLoG5RWLv16iondo"
+    },
+    {
+        "symbol": "BINCon",
+        "name": "iShares Flexible Income Active ETF",
+        "address": "mhZ69E1vDnAsQJXAwarLYSX5tmgeMajXBJ2rXAcondo"
+    },
+    {
+        "symbol": "GRABon",
+        "name": "Grab Holdings",
+        "address": "m9GcsVgdjaL3KsdtSFHimnhtsUMpTHkjtwEG4Tzondo"
+    },
+    {
+        "symbol": "TMon",
+        "name": "Toyota",
+        "address": "kbmF7ERJWMaaDswMprrH9gHSLya5D2RMBNgKqg3ondo"
+    },
+    {
+        "symbol": "UNHon",
+        "name": "UnitedHealth",
+        "address": "kPBGL8vAwKN3UGmr9cjkM2dU79SC3nzTC9yu7F8ondo"
+    },
+    {
+        "symbol": "SHOPon",
+        "name": "Shopify",
+        "address": "ivdDracs2s7jCP698dJXKSEQdVrNj9hasJL1Uq1ondo"
+    },
+    {
+        "symbol": "FTGCon",
+        "name": "First Trust Global Tactical Commodity Strategy Fund",
+        "address": "ivBnfPTyuHDNWmMSnbavckhJK6SHZW8h77nZKsEondo"
+    },
+    {
+        "symbol": "VZon",
+        "name": "Verizon",
+        "address": "igu1coP6n3GPaWmbd8J9Z7UAyLpV254uQFFNfydondo"
+    },
+    {
+        "symbol": "RIOTon",
+        "name": "Riot Platforms",
+        "address": "i6f3DvZBuLpnGSqS8x6WPeStJ7jNe5KewD6afD5ondo"
+    },
+    {
+        "symbol": "PYPLon",
+        "name": "PayPal",
+        "address": "hM7B3UQTTR81mS27SxDDPzBbjejmo8fnpFjzgv9ondo"
+    },
+    {
+        "symbol": "HIIon",
+        "name": "Huntington Ingalls Industries",
+        "address": "h73FNVBDq95fqGBy5eunHm2FVfu2jWZNkeXHDieondo"
+    },
+    {
+        "symbol": "DGRWon",
+        "name": "WisdomTree US Quality Dividend Growth Fund",
+        "address": "gnoSQSNTNZHViqVfxCcPDVxcRA29mrJL7C6JqYLondo"
+    },
+    {
+        "symbol": "OPRAon",
+        "name": "Opera",
+        "address": "gbHFTMkuMQUy5xrgoCBdaQ2XYvNyjWAYcnRPh9Condo"
+    },
+    {
+        "symbol": "PWRon",
+        "name": "Quanta Services",
+        "address": "f1yQz2fo7S24NqrsfaWDkmQ8xoa8yU72c9rEEBdondo"
+    },
+    {
+        "symbol": "WULFon",
+        "name": "Terawulf",
+        "address": "exYfSJt6Fgfhfnp3bAD4roYy97hLF9npjYaLyEXondo"
+    },
+    {
+        "symbol": "LOWon",
+        "name": "Lowe's",
+        "address": "edLdFJVVR532qhcrNTJjLAmhmyV7NsctbWVokMBondo"
+    },
+    {
+        "symbol": "RGTIon",
+        "name": "Rigetti Computing",
+        "address": "dwEPNKQab3iwRmjGvZPXhAmws1W5NsQGwuXwi8oondo"
+    },
+    {
+        "symbol": "IWMon",
+        "name": "iShares Russell 2000 ETF",
+        "address": "dvj2kKFSyjpnyYSYppgFdAEVfgjMEoQGi9VaV23ondo"
+    },
+    {
+        "symbol": "BZon",
+        "name": "Kanzhun",
+        "address": "doPqjCxi6UkANkvMz5fSuYGEo5PGppVpTZMeB5vondo"
+    },
+    {
+        "symbol": "IWFon",
+        "name": "iShares Russell 1000 Growth ETF",
+        "address": "dSHPFuMMjZqt7xDYGWrexXTSkdEZAiZngqymQF2ondo"
+    },
+    {
+        "symbol": "SCHWon",
+        "name": "Charles Schwab",
+        "address": "cnc6M1zXLdrGR5LAQVcaJDfgezMiVWNtGQsVy1Kondo"
+    },
+    {
+        "symbol": "IJHon",
+        "name": "iShares Core S&P MidCap ETF",
+        "address": "cfPLN9WXD2BTkbZhRZMVXPmVSiRo44hJWRtnaC8ondo"
+    },
+    {
+        "symbol": "IEMGon",
+        "name": "iShares Core MSCI Emerging Markets ETF",
+        "address": "cdVNL7wK8mf1UCDqM6zdrziRv4hmvqWhXeTcck2ondo"
+    },
+    {
+        "symbol": "HYGon",
+        "name": "iBoxx $ High Yield Corporate Bond ETF",
+        "address": "c5ug15fwZRfQhhVa6LHscFY33ebVDHcVCezYpj7ondo"
+    },
+    {
+        "symbol": "MRKon",
+        "name": "Merck",
+        "address": "bn1fb8dwzafGePqNPrM8m8cbAKQiFqeEPuZkPySondo"
+    },
+    {
+        "symbol": "EQIXon",
+        "name": "Equinix",
+        "address": "aheEdmuryJU8ymy8LjYheZH5i2BW1UMsfuWQKD2ondo"
+    },
+    {
+        "symbol": "SOon",
+        "name": "Southern",
+        "address": "aKzjn2ZdWySSGPSSDTY2HUpcSCmemSahTXihrpyondo"
+    },
+    {
+        "symbol": "SNAPon",
+        "name": "Snap",
+        "address": "a2cXfonVgQ6cKB4Lm8YZsPry39VZSA562bwmRSiondo"
+    },
+    {
+        "symbol": "NETon",
+        "name": "Cloudflare",
+        "address": "ZtAY65FCh3YB9H1wkbjRxxY5nXt9VfuTTz3Mzbuondo"
+    },
+    {
+        "symbol": "CAMTon",
+        "name": "Camtek",
+        "address": "ZcS6FuJ1nAjgwJejUsxkasM6JpEDkdowVyohBCzondo"
+    },
+    {
+        "symbol": "HYGWon",
+        "name": "iShares High Yield Corporate Bond BuyWrite Strategy ETF",
+        "address": "ZKzkbFi4n3NQmRA9i5T7jVPSN2XERwxfHUf4p2pondo"
+    },
+    {
+        "symbol": "NTESon",
+        "name": "NetEase",
+        "address": "YeK2TdPtGLAme3Phg4pb1GBN2YxKgX5UNVyD4asondo"
+    },
+    {
+        "symbol": "HDx",
+        "name": "Home Depot",
+        "address": "XszjVtyhowGjSC5odCqBpW1CtXXwXjYokymrk7fGKD3"
+    },
+    {
+        "symbol": "COPXx",
+        "name": "Global X Copper Miners",
+        "address": "XsybfiKkD4UmjkAGT2uR8X2sq9AWFtvGJM2KTffoALZ"
+    },
+    {
+        "symbol": "IJRx",
+        "name": "S&P Small Cap",
+        "address": "XsyZcb97BzETAqi9BoP2C9D196MiMNBisGMVNje2Thz"
+    },
+    {
+        "symbol": "ABBVx",
+        "name": "AbbVie",
+        "address": "XswbinNKyPmzTa5CskMbCPvMW6G5CMnZXZEeQSSQoie"
+    },
+    {
+        "symbol": "GEVx",
+        "name": "GE Vernova Inc.",
+        "address": "XswXzAsMV9kebQjCVtr1btvrQgQ7C4C9kKgH4QYAVzw"
+    },
+    {
+        "symbol": "TMUSx",
+        "name": "T-Mobile",
+        "address": "XswCi2U1G6Ppbw1QhG45yKb8UKuR1FKLJrquv2FZSD4"
+    },
+    {
+        "symbol": "KLACx",
+        "name": "KLA Corporation",
+        "address": "Xsw2uU1i8tHjbgstUbtt3m6kg7BS7AgG5aj8z7ddmmN"
+    },
+    {
+        "symbol": "CMCSAx",
+        "name": "Comcast",
+        "address": "XsvKCaNsxg2GN8jjUmq71qukMJr7Q1c5R2Mk9P8kcS8"
+    },
+    {
+        "symbol": "WULFx",
+        "name": "TeraWulf",
+        "address": "XsuwUbQSzCJN2wZabD1Gxf1MER2Ypa7hMzVMYB2WawJ"
+    },
+    {
+        "symbol": "DELLx",
+        "name": "Dell Technologies Inc.",
+        "address": "Xsu7Tc5J2fVUE4H5vYAiSr34cvLJeCsYPMjAYnayQn6"
+    },
+    {
+        "symbol": "SMHx",
+        "name": "VanEck Semiconductor ETF",
+        "address": "XstuBvLo7soZzj3beCCPonHpR3eUfPNSeQzw35Swons"
+    },
+    {
+        "symbol": "PPLTx",
+        "name": "abrdn Physical Platinum Shares",
+        "address": "Xst6eFD4YT6sz9RLMysN9SyvaZWtraSdVJQGu5ZkAme"
+    },
+    {
+        "symbol": "CEGx",
+        "name": "Constellation Energy Corporation",
+        "address": "Xssu2cDLdZXZYrq17frTVrb3meumRCAzEf7pXyxoWVN"
+    },
+    {
+        "symbol": "SMRx",
+        "name": "NuScale Power Corporation",
+        "address": "XsrwdnwLHjVnyy7fgE2Pdwjp3czEm73jPjkSC5xzUBw"
+    },
+    {
+        "symbol": "ANETx",
+        "name": "Arista Networks, Inc.",
+        "address": "XsrsM2RgtYxXqxmy4iWgxQJUkkHG1U5wzi74sVNUW8m"
+    },
+    {
+        "symbol": "TBLLx",
+        "name": "TBLL",
+        "address": "XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp"
+    },
+    {
+        "symbol": "IBMx",
+        "name": "International Business Machines",
+        "address": "XspwhyYPdWVM8XBHZnpS9hgyag9MKjLRyE3tVfmCbSr"
+    },
+    {
+        "symbol": "VGKx",
+        "name": "Vanguard FTSE Europe ETF",
+        "address": "XsosCAu1L8Ebpr4SdBDV1EboYDRTWCH8j79UnHYzvbN"
+    },
+    {
+        "symbol": "CLSKx",
+        "name": "CleanSpark",
+        "address": "Xsn3H7ACEpSF2ULxeiD6kW4jRZXpurh8ZPttyfoS56W"
+    },
+    {
+        "symbol": "ASMLx",
+        "name": "ASML",
+        "address": "XshuHQ6o6SVpUNawvnnTMxsZ4tacZsNgVCLorv7TkFq"
+    },
+    {
+        "symbol": "SPCEx",
+        "name": "Virgin Galactic",
+        "address": "Xsgrm4D6VBTfDx5bs7GNdjtmWDgZ8V79r3YpsYwf5py"
+    },
+    {
+        "symbol": "NVOx",
+        "name": "Novo Nordisk",
+        "address": "XsfAzPzYrYjd4Dpa9BU3cusBsvWfVB9gBcyGC87S57n"
+    },
+    {
+        "symbol": "LITEx",
+        "name": "Lumentum Holdings Inc.",
+        "address": "XsexQ9qqNbDkLE6XwCN9ceVhLo8Lxc7UheVR6eBkKyo"
+    },
+    {
+        "symbol": "DHRx",
+        "name": "Danaher",
+        "address": "Xseo8tgCZfkHxWS9xbFYeKFyMSbWEvZGFV1Gh53GtCV"
+    },
+    {
+        "symbol": "TONXx",
+        "name": "TON",
+        "address": "XscE4GUcsYhcyZu5ATiGUMmhxYa1D5fwbpJw4K6K4dp"
+    },
+    {
+        "symbol": "TERx",
+        "name": "Teradyne, Inc.",
+        "address": "Xsbe4fwmjVQEWEPkzfyxqNdPUUK7X9dKfTJrZdDbNgx"
+    },
+    {
+        "symbol": "PMx",
+        "name": "Philip Morris",
+        "address": "Xsba6tUnSjDae2VcopDB6FGGDaxRrewFCDa5hKn5vT3"
+    },
+    {
+        "symbol": "IWMx",
+        "name": "Russell 2000",
+        "address": "XsbELVbLGBkn7xfMfyYuUipKGt1iRUc2B7pYRvFTFu3"
+    },
+    {
+        "symbol": "AMBRx",
+        "name": "AMBRx",
+        "address": "XsaQTCgebC2KPbf27KUhdv5JFvHhQ4GDAPURwrEhAzb"
+    },
+    {
+        "symbol": "WBDx",
+        "name": "Warner Bros. Discovery",
+        "address": "XsZUSqxAXKJkEimvD4CoVvEb4WUC92TFgj5zRtBxFeL"
+    },
+    {
+        "symbol": "SGOVx",
+        "name": "iShares 0-3 Month Treasury Bond ETF",
+        "address": "XsYD72ntjj7ZwoFDZCDmN2gamTcLpnywqvG7PQN5vCN"
+    },
+    {
+        "symbol": "ITAx",
+        "name": "iShares U.S. Aerospace & Defense ETF",
+        "address": "XsXoAR52Q2NYFkYiNqhCq4FauvyA1tdRsrmEYNf9fuh"
+    },
+    {
+        "symbol": "SCHFx",
+        "name": "Schwab International Equity",
+        "address": "XsWAnFM77x6YvpdaZoos79R12o4Yj4r7EVkaTWddzhU"
+    },
+    {
+        "symbol": "PALLx",
+        "name": "abrdn Physical Palladium Shares",
+        "address": "XsTTtPA5V19YwHKDv4xeVXNM6kdsQNJvg3MyWkRUckt"
+    },
+    {
+        "symbol": "LRCXx",
+        "name": "Lam Research Corporation",
+        "address": "XsSN912SN4Whn2xn59vWZHt1uLbw9WnoNGp5MigmHFf"
+    },
+    {
+        "symbol": "HONx",
+        "name": "Honeywell",
+        "address": "XsRbLZthfABAPAfumWNEJhPyiKDW6TvDVeAeW7oKqA2"
+    },
+    {
+        "symbol": "ASTSx",
+        "name": "AST SpaceMobile",
+        "address": "XsR4LAtaBgTKTRUhiijY1ba13nx4bepeEcag2Pr4dZ1"
+    },
+    {
+        "symbol": "AMATx",
+        "name": "Applied Materials, Inc.",
+        "address": "XsQZdaWUAGC4R3fgD2N1fupKvJfJq6YM51ccnsLUWFA"
+    },
+    {
+        "symbol": "PANWx",
+        "name": "Palo Alto Networks",
+        "address": "XsQ6NfzzLH8nspjrB9X8R2K64Zz7Tnxqu12juDiMPMW"
+    },
+    {
+        "symbol": "APPx",
+        "name": "AppLovin",
+        "address": "XsPdAVBi8Zc1xvv53k4JcMrQaEDTgkGqKYeh7AYgPHV"
+    },
+    {
+        "symbol": "SLMTx",
+        "name": "Brera",
+        "address": "XsPHkGBbztHCCe1RMhiAs7CxVqoghmyd6zDUfrbfVWG"
+    },
+    {
+        "symbol": "VUGx",
+        "name": "Vanguard Growth ETF",
+        "address": "XsNVBwVGqtDqmA2Waoiux5mfykH8nepLK74z3ZoQWK2"
+    },
+    {
+        "symbol": "PLx",
+        "name": "Planet Labs",
+        "address": "XsMJtFbb8BwzQtck3oRXyAfs7SAPRuTXnSEDNd7BAVz"
+    },
+    {
+        "symbol": "VRTx",
+        "name": "Vertiv Holdings Co",
+        "address": "XsLUiVEwYeoneKpgR1C2Q4DBUZhX4xDktSCfQqq8zmn"
+    },
+    {
+        "symbol": "PWRx",
+        "name": "Quanta Services, Inc.",
+        "address": "XsLR2VCGNzYVLfJGEwwNZsRYDZBGyBnoQH5rPGvwodA"
+    },
+    {
+        "symbol": "OKLOx",
+        "name": "Oklo",
+        "address": "XsJb1p4Ks6VFggq68JyMz7S3kdRfkqh4wA6EMyxi4DD"
+    },
+    {
+        "symbol": "USARx",
+        "name": "USA Rare Earth Inc.",
+        "address": "XsJJneENiaBPqqcdK1gMsfwi9cbw111azigzRYHoctX"
+    },
+    {
+        "symbol": "OPENx",
+        "name": "OPEN",
+        "address": "XsGtpmjhmC8kyjVSWL4VicGu36ceq9u55PTgF8bhGv6"
+    },
+    {
+        "symbol": "JNJx",
+        "name": "Johnson & Johnson",
+        "address": "XsGVi5eo1Dh2zUpic4qACcjuWGjNv8GCt3dm5XcX6Dn"
+    },
+    {
+        "symbol": "HUTx",
+        "name": "Hut 8",
+        "address": "XsG5QyZTQnVSpsXRpD92K5ZGoxXjsmfTyx7fW7r18DV"
+    },
+    {
+        "symbol": "IEMGx",
+        "name": "Core MSCI Emerging Markets",
+        "address": "XsFnZawJdLdXfBSEt5Vw29K5vdBiHotdPLjUPafpfHs"
+    },
+    {
+        "symbol": "VTx",
+        "name": "Vanguard Total World",
+        "address": "XsEdDDTcVGJU6nvdRdVnj53eKTrsCkvtrVfXGmUK68V"
+    },
+    {
+        "symbol": "MDTx",
+        "name": "Medtronic",
+        "address": "XsDgw22qRLTv5Uwuzn6T63cW69exG41T6gwQhEK22u2"
+    },
+    {
+        "symbol": "CORZx",
+        "name": "Core Scientific",
+        "address": "XsBGEXxbBcuu8Nrokj14G8v4ezT3JYWWLneTzXK8t6Z"
+    },
+    {
+        "symbol": "PFEx",
+        "name": "Pfizer",
+        "address": "XsAtbqkAP1HJxy7hFDeq7ok6yM43DQ9mQ1Rh861X8rw"
+    },
+    {
+        "symbol": "UBERx",
+        "name": "Uber",
+        "address": "XsAsZLF4MmsvS1sDxRMrUz7REjHfwbC9UAMXSRBqgEB"
+    },
+    {
+        "symbol": "XOPx",
+        "name": "SPDR S&P Oil & Gas Exploration & Production ETF",
+        "address": "XsAk6BoV4kBXUM6WXodKyM21CN92G9jArwAzFvbh3LX"
+    },
+    {
+        "symbol": "KRAQx",
+        "name": "KRAQ",
+        "address": "XsAiRejKuvLAdq9KtedrMSrabz7SWdzKoVK6Qgac1Ki"
+    },
+    {
+        "symbol": "TMOx",
+        "name": "Thermo Fisher",
+        "address": "Xs8drBWy3Sd5QY3aifG9kt9KFs2K3PGZmx7jWrsrk57"
+    },
+    {
+        "symbol": "ETNx",
+        "name": "Eaton Corporation plc",
+        "address": "Xs8S5L4HkJpeBWF1J4oyUX6rVwGHmG7GZ7PiChPt7nY"
+    },
+    {
+        "symbol": "CRWDx",
+        "name": "CrowdStrike",
+        "address": "Xs7xXqkcK7K8urEqGg52SECi79dRp2cEKKuYjUePYDw"
+    },
+    {
+        "symbol": "VCXx",
+        "name": "Fundrise Innovation Fund, LLC",
+        "address": "Xs7UsqobM3EJgMeHwdAbmDBCZH1G5WTCjatpeYcCr8x"
+    },
+    {
+        "symbol": "MOOx",
+        "name": "VanEck Agribusiness ETF",
+        "address": "Xs72K1Ta1D5ccNy3RzSyQWGgZywWvphX78pL8WBk1Bo"
+    },
+    {
+        "symbol": "GLXYx",
+        "name": "Galaxy Digital",
+        "address": "Xs3c2aZenyRQwXjki5MDxJEJ2km27ef2rWQMFWx7QKJ"
+    },
+    {
+        "symbol": "RIOTx",
+        "name": "Riot Platforms",
+        "address": "Xs31mE5EiqjSHEaiX9QDKCN6NvSGCqpJ6f1FNq2wri5"
+    },
+    {
+        "symbol": "APLDx",
+        "name": "Applied Digital Corporation",
+        "address": "Xs2ZEuDVSQkNnXHqfqEYKVShLHpecyKfdfpEYwiHtQE"
+    },
+    {
+        "symbol": "BACon",
+        "name": "Bank of America",
+        "address": "Wk8gC6iTNp8dqd4ghkJ3h1giiUnyhykwHh7tYWjondo"
+    },
+    {
+        "symbol": "NIKLon",
+        "name": "Sprott Nickel Miners ETF",
+        "address": "V8LRV7kWjrx6Prke9oHEHNUiR122BVtyuPciTCTondo"
+    },
+    {
+        "symbol": "PCGon",
+        "name": "PG&E",
+        "address": "UP5s1srLaHDc4SwJqLPa3A48x5R7ofN3hZWxWEZondo"
+    },
+    {
+        "symbol": "OSCRon",
+        "name": "Oscar Health",
+        "address": "ThwGDsXZ6iKubWuEQjmDxGwF3bUERDGbBXvcbjFondo"
+    },
+    {
+        "symbol": "TMOon",
+        "name": "Thermo Fisher Scientific",
+        "address": "T699bgtXQw4CJ59rQ4VzLsupVQUzoL5RmuhHnKrondo"
+    },
+    {
+        "symbol": "AMGNon",
+        "name": "Amgen",
+        "address": "SS6AEWhzRrxhL2cXzKKjhFt3rCzmHHGKmFyugDTondo"
+    },
+    {
+        "symbol": "TLNon",
+        "name": "Talen Energy",
+        "address": "RTb54gpqAx6RpLAHRGnqQ3ciQ845CHqhg21ZzEJondo"
+    },
+    {
+        "symbol": "MTZon",
+        "name": "MasTec",
+        "address": "R3ywbVQ5t8LNmjQsn2Ngv43dSqyZscQwNag9G3Eondo"
+    },
+    {
+        "symbol": "COFon",
+        "name": "Capital One",
+        "address": "R2uDbMtmHq5xSS5SserrovdRKdpiqnVBCd2AHLhondo"
+    },
+    {
+        "symbol": "PDDon",
+        "name": "PDD Holdings",
+        "address": "PnjETBCLC318DRejo9cMQKAmET9PvW8AEFGWMNtondo"
+    },
+    {
+        "symbol": "PALLon",
+        "name": "abrdn Physical Palladium Shares ETF",
+        "address": "P7hTXnKk2d2DyqWnefp5BSroE1qjjKpKxg9SxQqondo"
+    },
+    {
+        "symbol": "GEMIon",
+        "name": "Gemini Space Station",
+        "address": "NrTdGMA3ujUvWXkwXyZKnhoByb32KTjRh5Vo47yondo"
+    },
+    {
+        "symbol": "CPNGon",
+        "name": "Coupang",
+        "address": "NKyzy31w2J7odLb2CW3Ft4fpKXkW3LBt1pvpkVLondo"
+    },
+    {
+        "symbol": "HDon",
+        "name": "Home Depot",
+        "address": "MtEXKVN3Pcggy8MPA3eJr15H6SK3RXheScqj9qtondo"
+    },
+    {
+        "symbol": "BMNRon",
+        "name": "BitMine Immersion Technologies",
+        "address": "MYXqkDYbzr7vjXAz2BapR4AiYRXzoikGirrLoRzondo"
+    },
+    {
+        "symbol": "ABBVon",
+        "name": "AbbVie",
+        "address": "MFerpBVGKZh2jXN7cbJdXRXQTp6j6pbSnSZrfWrondo"
+    },
+    {
+        "symbol": "PDBCon",
+        "name": "Invesco Optimum Yld Dvsfd Cmd Str No K-1 ETF",
+        "address": "M6agiXbNgy8Xon9ngiW4ZDPbMFcNCTMkMMkshZyondo"
+    },
+    {
+        "symbol": "ADIon",
+        "name": "Analog Devices",
+        "address": "LmTMwmZLNZszn3qpjmnbhfP12U4qWDivaEBwSBSondo"
+    },
+    {
+        "symbol": "ETHAon",
+        "name": "iShares Ethereum Trust",
+        "address": "LitNUakTges74cjDJm6HHfFNKGPdySkp3MWSYzYondo"
+    },
+    {
+        "symbol": "WFCon",
+        "name": "Wells Fargo",
+        "address": "L6ZE5qCpVVSqLePz64CrwkgyWoPF9M7tB8BeFH4ondo"
+    },
+    {
+        "symbol": "VTVon",
+        "name": "Vanguard Value ETF",
+        "address": "KuiYLPVq65qixD9TgvxBC576C4gG6vVTCdbh2zFondo"
+    },
+    {
+        "symbol": "ACHRon",
+        "name": "Archer Aviation",
+        "address": "KcCVQxG9LhFYP5o9DWFKTFgFShPPQkDEemVbiFyondo"
+    },
+    {
+        "symbol": "JAAAon",
+        "name": "Janus Henderson AAA CLO ETF",
+        "address": "KZtqx9BJbpcGY7vdzhqPXM3ECKChxE5YhXaDiwRondo"
+    },
+    {
+        "symbol": "SPGIon",
+        "name": "S&P Global",
+        "address": "JrTYw7A9jihX5TwpRStYviEbsYf2X2VJpZ13719ondo"
+    },
+    {
+        "symbol": "SNOWon",
+        "name": "Snowflake",
+        "address": "JmFLCBwoNvcXy6B2VqABg6m784ubkXpaEx3p7S5ondo"
+    },
+    {
+        "symbol": "RDDTon",
+        "name": "Reddit",
+        "address": "HXFrTf9v9NdjGUTnx4sojR3Cf92hoBsQFUxKTN7ondo"
+    },
+    {
+        "symbol": "PFEon",
+        "name": "Pfizer",
+        "address": "Gwh9fPsX1qWATXy63vNaJnAFfwebWQtZaVmPko6ondo"
+    },
+    {
+        "symbol": "ORCLon",
+        "name": "Oracle",
+        "address": "GmDADFpfwjfzZq9MfCafMDTS69MgVjtzD7Fd9a4ondo"
+    },
+    {
+        "symbol": "GRNDon",
+        "name": "Grindr",
+        "address": "Gc1aT3ay7FXL3qdAW7cNSXYPDsGavy7qiACuxwxondo"
+    },
+    {
+        "symbol": "PBRon",
+        "name": "Petrobras",
+        "address": "GRciFCqJ5y2hbiD6U5mGkohY65BZTXGuGUrCqf7ondo"
+    },
+    {
+        "symbol": "SPCX2S",
+        "name": "SpaceX 2x Short",
+        "address": "FtBpBcLU4Epjm2nnuQNRYGkFM6jfsXrcGKJSiKCtSHFT"
+    },
+    {
+        "symbol": "MSTRon",
+        "name": "MicroStrategy",
+        "address": "FSz4ouiqXpHuGPcpacZfTzbMjScoj5FfzHkiyu2ondo"
+    },
+    {
+        "symbol": "WMon",
+        "name": "Waste Management",
+        "address": "FPvKvWzSzDZqgYmSZUetrkpUXSwo2VtpR4BynVYondo"
+    },
+    {
+        "symbol": "VRTXon",
+        "name": "Vertex Pharmaceuticals",
+        "address": "FL7QzUq58pvkDxkftJm7RqRWgqYEFZwXuvAMsUnondo"
+    },
+    {
+        "symbol": "CVNAon",
+        "name": "Carvana",
+        "address": "FGmUDXqA3AbWfo5b3NUcsvwoUFCF4tr9ea6uercondo"
+    },
+    {
+        "symbol": "VNQon",
+        "name": "Vanguard Real Estate ETF",
+        "address": "F3dMJ9H137YUNc9cpN3gBWDSq4MSRbTFtojH65Uondo"
+    },
+    {
+        "symbol": "VFSon",
+        "name": "VinFast Auto",
+        "address": "F3V1fKLKv7H8aNdt9TC6GQ3X4LayEfGHsPi8Umaondo"
+    },
+    {
+        "symbol": "UNPon",
+        "name": "Union Pacific Corporation",
+        "address": "EvsME8gdnEwPLbTnhrGVDwrY35zBuB8hEGCq59Hondo"
+    },
+    {
+        "symbol": "MAon",
+        "name": "Mastercard",
+        "address": "EsVHcyRxXFJCLMiuYLWhoDygrNe1BJGpYeZ17X7ondo"
+    },
+    {
+        "symbol": "UNGon",
+        "name": "US Natural Gas Fund",
+        "address": "Es2ipHL7qXBcLmZ4N7LP9PHBHaWaTMTAkxDwGGjondo"
+    },
+    {
+        "symbol": "LINon",
+        "name": "Linde plc",
+        "address": "Edik9MoFp8LAXS9HNu2gRFyihwYqDqv4ZmNmVT9ondo"
+    },
+    {
+        "symbol": "UECon",
+        "name": "Uranium Energy",
+        "address": "EYo8D3cLdF1CDeGms5M5VHyU52HJYinkMZ1cqvYondo"
+    },
+    {
+        "symbol": "STXon",
+        "name": "Seagate",
+        "address": "EXtprP1wzrNo2bByrU9JyzqEg2hQMSCVJakeHHYondo"
+    },
+    {
+        "symbol": "MCDon",
+        "name": "McDonald's",
+        "address": "EUbJjmDt8JA222M91bVLZs211siZ2jzbFArH9N3ondo"
+    },
+    {
+        "symbol": "SEDGon",
+        "name": "SolarEdge Technologies",
+        "address": "EAwP9LGNjTkQ2YeKE6CGKqBYtrJ6APFvRe7KCMmondo"
+    },
+    {
+        "symbol": "SCCOon",
+        "name": "Southern Copper",
+        "address": "EANjzFjj3nPXHdzN5CE3Z8LLVn69Ce77FE8X4cvondo"
+    },
+    {
+        "symbol": "REGNon",
+        "name": "Regeneron Pharmaceuticals",
+        "address": "E86mX2yb3HLbJM6gRtZQ6dCYmLh6MSDZadu9SCPondo"
+    },
+    {
+        "symbol": "RDWon",
+        "name": "Redwire",
+        "address": "E6KSaqjvqe2HiUpbEweRxLK4RimQddigm95H9Jaondo"
+    },
+    {
+        "symbol": "QUBTon",
+        "name": "Quantum Computing",
+        "address": "E4YowrHx5wm4RtSjfuvTqtNH3Wf7NEj5tYZGD9Bondo"
+    },
+    {
+        "symbol": "PPLTon",
+        "name": "abrdn Physical Platinum Shares ETF",
+        "address": "DwRtkbsaQMGAS3oMeEGYh6M5vH4X9WECsQgqHjAondo"
+    },
+    {
+        "symbol": "PAVEon",
+        "name": "Global X US Infrastructure Development ETF",
+        "address": "DsLQ18ooPjiHYuiuQ5Jz8PNCpVaKe3FhAYpvMxWondo"
+    },
+    {
+        "symbol": "OIHon",
+        "name": "VanEck Oil Services ETF",
+        "address": "DnvbCqRuUYssmKVRBRNwkUnptHitH4ZZTt1KVuZondo"
+    },
+    {
+        "symbol": "NEMon",
+        "name": "Newmont",
+        "address": "Dig28Tf1ufhCBAsjTmFkXCgcNgMqDMYj5A2rDQmondo"
+    },
+    {
+        "symbol": "LUNRon",
+        "name": "Intuitive Machines",
+        "address": "DiDWPZ7vQXfpaeQ8BX68XuDYeiQLv7diDxdeUpaondo"
+    },
+    {
+        "symbol": "IWNon",
+        "name": "iShares Russell 2000 Value ETF",
+        "address": "DX7g7WNjDpVzNK9CG81v7wb6ZbiNzYfkdzH2Xs5ondo"
+    },
+    {
+        "symbol": "KWEBon",
+        "name": "KraneShares CSI China Internet ETF",
+        "address": "DVPSYdqWPLvNa8afnEqa3B9eDfTTWpGyUZeXvdMondo"
+    },
+    {
+        "symbol": "INDAon",
+        "name": "iShares MSCI India ETF",
+        "address": "DBNwt3FoYCKQWdfzxKFNZ4mzuz4Jz1iRzFf7HFzondo"
+    },
+    {
+        "symbol": "INCEon",
+        "name": "Franklin Income Equity Focus ETF",
+        "address": "D8KT4Jd8qiKKTfkM8ejSKCpWGR1o3GFvnQGp5ERondo"
+    },
+    {
+        "symbol": "SQQQon",
+        "name": "ProShares UltraPro Short QQQ",
+        "address": "D1tu7Fnm3cCpKyyPXrqm5GXShPqMj7a2SEjjq9fondo"
+    },
+    {
+        "symbol": "HYSon",
+        "name": "PIMCO 0-5 Year High Yield Corporate Bond Index ETF",
+        "address": "CsN1Tyz467bSFLPGd6MJyZhPNtwDaWZtX8ixHWyondo"
+    },
+    {
+        "symbol": "ANETon",
+        "name": "Arista Networks",
+        "address": "Cq6QtvHpXbJWtFaiMhUDtHy8YVZ95gcD1oZ1cohondo"
+    },
+    {
+        "symbol": "INTUon",
+        "name": "Intuit",
+        "address": "CozoH5HBTyyeYSQxHcWpGzd4Sq5XBaKzBzvTtN3ondo"
+    },
+    {
+        "symbol": "GLXYon",
+        "name": "Galaxy Digital",
+        "address": "CkWmEM2J79k6AjAwyQVHXteFucAL1zQrKLxLqJHondo"
+    },
+    {
+        "symbol": "GLTRon",
+        "name": "abrdn Physical Precious Metals Basket Shares ETF",
+        "address": "CgnZbDNzBfaLyJqUtd4esKLShRp7RznQuwP4uQaondo"
+    },
+    {
+        "symbol": "FXIon",
+        "name": "iShares China Large-Cap ETF",
+        "address": "CeFbGYXDmkyfo1TXXzzZ512mtnCCewNohu6V15vondo"
+    },
+    {
+        "symbol": "FLQLon",
+        "name": "Franklin US Large Cap Multifactor Index ETF",
+        "address": "CZ9GBn1okotqKNUUqoxk4PF2JVi59bw5GWvVo6Dondo"
+    },
+    {
+        "symbol": "ITOTon",
+        "name": "iShares Core S&P Total US Stock Market ETF",
+        "address": "CPWkMURVvcnX8hGjqCTb8i5LkzV3VSvyk7SeJi8ondo"
+    },
+    {
+        "symbol": "EXODon",
+        "name": "Exodus Movement",
+        "address": "CJRoTbu98waCCuLFfLuJ2kXawLk889fqW4UAAbwondo"
+    },
+    {
+        "symbol": "EWZon",
+        "name": "iShares MSCI Brazil ETF",
+        "address": "CBKcmEvVg5EgE3W5hVSPcBYWh6TFVjQwbmYod9Pondo"
+    },
+    {
+        "symbol": "IEFAon",
+        "name": "iShares Core MSCI EAFE ETF",
+        "address": "C9J9vZ8N79GzzxFoRkPWCkGtMKU8akg4FhUk4r9ondo"
+    },
+    {
+        "symbol": "EWYon",
+        "name": "iShares MSCI South Korea ETF",
+        "address": "C8pSaSgjkiTWixS3GM6Hxd6HKnKrgAbY9WDgfVeondo"
+    },
+    {
+        "symbol": "ENLVon",
+        "name": "Enlivex Therapeutics",
+        "address": "BncvtBGs4JqgYZwUoq3EN9q9HUFqJKTfWpvCsHCondo"
+    },
+    {
+        "symbol": "GSon",
+        "name": "Goldman Sachs",
+        "address": "BchJRy2snmhJZf3rQ9LJ3ePs2BGfYgfvQNo31d2ondo"
+    },
+    {
+        "symbol": "CIBRon",
+        "name": "First Trust NASDAQ Cybersecurity ETF",
+        "address": "BVdL3WUxtxUD4vXRWwqChJLbGxvfzZjBGPp63Wtondo"
+    },
+    {
+        "symbol": "CAPRon",
+        "name": "Capricor Therapeutics",
+        "address": "BS8zoc6pmALQnBhBDFak6eFhgGHjpebnHzsxApgondo"
+    },
+    {
+        "symbol": "FSOLon",
+        "name": "Fidelity Solana Fund",
+        "address": "BJhPr9SM7uZTZXHeSLYmUk7CjGQq1esFkVxPF5tondo"
+    },
+    {
+        "symbol": "BNOon",
+        "name": "US Brent Oil Fund",
+        "address": "BAU83kqEqhyiexfAMQhZZE5KnGogSqh17fJc44Sondo"
+    },
+    {
+        "symbol": "ALBon",
+        "name": "Albemarle",
+        "address": "B5KufqHkskgGYwMXtL8FSHgREAkMQvE3ykhH5Kmondo"
+    },
+    {
+        "symbol": "EFAon",
+        "name": "iShares MSCI EAFE ETF",
+        "address": "AbvryMGnaba9oADMZk8Vp2Av6MtczsncGyfWaC4ondo"
+    },
+    {
+        "symbol": "RIVNon",
+        "name": "Rivian Automotive",
+        "address": "AXRsYFt7TXNQ3DcY6BkvRgPV6VsYMURyDtaeudjondo"
+    },
+    {
+        "symbol": "BLSHon",
+        "name": "Bullish",
+        "address": "A9PFmw9Hu8zzxDUoU351pio1E1XWBWBfWnjT9qoondo"
+    },
+    {
+        "symbol": "TCOMon",
+        "name": "Trip.com Group",
+        "address": "9PMjLqd8zPdKkJUXarnit5t7tPL3cCscwHzy7ATondo"
+    },
+    {
+        "symbol": "DASHon",
+        "name": "DoorDash",
+        "address": "83P1gCFBZfGRCwJuBt9juxJKEsZwejJoG66eTZ6ondo"
+    },
+    {
+        "symbol": "TXNon",
+        "name": "Texas Instruments",
+        "address": "81xLFvCzFaUM3KDxSHC75pXu3RPCeSeCbmGBY8aondo"
+    },
+    {
+        "symbol": "CSCOon",
+        "name": "Cisco Systems",
+        "address": "7DWcZE1uVc8m2mf9pV8KNov28ET7HsvHkhrhgr9ondo"
+    },
+    {
+        "symbol": "CRCLon",
+        "name": "Circle Internet Group",
+        "address": "6xHEyem9hmkGtVq6XGCiQUGpPsHBaoYuYdFNZa5ondo"
+    },
+    {
+        "symbol": "COSTon",
+        "name": "Costco",
+        "address": "6btaz134wjHkR8sqhAYrtSM6tavftfxnRvnyMd8ondo"
+    },
+    {
+        "symbol": "IBITon",
+        "name": "iShares Bitcoin Trust",
+        "address": "6JLG8iUkAuqiBhL3j2ckDMDf5oWAa6awmyaWezKondo"
+    },
+    {
+        "symbol": "Fon",
+        "name": "Ford Motor",
+        "address": "5hT2o25X9tGXipwhLckaUdgnxrZ6Y8eiUwdhpLeondo"
+    },
+    {
+        "symbol": "SYSBon",
+        "name": "iShares Systematic Bond ETF",
+        "address": "5U9o49BoQNU6bBMswvmBs3R4GZmYSyrnTN4ncX4ondo"
+    },
+    {
+        "symbol": "GLXY",
+        "name": "Galaxy Digital Inc.",
+        "address": "2HehXG149TXuVptQhbiWAWDjbbuCsXSAtLTB5wc2aajK"
+    },
+    {
+        "symbol": "AXPon",
+        "name": "American Express",
+        "address": "1WxT6NdK7uqpfXuKpALxL2n3f7Rq61XXeHA8UM4ondo"
+    },
+    {
+        "symbol": "OXYon",
+        "name": "Occidental Petroleum",
+        "address": "1GNFMryQ6c9ZpMhgNimmsbtgYM21qnBJgRAFoNiondo"
+    },
+    {
+        "symbol": "ARMon",
+        "name": "Arm Holdings plc",
+        "address": "15SsCZqCsM9fZGhTmP4rdJTPT9WGZKazDSsgeQ8ondo"
+    },
+    {
+        "symbol": "BILIon",
+        "name": "Bilibili",
+        "address": "14kLsQVmc64qZexYuR4XGop9y8BeMkd77pJUm1Rhondo"
+    },
+    {
+        "symbol": "APOon",
+        "name": "Apollo Global Management",
+        "address": "14VXAhoa1R74vi1ZuiQyGLJrnDMfoFBPJSCpGVz3ondo"
+    },
+    {
+        "symbol": "MRNAon",
+        "name": "Moderna",
+        "address": "14VP7DvCAdBCc5XGNZkPt6zhtPzJrWWS64Koxtxyondo"
+    },
+    {
+        "symbol": "KLACon",
+        "name": "KLA",
+        "address": "149o8ppQf9SzKCKXZ4v3dzHkwumvtQSRzSEkr29uondo"
+    },
+    {
+        "symbol": "ONon",
+        "name": "ON Semiconductor",
+        "address": "13qtwy5fZi9Przz14pzo9xqFSr8QHmLyUpUCvP1xondo"
+    },
+    {
+        "symbol": "AGGon",
+        "name": "iShares Core US Aggregate Bond ETF",
+        "address": "13qTjKx53y6LKGGStiKeieGbnVx3fx1bbwopKFb3ondo"
+    },
+    {
+        "symbol": "ACNon",
+        "name": "Accenture",
+        "address": "12LxMMJYVSf4LoeqjFE47BQQNRciaH9E3nbDfjH4ondo"
+    },
+    {
+        "symbol": "DNNon",
+        "name": "Denison Mines",
+        "address": "12J2LD3tuLfdiVKnWZMHRMrbnXDY9rM4yqVLUa5yondo"
+    }
+]

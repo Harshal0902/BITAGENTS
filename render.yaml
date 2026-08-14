@@ -57,5 +57,7 @@ services:
         sync: false
       - key: EASYA_ANALYSIS_AGENT_WALLET_PRIVATE_KEY
         sync: false
+      - key: HEDGE_FUND_WALLET_PRIVATE_KEY
+        sync: false
       - key: EZ_API_KEY
         sync: false

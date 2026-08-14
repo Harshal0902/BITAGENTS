@@ -1,0 +1,813 @@
+"""Hedge Fund live trading: Jupiter swaps, fees, live positions/trades (separate from paper)."""
+
+from __future__ import annotations
+
+import secrets
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+from psycopg2.extras import Json
+
+from db import get_conn, init_db
+from hedge_fund_assets import SOL_MINT, USDC_MINT, resolve_hf_book_mints, resolve_hf_solana_asset
+from hedge_fund_ledger import (
+    HF_MAX_STRATEGY_USDC,
+    HF_MGMT_FEE_RATE,
+    HF_PERF_FEE_RATE,
+    check_hf_can_spend,
+    get_hf_wallet_pubkey,
+    load_hf_keypair,
+    record_hf_credit,
+    record_hf_spend,
+    sol_usd_price,
+    usdc_notional_from_funding,
+)
+
+
+def _new_id(prefix: str = "hl") -> str:
+    return f"{prefix}{secrets.token_hex(4)}"
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _row(r: Any) -> dict[str, Any]:
+    if not r:
+        return {}
+    out = dict(r)
+    for k, v in list(out.items()):
+        if isinstance(v, datetime):
+            out[k] = v.isoformat()
+    return out
+
+
+def list_live_trades(strategy_id: str, limit: int = 100) -> list[dict[str, Any]]:
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM hf_live_trades
+                WHERE strategy_id = %s
+                ORDER BY created_at DESC LIMIT %s
+                """,
+                (strategy_id, limit),
+            )
+            return [_row(r) for r in cur.fetchall()]
+
+
+def list_live_positions(strategy_id: str) -> list[dict[str, Any]]:
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM hf_live_positions WHERE strategy_id = %s AND units > 0 ORDER BY symbol",
+                (strategy_id,),
+            )
+            return [_row(r) for r in cur.fetchall()]
+
+
+def _insert_live_trade(
+    *,
+    strategy_id: str,
+    user_wallet: str,
+    symbol: str,
+    mint: Optional[str],
+    side: str,
+    units: float,
+    price_usd: Optional[float],
+    notional_usd: float,
+    fee_usd: float = 0.0,
+    input_mint: Optional[str] = None,
+    output_mint: Optional[str] = None,
+    signature: Optional[str] = None,
+    explorer_url: Optional[str] = None,
+    reason: str = "",
+) -> dict[str, Any]:
+    init_db()
+    tid = _new_id("ht")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO hf_live_trades (
+                    id, strategy_id, user_wallet, symbol, mint, side, units, price_usd,
+                    notional_usd, fee_usd, input_mint, output_mint, signature, explorer_url, reason
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *
+                """,
+                (
+                    tid,
+                    strategy_id,
+                    user_wallet,
+                    symbol,
+                    mint,
+                    side.upper(),
+                    units,
+                    price_usd,
+                    notional_usd,
+                    fee_usd,
+                    input_mint,
+                    output_mint,
+                    signature,
+                    explorer_url,
+                    reason,
+                ),
+            )
+            return _row(cur.fetchone())
+
+
+def _upsert_live_position(
+    *,
+    strategy_id: str,
+    user_wallet: str,
+    symbol: str,
+    mint: str,
+    units_delta: float,
+    cost_delta_usd: float,
+) -> dict[str, Any]:
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM hf_live_positions
+                WHERE strategy_id = %s AND mint = %s FOR UPDATE
+                """,
+                (strategy_id, mint),
+            )
+            row = cur.fetchone()
+            if row:
+                old_u = float(row["units"] or 0)
+                old_cost = float(row["cost_basis_usd"] or 0)
+                new_u = old_u + units_delta
+                if new_u <= 1e-12:
+                    cur.execute("DELETE FROM hf_live_positions WHERE id = %s RETURNING *", (row["id"],))
+                    return _row(cur.fetchone()) or {"units": 0}
+                if units_delta > 0:
+                    new_cost = old_cost + cost_delta_usd
+                    avg = new_cost / new_u if new_u else 0
+                else:
+                    # sell: reduce cost pro-rata
+                    frac = min(1.0, abs(units_delta) / old_u) if old_u else 1.0
+                    new_cost = max(0.0, old_cost * (1.0 - frac))
+                    avg = new_cost / new_u if new_u else 0
+                cur.execute(
+                    """
+                    UPDATE hf_live_positions
+                    SET units=%s, avg_entry_usd=%s, cost_basis_usd=%s, updated_at=NOW()
+                    WHERE id=%s RETURNING *
+                    """,
+                    (new_u, avg, new_cost, row["id"]),
+                )
+                return _row(cur.fetchone())
+            if units_delta <= 0:
+                return {"error": "No position to sell"}
+            pid = _new_id("hz")
+            avg = cost_delta_usd / units_delta if units_delta else 0
+            cur.execute(
+                """
+                INSERT INTO hf_live_positions (
+                    id, strategy_id, user_wallet, symbol, mint, units, avg_entry_usd, cost_basis_usd
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *
+                """,
+                (pid, strategy_id, user_wallet, symbol, mint, units_delta, avg, cost_delta_usd),
+            )
+            return _row(cur.fetchone())
+
+
+def _raw_amount(amount: float, decimals: int) -> int:
+    return max(1, int(round(float(amount) * (10 ** int(decimals)))))
+
+
+SWAP_TIMEOUT_S = 150
+
+
+def execute_hf_jupiter_swap(
+    *,
+    input_mint: str,
+    output_mint: str,
+    amount: float,
+    input_decimals: int,
+    slippage_bps: int = 100,
+) -> dict[str, Any]:
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeout
+
+    from dca_agent import _build_and_execute_swap
+
+    keypair = load_hf_keypair()
+    pubkey = get_hf_wallet_pubkey()
+    if not keypair or not pubkey:
+        return {"error": "Hedge Fund wallet not configured (HEDGE_FUND_WALLET_PRIVATE_KEY)"}
+    raw = _raw_amount(amount, input_decimals)
+    # Bound each swap so one stuck RPC/Jupiter call cannot hang the whole
+    # deploy request forever — a timed-out swap is treated as a failed leg
+    # (its unspent capital gets refunded by the partial-failure path). Python
+    # threads can't be killed, so on timeout we detach the pool (wait=False)
+    # rather than blocking our return on the still-running thread.
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(
+        _build_and_execute_swap,
+        input_mint,
+        output_mint,
+        raw,
+        pubkey,
+        keypair,
+        slippage_bps=slippage_bps,
+    )
+    try:
+        result = future.result(timeout=SWAP_TIMEOUT_S)
+        pool.shutdown(wait=False)
+        return result
+    except _FutureTimeout:
+        pool.shutdown(wait=False)
+        return {"error": f"Swap timed out after {SWAP_TIMEOUT_S}s (RPC/Jupiter unresponsive)"}
+
+
+def _token_price_usd(mint_or_symbol: str) -> Optional[float]:
+    try:
+        from dca_agent import get_token_price
+
+        p = get_token_price(mint_or_symbol)
+        if isinstance(p, dict):
+            return float(p.get("price_usd") or p.get("usd_price") or 0) or None
+        return float(p) if p else None
+    except Exception:
+        return None
+
+
+def deploy_live_allocations(
+    strategy: dict[str, Any],
+    *,
+    capital_usd: float,
+    funding_token: str = "USDC",
+    mint_overrides: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
+    """
+    Debit user ledger, charge 1% mgmt fee, Jupiter-swap remaining into equal-weight book.
+    """
+    strategy_id = strategy["id"]
+    user_wallet = strategy["user_wallet"]
+    symbols = list(strategy.get("symbols") or [])
+    if not symbols:
+        return {"error": "No symbols to deploy"}
+
+    capital = min(HF_MAX_STRATEGY_USDC, max(1.0, float(capital_usd)))
+    funding_token = (funding_token or "USDC").upper()
+    if funding_token not in ("SOL", "USDC"):
+        return {"error": "Funding token must be SOL or USDC"}
+
+    # How much funding token to spend for this USDC notional
+    if funding_token == "USDC":
+        funding_amount = capital
+    else:
+        px = sol_usd_price()
+        if not px:
+            return {"error": "Could not price SOL for funding"}
+        funding_amount = round(capital / px, 9)
+
+    check = check_hf_can_spend(user_wallet, funding_token, funding_amount, exclude_strategy_id=strategy_id)
+    if check.get("error"):
+        return check
+
+    mint_info = resolve_hf_book_mints(symbols, mint_overrides=mint_overrides)
+    assets = mint_info.get("assets") or []
+    if not assets:
+        return {"error": "Could not resolve mints", "details": mint_info.get("errors")}
+
+    mgmt_fee_usd = round(capital * HF_MGMT_FEE_RATE, 6)
+    deploy_usd = round(capital - mgmt_fee_usd, 6)
+    # Allow small sleeves (e.g. $1) — only reject empty/negative deployable capital
+    if deploy_usd <= 0:
+        return {"error": "Capital too small after 1% fee"}
+
+    # Ledger: spend full capital from user; record mgmt fee as platform spend portion
+    spend = record_hf_spend(
+        user_wallet,
+        funding_token,
+        funding_amount,
+        reference_id=f"{strategy_id}-deploy",
+        reference_type="hf_strategy_deploy",
+    )
+    if spend.get("error"):
+        return spend
+    if funding_token == "USDC":
+        fee_token_amt = mgmt_fee_usd
+    else:
+        fee_token_amt = round(mgmt_fee_usd / (sol_usd_price() or 1), 9)
+
+    input_mint = USDC_MINT if funding_token == "USDC" else SOL_MINT
+    input_decimals = 6 if funding_token == "USDC" else 9
+    # Amount of funding token available to deploy after fee
+    if funding_token == "USDC":
+        deploy_funding = deploy_usd
+    else:
+        deploy_funding = round(funding_amount - fee_token_amt, 9)
+
+    per = deploy_funding / len(assets)
+    trades = []
+    errors = []
+    for asset in assets:
+        out_mint = asset["mint"]
+        sym = asset.get("display_symbol") or asset.get("symbol")
+        swap = execute_hf_jupiter_swap(
+            input_mint=input_mint,
+            output_mint=out_mint,
+            amount=per,
+            input_decimals=input_decimals,
+            slippage_bps=150,
+        )
+        if swap.get("status") != "success" and not swap.get("signature"):
+            err_msg = swap.get("error") or str(swap)
+            errors.append({"symbol": sym, "error": err_msg, "mint": out_mint})
+            _insert_live_trade(
+                strategy_id=strategy_id,
+                user_wallet=user_wallet,
+                symbol=sym,
+                mint=out_mint,
+                side="ERROR",
+                units=0,
+                price_usd=None,
+                notional_usd=0,
+                fee_usd=0,
+                input_mint=input_mint,
+                output_mint=out_mint,
+                signature=swap.get("signature"),
+                explorer_url=swap.get("explorer_url"),
+                reason=f"Buy failed: {err_msg}"[:500],
+            )
+            continue
+        out_raw = int(swap.get("output_amount_raw") or 0)
+        out_decimals = int(asset.get("decimals") or 6)
+        units = out_raw / (10 ** out_decimals) if out_raw > 0 else 0.0
+        notional = per if funding_token == "USDC" else per * (sol_usd_price() or 0)
+        price = (notional / units) if units else None
+        explorer = swap.get("explorer_url")
+        sig = swap.get("signature")
+        if sig and not explorer:
+            explorer = f"https://explorer.solana.com/tx/{sig}"
+        trade = _insert_live_trade(
+            strategy_id=strategy_id,
+            user_wallet=user_wallet,
+            symbol=sym,
+            mint=out_mint,
+            side="BUY",
+            units=units,
+            price_usd=price,
+            notional_usd=round(notional, 6),
+            fee_usd=round(mgmt_fee_usd / len(assets), 6),
+            input_mint=input_mint,
+            output_mint=out_mint,
+            signature=sig,
+            explorer_url=explorer,
+            reason="Live strategy entry (Jupiter)",
+        )
+        trades.append(trade)
+        if units > 0:
+            _upsert_live_position(
+                strategy_id=strategy_id,
+                user_wallet=user_wallet,
+                symbol=sym,
+                mint=out_mint,
+                units_delta=units,
+                cost_delta_usd=round(notional, 6),
+            )
+
+    # Total failure: refund ledger spend so user can retry / withdraw
+    if not trades:
+        refund = record_hf_credit(
+            user_wallet,
+            funding_token,
+            funding_amount,
+            reference_id=f"{strategy_id}-deploy-refund",
+            reference_type="hf_strategy_deploy_refund",
+        )
+        err_summary = "; ".join(
+            f"{e.get('symbol')}: {e.get('error')}" for e in errors[:4]
+        ) or "All Jupiter buys failed"
+        return {
+            "ok": False,
+            "error": f"Could not buy tokens/stocks — {err_summary}",
+            "errors": errors,
+            "refunded": True,
+            "refund": refund,
+            "funding_token": funding_token,
+            "funding_amount": funding_amount,
+            "trades": [],
+            "mint_map": mint_info.get("mint_map"),
+            "solana_assets": assets,
+        }
+
+    # Partial failure: refund the untouched slice (deploy + fee share) for each
+    # failed leg — it was debited from the ledger up front but never spent on-chain.
+    refund = None
+    charged_fee_usd = mgmt_fee_usd
+    if errors:
+        num_total = len(assets)
+        num_failed = len(errors)
+        per_asset_funding = funding_amount / num_total
+        refund_amount = round(per_asset_funding * num_failed, 9)
+        if refund_amount > 0:
+            refund = record_hf_credit(
+                user_wallet,
+                funding_token,
+                refund_amount,
+                reference_id=f"{strategy_id}-deploy-partial-refund",
+                reference_type="hf_deploy_partial_refund",
+            )
+        charged_fee_usd = round(mgmt_fee_usd * len(trades) / num_total, 6)
+
+    # Fee trade row (accounting) — only for the capital actually deployed
+    if charged_fee_usd > 0:
+        _insert_live_trade(
+            strategy_id=strategy_id,
+            user_wallet=user_wallet,
+            symbol="FEE",
+            mint=USDC_MINT,
+            side="FEE",
+            units=0,
+            price_usd=1.0,
+            notional_usd=charged_fee_usd,
+            fee_usd=charged_fee_usd,
+            reason=f"1% management fee on ${capital}",
+        )
+
+    return {
+        "ok": True,
+        "capital_usd": capital,
+        "mgmt_fee_usd": charged_fee_usd,
+        "deploy_usd": deploy_usd,
+        "funding_token": funding_token,
+        "funding_amount": funding_amount,
+        "trades": trades,
+        "positions": list_live_positions(strategy_id),
+        "mint_map": mint_info.get("mint_map"),
+        "solana_assets": assets,
+        "errors": errors,
+        "refunded_partial": bool(refund and not refund.get("error")),
+        "refund": refund,
+        "message": (
+            f"Live deployed ${deploy_usd:,.2f} after 1% fee (${charged_fee_usd:,.2f}) "
+            f"across {len(trades)} fills"
+            + (f" · {len(errors)} buy errors (unspent capital refunded)" if errors else "")
+            + "."
+        ),
+    }
+
+
+def retry_live_deploy(
+    strategy: dict[str, Any],
+    *,
+    replace: Optional[dict[str, str]] = None,
+    mint_overrides: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
+    """
+    Re-attempt Jupiter buys for legs of an already-confirmed live strategy that
+    never filled (e.g. "No routes found", RPC timeout). Only touches legs with
+    no successful buy yet — filled legs are left untouched. `replace` swaps a
+    failed ticker for a different one (e.g. {"AAPL": "PLTR"}) before retrying.
+    """
+    strategy_id = strategy["id"]
+    user_wallet = strategy["user_wallet"]
+    rules = dict(strategy.get("rules") or {})
+    symbols = list(strategy.get("symbols") or [])
+    if not symbols:
+        return {"error": "No symbols on this strategy"}
+
+    replace = {str(k).strip().upper(): str(v).strip().upper() for k, v in (replace or {}).items() if v}
+
+    bought: set[str] = set()
+    for t in list_live_trades(strategy_id, limit=200):
+        if str(t.get("side") or "").upper() == "BUY" and float(t.get("units") or 0) > 0:
+            bought.add(str(t.get("symbol") or "").upper())
+
+    new_symbols = []
+    for s in symbols:
+        su = s.upper()
+        new_symbols.append(replace.get(su, s) if su not in bought else s)
+    missing = [s for s in new_symbols if s.upper() not in bought]
+
+    if not missing:
+        return {"ok": True, "message": "Nothing to retry — every leg already filled.", "trades": []}
+
+    capital = float(rules.get("capital_usd") or 0)
+    funding_token = (rules.get("funding_token") or "USDC").upper()
+    total_legs = max(1, len(symbols))
+    per_leg_capital_usd = round((capital * (1.0 - HF_MGMT_FEE_RATE)) / total_legs, 6)
+    per_leg_fee_usd = round((capital * HF_MGMT_FEE_RATE) / total_legs, 6)
+    per_leg_capital_and_fee_usd = per_leg_capital_usd + per_leg_fee_usd
+
+    if funding_token == "USDC":
+        per_leg_funding = per_leg_capital_and_fee_usd
+        per_leg_deploy_funding = per_leg_capital_usd
+    else:
+        px = sol_usd_price()
+        if not px:
+            return {"error": "Could not price SOL for funding"}
+        per_leg_funding = round(per_leg_capital_and_fee_usd / px, 9)
+        per_leg_deploy_funding = round(per_leg_capital_usd / px, 9)
+
+    funding_needed = round(per_leg_funding * len(missing), 9)
+    check = check_hf_can_spend(user_wallet, funding_token, funding_needed, exclude_strategy_id=strategy_id)
+    if check.get("error"):
+        return check
+
+    mint_info = resolve_hf_book_mints(missing, mint_overrides=mint_overrides)
+    assets = mint_info.get("assets") or []
+    if not assets:
+        return {"error": "Could not resolve mints for retry", "details": mint_info.get("errors")}
+
+    spend = record_hf_spend(
+        user_wallet,
+        funding_token,
+        funding_needed,
+        reference_id=f"{strategy_id}-retry",
+        reference_type="hf_strategy_deploy",
+    )
+    if spend.get("error"):
+        return spend
+
+    input_mint = USDC_MINT if funding_token == "USDC" else SOL_MINT
+    input_decimals = 6 if funding_token == "USDC" else 9
+
+    trades = []
+    errors = []
+    for asset in assets:
+        out_mint = asset["mint"]
+        sym = asset.get("display_symbol") or asset.get("symbol")
+        swap = execute_hf_jupiter_swap(
+            input_mint=input_mint,
+            output_mint=out_mint,
+            amount=per_leg_deploy_funding,
+            input_decimals=input_decimals,
+            slippage_bps=150,
+        )
+        if swap.get("status") != "success" and not swap.get("signature"):
+            err_msg = swap.get("error") or str(swap)
+            errors.append({"symbol": sym, "error": err_msg, "mint": out_mint})
+            _insert_live_trade(
+                strategy_id=strategy_id,
+                user_wallet=user_wallet,
+                symbol=sym,
+                mint=out_mint,
+                side="ERROR",
+                units=0,
+                price_usd=None,
+                notional_usd=0,
+                fee_usd=0,
+                input_mint=input_mint,
+                output_mint=out_mint,
+                signature=swap.get("signature"),
+                explorer_url=swap.get("explorer_url"),
+                reason=f"Retry buy failed: {err_msg}"[:500],
+            )
+            continue
+        out_raw = int(swap.get("output_amount_raw") or 0)
+        out_decimals = int(asset.get("decimals") or 6)
+        units = out_raw / (10 ** out_decimals) if out_raw > 0 else 0.0
+        notional = per_leg_deploy_funding if funding_token == "USDC" else per_leg_deploy_funding * (sol_usd_price() or 0)
+        price = (notional / units) if units else None
+        explorer = swap.get("explorer_url")
+        sig = swap.get("signature")
+        if sig and not explorer:
+            explorer = f"https://explorer.solana.com/tx/{sig}"
+        trade = _insert_live_trade(
+            strategy_id=strategy_id,
+            user_wallet=user_wallet,
+            symbol=sym,
+            mint=out_mint,
+            side="BUY",
+            units=units,
+            price_usd=price,
+            notional_usd=round(notional, 6),
+            fee_usd=per_leg_fee_usd,
+            input_mint=input_mint,
+            output_mint=out_mint,
+            signature=sig,
+            explorer_url=explorer,
+            reason="Live strategy retry entry (Jupiter)",
+        )
+        trades.append(trade)
+        if units > 0:
+            _upsert_live_position(
+                strategy_id=strategy_id,
+                user_wallet=user_wallet,
+                symbol=sym,
+                mint=out_mint,
+                units_delta=units,
+                cost_delta_usd=round(notional, 6),
+            )
+            _insert_live_trade(
+                strategy_id=strategy_id,
+                user_wallet=user_wallet,
+                symbol="FEE",
+                mint=USDC_MINT,
+                side="FEE",
+                units=0,
+                price_usd=1.0,
+                notional_usd=per_leg_fee_usd,
+                fee_usd=per_leg_fee_usd,
+                reason=f"1% management fee on retried leg {sym}",
+            )
+
+    refund = None
+    if errors:
+        refund_amount = round(per_leg_funding * len(errors), 9)
+        if refund_amount > 0:
+            refund = record_hf_credit(
+                user_wallet,
+                funding_token,
+                refund_amount,
+                reference_id=f"{strategy_id}-retry-refund",
+                reference_type="hf_deploy_partial_refund",
+            )
+
+    # Refresh deploy_errors: drop entries for legs that just filled, replace
+    # remaining/new failures with this retry's errors, refresh mint map/symbols.
+    filled_now = {t["symbol"].upper() for t in trades if t.get("symbol")}
+    prior_errors = [
+        e for e in (rules.get("deploy_errors") or [])
+        if str(e.get("symbol") or "").upper() not in filled_now
+        and str(e.get("symbol") or "").upper() not in {m.upper() for m in missing}
+    ]
+    rules["deploy_errors"] = prior_errors + errors
+    rules["last_error"] = (
+        f"{len(rules['deploy_errors'])} buy(s) failed and were skipped."
+        if rules["deploy_errors"]
+        else None
+    )
+    rules["mint_map"] = {**(rules.get("mint_map") or {}), **(mint_info.get("mint_map") or {})}
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE hf_strategies SET symbols = %s, rules = %s, updated_at = NOW() WHERE id = %s",
+                (Json(new_symbols), Json(rules), strategy_id),
+            )
+
+    return {
+        "ok": True,
+        "trades": trades,
+        "positions": list_live_positions(strategy_id),
+        "errors": errors,
+        "refunded_partial": bool(refund and not refund.get("error")),
+        "refund": refund,
+        "symbols": new_symbols,
+        "message": (
+            f"Retried {len(missing)} leg(s): {len(trades)} filled"
+            + (f", {len(errors)} still failed (unspent capital refunded)" if errors else "")
+            + "."
+        ),
+    }
+
+
+def liquidate_live_strategy(
+    strategy: dict[str, Any],
+    reason: str = "Liquidate to USDC",
+) -> dict[str, Any]:
+    """Swap all live positions to USDC, credit ledger, take 10% of profit if any."""
+    strategy_id = strategy["id"]
+    user_wallet = strategy["user_wallet"]
+    rules = dict(strategy.get("rules") or {})
+    capital = float(rules.get("capital_usd") or 0)
+    deploy_usd = float(rules.get("deploy_usd") or (capital * (1.0 - HF_MGMT_FEE_RATE)))
+
+    positions = list_live_positions(strategy_id)
+    trades = []
+    proceeds_usdc = 0.0
+    errors = []
+
+    for pos in positions:
+        units = float(pos.get("units") or 0)
+        mint = pos.get("mint")
+        if units <= 0 or not mint:
+            continue
+        # Resolve decimals via Jupiter/catalog
+        asset = resolve_hf_solana_asset(pos.get("symbol") or mint, mint_override=mint)
+        decimals = int(asset.get("decimals") or 6)
+        swap = execute_hf_jupiter_swap(
+            input_mint=mint,
+            output_mint=USDC_MINT,
+            amount=units,
+            input_decimals=decimals,
+            slippage_bps=150,
+        )
+        if swap.get("status") != "success" and not swap.get("signature"):
+            errors.append({"symbol": pos.get("symbol"), "error": swap.get("error") or swap})
+            continue
+        out_raw = int(swap.get("output_amount_raw") or 0)
+        usdc_out = out_raw / 1e6 if out_raw > 0 else 0.0
+        proceeds_usdc += usdc_out
+        trade = _insert_live_trade(
+            strategy_id=strategy_id,
+            user_wallet=user_wallet,
+            symbol=pos.get("symbol") or "?",
+            mint=mint,
+            side="SELL",
+            units=units,
+            price_usd=(usdc_out / units) if units else None,
+            notional_usd=round(usdc_out, 6),
+            input_mint=mint,
+            output_mint=USDC_MINT,
+            signature=swap.get("signature"),
+            explorer_url=swap.get("explorer_url"),
+            reason=reason,
+        )
+        trades.append(trade)
+        _upsert_live_position(
+            strategy_id=strategy_id,
+            user_wallet=user_wallet,
+            symbol=pos.get("symbol") or "?",
+            mint=mint,
+            units_delta=-units,
+            cost_delta_usd=0,
+        )
+
+    # Credit full proceeds, then skim performance fee on profit vs deploy_usd
+    credit = record_hf_credit(
+        user_wallet,
+        "USDC",
+        proceeds_usdc,
+        reference_id=f"{strategy_id}-liquidate",
+        reference_type="hf_liquidate_return",
+        signature=(trades[0].get("signature") if trades else None),
+    )
+    profit = round(proceeds_usdc - deploy_usd, 6)
+    perf_fee = round(max(0.0, profit) * HF_PERF_FEE_RATE, 6)
+    if perf_fee > 0:
+        record_hf_spend(
+            user_wallet,
+            "USDC",
+            perf_fee,
+            reference_id=f"{strategy_id}-perf-fee",
+            reference_type="hf_perf_fee",
+        )
+        _insert_live_trade(
+            strategy_id=strategy_id,
+            user_wallet=user_wallet,
+            symbol="FEE",
+            mint=USDC_MINT,
+            side="FEE",
+            units=0,
+            price_usd=1.0,
+            notional_usd=perf_fee,
+            fee_usd=perf_fee,
+            reason=f"10% performance fee on profit ${profit}",
+        )
+
+    net_to_user = round(proceeds_usdc - perf_fee, 6)
+    return {
+        "ok": True,
+        "liquidated": True,
+        "proceeds_usdc": round(proceeds_usdc, 6),
+        "deploy_usd": deploy_usd,
+        "profit_usd": profit,
+        "perf_fee_usd": perf_fee,
+        "net_credited_usdc": net_to_user,
+        "trades": trades,
+        "errors": errors,
+        "credit": credit,
+        "to_asset": "USDC",
+        "to_mint": USDC_MINT,
+        "message": (
+            f"Liquidated to USDC: proceeds ${proceeds_usdc:,.2f}, "
+            f"profit ${profit:,.2f}, perf fee ${perf_fee:,.2f}, net ${net_to_user:,.2f}."
+        ),
+    }
+
+
+def live_strategy_mark(strategy_id: str, user_wallet: str) -> dict[str, Any]:
+    positions = list_live_positions(strategy_id)
+    marked = []
+    mv = 0.0
+    cost = 0.0
+    for p in positions:
+        px = _token_price_usd(p.get("mint") or p.get("symbol") or "") or float(p.get("avg_entry_usd") or 0)
+        units = float(p.get("units") or 0)
+        c = float(p.get("cost_basis_usd") or 0)
+        value = units * px
+        mv += value
+        cost += c
+        marked.append(
+            {
+                **p,
+                "mark_price_usd": px,
+                "market_value_usd": round(value, 4),
+                "unrealized_pnl_usd": round(value - c, 4),
+            }
+        )
+    trades = list_live_trades(strategy_id, limit=50)
+    return {
+        "mode": "live",
+        "strategy_id": strategy_id,
+        "positions": marked,
+        "sleeve_market_value_usd": round(mv, 4),
+        "cost_basis_usd": round(cost, 4),
+        "unrealized_pnl_usd": round(mv - cost, 4),
+        "trades": trades,
+        "trade_counts": {
+            "buys": sum(1 for t in trades if t.get("side") == "BUY"),
+            "sells": sum(1 for t in trades if t.get("side") == "SELL"),
+            "fees": sum(1 for t in trades if t.get("side") == "FEE"),
+        },
+    }
