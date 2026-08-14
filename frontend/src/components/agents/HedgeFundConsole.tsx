@@ -12,7 +12,6 @@ import {
   fetchHedgeFundHealth,
   fetchPaperDashboard,
   fetchStrategyLivePnl,
-  debugHedgeFundSwap,
   liquidatePaperStrategy,
   mapHedgeFundActions,
   retryPaperStrategy,
@@ -20,7 +19,6 @@ import {
   runPaperMonitor,
   sendHedgeFundMessage,
   updatePaperStrategy,
-  type DebugSwapResult,
   type HedgeFundHealth,
   type PaperDashboard,
 } from "@/lib/hedgeFundClient";
@@ -75,13 +73,6 @@ export function HedgeFundConsole() {
   const [lastLivePnl, setLastLivePnl] = useState<string | null>(null);
   const [lastAnalysis, setLastAnalysis] = useState<string | null>(null);
   const [lastRetryMsg, setLastRetryMsg] = useState<string | null>(null);
-  const [debugInMint, setDebugInMint] = useState("");
-  const [debugOutMint, setDebugOutMint] = useState("");
-  const [debugAmount, setDebugAmount] = useState("");
-  const [debugDecimals, setDebugDecimals] = useState("6");
-  const [debugSlippage, setDebugSlippage] = useState("150");
-  const [debugBusy, setDebugBusy] = useState(false);
-  const [debugResult, setDebugResult] = useState<DebugSwapResult | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const refreshDashboard = useCallback(async () => {
@@ -316,31 +307,6 @@ export function HedgeFundConsole() {
     }
   }
 
-  async function onDebugSwap() {
-    if (!token) return;
-    const amount = Number(debugAmount);
-    if (!debugInMint.trim() || !debugOutMint.trim() || !amount || amount <= 0) {
-      setError("Enter token_in mint, token_out mint, and a positive amount");
-      return;
-    }
-    setDebugBusy(true);
-    setDebugResult(null);
-    try {
-      const res = await debugHedgeFundSwap(token, {
-        input_mint: debugInMint.trim(),
-        output_mint: debugOutMint.trim(),
-        amount,
-        input_decimals: Number(debugDecimals) || 6,
-        slippage_bps: Number(debugSlippage) || 150,
-      });
-      setDebugResult(res);
-    } catch (err) {
-      setDebugResult({ error: err instanceof Error ? err.message : "Swap failed" });
-    } finally {
-      setDebugBusy(false);
-    }
-  }
-
   async function onDismiss(strategyId: string) {
     if (!token) return;
     setDashBusy(true);
@@ -512,17 +478,33 @@ export function HedgeFundConsole() {
         </Panel>
       </div>
 
+      {(() => {
+        // A strategy only belongs on this tab once assets have actually
+        // been bought — "pending" (unconfirmed) and "active but still
+        // buying in the background, zero fills yet" are both chat-only.
+        const strategiesWithActivity = new Set(
+          (dashboard?.by_strategy || [])
+            .filter(
+              (b) =>
+                (b.positions || []).length > 0 ||
+                (b.live_trades || []).length > 0 ||
+                (b.trades || []).length > 0
+            )
+            .map((b) => b.strategy.id)
+        );
+        const visibleStrategies = (dashboard?.strategies || []).filter(
+          (s) => s.status !== "pending" && (s.status !== "active" || strategiesWithActivity.has(s.id))
+        );
+        return (
       <div className="grid gap-6 lg:grid-cols-2">
         <Panel title="Strategies">
           <div className="max-h-72 space-y-3 overflow-y-auto">
-            {(dashboard?.strategies || []).filter((s) => s.status !== "pending").length === 0 && (
+            {visibleStrategies.length === 0 && (
               <p className="font-mono text-xs text-muted-foreground">
-                No confirmed strategies yet — pending proposals only show in chat until confirmed.
+                No bought strategies yet — pending/still-buying proposals only show in chat.
               </p>
             )}
-            {(dashboard?.strategies || [])
-              .filter((s) => s.status !== "pending")
-              .map((s) => {
+            {visibleStrategies.map((s) => {
               const mode = s.trading_mode || s.rules?.trading_mode || "live";
               return (
               <div key={s.id} className="border border-grid bg-surface/30 p-3 font-mono text-[11px]">
@@ -651,6 +633,8 @@ export function HedgeFundConsole() {
           </div>
         </Panel>
       </div>
+        );
+      })()}
 
       {(dashboard?.failed_strategies || []).length > 0 && (
         <Panel title="Failed strategies (dismiss to clear)">
@@ -1007,75 +991,6 @@ export function HedgeFundConsole() {
           )}
         </div>
       </div>
-
-      <Panel title="Debug: manual Jupiter swap (HF wallet)">
-        <div className="space-y-2 font-mono text-[11px]">
-          <p className="text-muted-foreground">
-            Fires one real swap on-chain using the Hedge Fund agent&apos;s own wallet and the
-            exact same swap path strategies use — for diagnosing routing/liquidity errors like
-            &quot;No routes found&quot;. Spends the HF wallet&apos;s own balance directly; does
-            NOT touch any user ledger or strategy.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <input
-              value={debugInMint}
-              onChange={(e) => setDebugInMint(e.target.value)}
-              placeholder="token_in mint (e.g. USDC)"
-              className="min-w-[220px] flex-1 border border-grid bg-background px-2 py-1"
-            />
-            <input
-              value={debugOutMint}
-              onChange={(e) => setDebugOutMint(e.target.value)}
-              placeholder="token_out mint"
-              className="min-w-[220px] flex-1 border border-grid bg-background px-2 py-1"
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span>Amount (token_in units)</span>
-            <input
-              value={debugAmount}
-              onChange={(e) => setDebugAmount(e.target.value)}
-              placeholder="e.g. 0.5"
-              className="w-24 border border-grid bg-background px-2 py-1"
-            />
-            <span>Decimals</span>
-            <input
-              value={debugDecimals}
-              onChange={(e) => setDebugDecimals(e.target.value)}
-              className="w-14 border border-grid bg-background px-2 py-1"
-            />
-            <span>Slippage bps</span>
-            <input
-              value={debugSlippage}
-              onChange={(e) => setDebugSlippage(e.target.value)}
-              className="w-16 border border-grid bg-background px-2 py-1"
-            />
-            <button
-              type="button"
-              disabled={!token || debugBusy}
-              onClick={() => void onDebugSwap()}
-              className="border border-warn bg-warn/10 px-3 py-1 uppercase text-warn disabled:opacity-40"
-            >
-              {debugBusy ? "Swapping…" : "Execute swap"}
-            </button>
-          </div>
-          {debugResult && (
-            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap border border-grid bg-surface/40 p-2 text-[10px]">
-              {JSON.stringify(debugResult, null, 2)}
-            </pre>
-          )}
-          {debugResult?.explorer_url ? (
-            <a
-              href={debugResult.explorer_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block text-signal hover:underline"
-            >
-              View tx ↗
-            </a>
-          ) : null}
-        </div>
-      </Panel>
 
       {!publicKey && (
         <div className="border border-grid bg-surface/40 px-4 py-3 font-mono text-xs text-muted-foreground">

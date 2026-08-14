@@ -181,6 +181,12 @@ def _raw_amount(amount: float, decimals: int) -> int:
 
 
 SWAP_TIMEOUT_S = 150
+# Minimum SOL the HF wallet must hold to reliably pay tx fees + Jupiter's
+# priority fee (computeUnitPricePercentile=high) + possible new-ATA rent.
+# Below this, transactions get signed and submitted but never land — they
+# just silently fail to confirm (skipPreflight bypasses the fee-payer check
+# client-side), burning the full 60s confirmation wait for nothing.
+MIN_SOL_FOR_FEES = 0.01
 
 
 def execute_hf_jupiter_swap(
@@ -191,15 +197,35 @@ def execute_hf_jupiter_swap(
     input_decimals: int,
     slippage_bps: int = 100,
 ) -> dict[str, Any]:
+    import os
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeout
 
-    from dca_agent import _build_and_execute_swap
+    from dca_agent import _build_and_execute_swap, sol_rpc
 
     keypair = load_hf_keypair()
     pubkey = get_hf_wallet_pubkey()
     if not keypair or not pubkey:
         return {"error": "Hedge Fund wallet not configured (HEDGE_FUND_WALLET_PRIVATE_KEY)"}
+    try:
+        lamports = int((sol_rpc("getBalance", [pubkey]) or {}).get("value", 0))
+        sol_balance = lamports / 1e9
+        if sol_balance < MIN_SOL_FOR_FEES:
+            return {
+                "error": (
+                    f"HF wallet has only {sol_balance:.6f} SOL — need at least "
+                    f"{MIN_SOL_FOR_FEES} SOL to reliably pay tx fees. Deposit more "
+                    f"SOL to {pubkey} before swapping (a low-SOL swap gets signed "
+                    "and sent but silently never confirms)."
+                ),
+                "sol_balance": sol_balance,
+            }
+    except Exception:
+        pass  # Balance check is advisory — don't block the swap on an RPC hiccup here.
     raw = _raw_amount(amount, input_decimals)
+    # Use a separate Jupiter API key when configured so Hedge Fund swap
+    # traffic doesn't queue behind DCA/volume-agent calls on the shared key's
+    # rate-limit budget (falls back to the default JUPITER_API_KEY if unset).
+    hf_jupiter_api_key = os.environ.get("JUPITER_API_KEY_2", "").strip() or None
     # Bound each swap so one stuck RPC/Jupiter call cannot hang the whole
     # deploy request forever — a timed-out swap is treated as a failed leg
     # (its unspent capital gets refunded by the partial-failure path). Python
@@ -214,6 +240,7 @@ def execute_hf_jupiter_swap(
         pubkey,
         keypair,
         slippage_bps=slippage_bps,
+        api_key=hf_jupiter_api_key,
     )
     try:
         result = future.result(timeout=SWAP_TIMEOUT_S)
@@ -317,7 +344,12 @@ def deploy_live_allocations(
             input_decimals=input_decimals,
             slippage_bps=150,
         )
-        if swap.get("status") != "success" and not swap.get("signature"):
+        out_raw = int(swap.get("output_amount_raw") or 0)
+        # A signature does NOT mean the swap succeeded — the tx may have been
+        # submitted but never confirmed (expired blockhash) before our 60s
+        # poll gave up, in which case it never landed on-chain. Only a
+        # status=="success" result with real output units counts as a fill.
+        if swap.get("status") != "success" or out_raw <= 0:
             err_msg = swap.get("error") or str(swap)
             errors.append({"symbol": sym, "error": err_msg, "mint": out_mint})
             _insert_live_trade(
@@ -337,9 +369,8 @@ def deploy_live_allocations(
                 reason=f"Buy failed: {err_msg}"[:500],
             )
             continue
-        out_raw = int(swap.get("output_amount_raw") or 0)
         out_decimals = int(asset.get("decimals") or 6)
-        units = out_raw / (10 ** out_decimals) if out_raw > 0 else 0.0
+        units = out_raw / (10 ** out_decimals)
         notional = per if funding_token == "USDC" else per * (sol_usd_price() or 0)
         price = (notional / units) if units else None
         explorer = swap.get("explorer_url")
@@ -542,7 +573,8 @@ def retry_live_deploy(
             input_decimals=input_decimals,
             slippage_bps=150,
         )
-        if swap.get("status") != "success" and not swap.get("signature"):
+        out_raw = int(swap.get("output_amount_raw") or 0)
+        if swap.get("status") != "success" or out_raw <= 0:
             err_msg = swap.get("error") or str(swap)
             errors.append({"symbol": sym, "error": err_msg, "mint": out_mint})
             _insert_live_trade(
@@ -562,9 +594,8 @@ def retry_live_deploy(
                 reason=f"Retry buy failed: {err_msg}"[:500],
             )
             continue
-        out_raw = int(swap.get("output_amount_raw") or 0)
         out_decimals = int(asset.get("decimals") or 6)
-        units = out_raw / (10 ** out_decimals) if out_raw > 0 else 0.0
+        units = out_raw / (10 ** out_decimals)
         notional = per_leg_deploy_funding if funding_token == "USDC" else per_leg_deploy_funding * (sol_usd_price() or 0)
         price = (notional / units) if units else None
         explorer = swap.get("explorer_url")
@@ -692,11 +723,15 @@ def liquidate_live_strategy(
             input_decimals=decimals,
             slippage_bps=150,
         )
-        if swap.get("status") != "success" and not swap.get("signature"):
-            errors.append({"symbol": pos.get("symbol"), "error": swap.get("error") or swap})
-            continue
         out_raw = int(swap.get("output_amount_raw") or 0)
-        usdc_out = out_raw / 1e6 if out_raw > 0 else 0.0
+        if swap.get("status") != "success" or out_raw <= 0:
+            errors.append({
+                "symbol": pos.get("symbol"),
+                "error": swap.get("error") or swap,
+                "signature": swap.get("signature"),
+            })
+            continue
+        usdc_out = out_raw / 1e6
         proceeds_usdc += usdc_out
         trade = _insert_live_trade(
             strategy_id=strategy_id,

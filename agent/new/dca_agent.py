@@ -92,6 +92,9 @@ SOLANA_CLUSTER = os.environ.get(
 
 # ── Jupiter v2 build API (replaces deprecated quote-api.jup.ag/v6) ────────────
 JUPITER_API_KEY    = os.environ.get("JUPITER_API_KEY", "")
+# Optional secondary key so the Hedge Fund agent's swap traffic doesn't queue
+# behind DCA/volume-agent calls sharing the same rate-limit budget.
+JUPITER_API_KEY_2  = os.environ.get("JUPITER_API_KEY_2", "")
 JUPITER_BUILD_API  = os.environ.get("JUPITER_BUILD_API", "https://api.jup.ag/swap/v2/build")
 JUPITER_TOKENS_API = os.environ.get("JUPITER_TOKENS_API", "https://api.jup.ag/tokens/v2")
 JUPITER_PRICE_API  = os.environ.get("JUPITER_PRICE_API", "https://api.jup.ag/price/v3")
@@ -156,9 +159,20 @@ MIN_TOKEN_AMOUNTS: dict[str, float] = {
 DEFAULT_MIN_TOKEN_AMOUNT = 0.000001
 METRICS_REFRESH_SECONDS = int(os.environ.get("DCA_METRICS_REFRESH_SECONDS", str(24 * 3600)))
 
-# Rate-limit state (mirrors jupiterFetch in Node.js)
-_last_jupiter_call_at: float = 0.0
-_jupiter_lock = threading.Lock()
+# Rate-limit state (mirrors jupiterFetch in Node.js) — kept per API key so a
+# secondary key (e.g. JUPITER_API_KEY_2 for the Hedge Fund agent) gets its own
+# 1-req/sec budget instead of queuing behind the primary key's traffic.
+_jupiter_rate_state_lock = threading.Lock()
+_jupiter_rate_state: dict[str, dict[str, Any]] = {}
+
+
+def _jupiter_rate_state_for(api_key: str) -> dict[str, Any]:
+    with _jupiter_rate_state_lock:
+        state = _jupiter_rate_state.get(api_key)
+        if state is None:
+            state = {"last_call_at": 0.0, "lock": threading.Lock()}
+            _jupiter_rate_state[api_key] = state
+        return state
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -191,31 +205,36 @@ def _coerce_bool(val) -> bool:
     return bool(val)
 
 
-def _jupiter_headers() -> dict:
+def _jupiter_headers(api_key: Optional[str] = None) -> dict:
     """Build Jupiter request headers, including API key when configured."""
     h = {**HEADERS}
-    if JUPITER_API_KEY:
-        h["x-api-key"] = JUPITER_API_KEY
+    key = api_key if api_key is not None else JUPITER_API_KEY
+    if key:
+        h["x-api-key"] = key
     return h
 
 
-def _jupiter_get(url: str, params: dict, max_retries: int = 4) -> requests.Response:
+def _jupiter_get(
+    url: str, params: dict, max_retries: int = 4, api_key: Optional[str] = None
+) -> requests.Response:
     """
     GET wrapper for Jupiter API with:
-      • 1-second minimum spacing between calls (mirrors lastApiCallAt logic)
+      • 1-second minimum spacing between calls (mirrors lastApiCallAt logic),
+        tracked separately per API key
       • Exponential back-off on 429 Too Many Requests
     """
-    global _last_jupiter_call_at
-    with _jupiter_lock:
-        wait = 1.0 - (time.time() - _last_jupiter_call_at)
+    key = api_key if api_key is not None else JUPITER_API_KEY
+    state = _jupiter_rate_state_for(key)
+    with state["lock"]:
+        wait = 1.0 - (time.time() - state["last_call_at"])
         if wait > 0:
             time.sleep(wait)
 
     backoff = 1.0
     for attempt in range(1, max_retries + 1):
-        resp = requests.get(url, params=params, headers=_jupiter_headers(), timeout=30)
-        with _jupiter_lock:
-            _last_jupiter_call_at = time.time()
+        resp = requests.get(url, params=params, headers=_jupiter_headers(key), timeout=30)
+        with state["lock"]:
+            state["last_call_at"] = time.time()
         if resp.status_code != 429:
             return resp
         retry_after = resp.headers.get("Retry-After")
@@ -225,27 +244,30 @@ def _jupiter_get(url: str, params: dict, max_retries: int = 4) -> requests.Respo
         backoff = min(backoff * 2, 16.0)
 
     # Final attempt after exhausting retries
-    resp = requests.get(url, params=params, headers=_jupiter_headers(), timeout=30)
-    with _jupiter_lock:
-        _last_jupiter_call_at = time.time()
+    resp = requests.get(url, params=params, headers=_jupiter_headers(key), timeout=30)
+    with state["lock"]:
+        state["last_call_at"] = time.time()
     return resp
 
 
-def _jupiter_post(url: str, payload: dict, max_retries: int = 4) -> requests.Response:
+def _jupiter_post(
+    url: str, payload: dict, max_retries: int = 4, api_key: Optional[str] = None
+) -> requests.Response:
     """
     POST wrapper for Jupiter API with the same rate-limit / back-off logic.
     """
-    global _last_jupiter_call_at
-    with _jupiter_lock:
-        wait = 1.0 - (time.time() - _last_jupiter_call_at)
+    key = api_key if api_key is not None else JUPITER_API_KEY
+    state = _jupiter_rate_state_for(key)
+    with state["lock"]:
+        wait = 1.0 - (time.time() - state["last_call_at"])
         if wait > 0:
             time.sleep(wait)
 
     backoff = 1.0
     for attempt in range(1, max_retries + 1):
-        resp = requests.post(url, json=payload, headers=_jupiter_headers(), timeout=30)
-        with _jupiter_lock:
-            _last_jupiter_call_at = time.time()
+        resp = requests.post(url, json=payload, headers=_jupiter_headers(key), timeout=30)
+        with state["lock"]:
+            state["last_call_at"] = time.time()
         if resp.status_code != 429:
             return resp
         retry_after = resp.headers.get("Retry-After")
@@ -254,9 +276,9 @@ def _jupiter_post(url: str, payload: dict, max_retries: int = 4) -> requests.Res
         time.sleep(wait_ms)
         backoff = min(backoff * 2, 16.0)
 
-    resp = requests.post(url, json=payload, headers=_jupiter_headers(), timeout=30)
-    with _jupiter_lock:
-        _last_jupiter_call_at = time.time()
+    resp = requests.post(url, json=payload, headers=_jupiter_headers(key), timeout=30)
+    with state["lock"]:
+        state["last_call_at"] = time.time()
     return resp
 
 
@@ -858,7 +880,7 @@ def _execute_jupiter_swap_v2(build_data: dict, wallet_pubkey: str, keypair: "Key
 
     # ── 3. Get latest blockhash ────────────────────────────────────────────────
     try:
-        bh_result = sol_rpc("getLatestBlockhash", [{"commitment": "finalized"}])
+        bh_result = sol_rpc("getLatestBlockhash", [{"commitment": "confirmed"}])
         blockhash = Hash.from_string(bh_result["value"]["blockhash"])
     except Exception as e:
         return {"error": f"Failed to fetch blockhash: {e}"}
@@ -914,6 +936,7 @@ def _build_and_execute_swap(
     keypair: "Keypair",
     slippage_bps: int = 100,
     retries: int = 2,
+    api_key: Optional[str] = None,
 ) -> dict:
     """
     Build + sign + send a swap via Jupiter v2.
@@ -940,7 +963,7 @@ def _build_and_execute_swap(
         }
 
         try:
-            resp = _jupiter_get(JUPITER_BUILD_API, params)
+            resp = _jupiter_get(JUPITER_BUILD_API, params, api_key=api_key)
 
             if not resp.ok:
                 err = {}
@@ -956,7 +979,7 @@ def _build_and_execute_swap(
                         print("    ↳ Transaction too large, retrying with higher slippage for simpler route...")
                         return _build_and_execute_swap(
                             input_mint, output_mint, raw_amount,
-                            wallet_pubkey, keypair, slippage_bps=200, retries=1,
+                            wallet_pubkey, keypair, slippage_bps=200, retries=1, api_key=api_key,
                         )
                     print("    ↳ Transaction too large even with higher slippage, skipping")
                     return {"status": "failed", "error": msg}
@@ -984,7 +1007,7 @@ def _build_and_execute_swap(
                         print("    ↳ Transaction too large, retrying with higher slippage for simpler route...")
                         return _build_and_execute_swap(
                             input_mint, output_mint, raw_amount,
-                            wallet_pubkey, keypair, slippage_bps=200, retries=1,
+                            wallet_pubkey, keypair, slippage_bps=200, retries=1, api_key=api_key,
                         )
                     print("    ↳ Transaction too large even with higher slippage, skipping")
                     return result
@@ -1117,7 +1140,7 @@ def _execute_devnet_sol_transfer(amount_sol: float) -> dict:
         pubkey   = keypair.pubkey()
         lamports = max(int(float(amount_sol) * 1e9), 5000)
 
-        blockhash_resp = sol_rpc("getLatestBlockhash", [{"commitment": "finalized"}])
+        blockhash_resp = sol_rpc("getLatestBlockhash", [{"commitment": "confirmed"}])
         blockhash      = Hash.from_string(blockhash_resp["value"]["blockhash"])
 
         ix  = transfer(TransferParams(from_pubkey=pubkey, to_pubkey=pubkey, lamports=lamports))
@@ -1339,7 +1362,7 @@ def _send_signed_transaction(keypair: "Keypair", instructions: list) -> dict:
         return {"error": f"solders import failed: {e}"}
 
     pubkey = keypair.pubkey()
-    blockhash_resp = sol_rpc("getLatestBlockhash", [{"commitment": "finalized"}])
+    blockhash_resp = sol_rpc("getLatestBlockhash", [{"commitment": "confirmed"}])
     blockhash = Hash.from_string(blockhash_resp["value"]["blockhash"])
     msg = MessageV0.try_compile(pubkey, instructions, [], blockhash)
     tx = VersionedTransaction(msg, [keypair])

@@ -22,6 +22,7 @@ from hedge_fund_core import (
 )
 from hedge_fund_paper import (
     HF_MAX_STRATEGY_USDC,
+    HF_MIN_PER_ASSET_USDC,
     HF_MONITOR_INTERVAL_SECONDS,
     add_capital_to_strategy,
     analyze_live_asset,
@@ -132,6 +133,9 @@ TOOLS = [
                 "OMIT tokens and set mode='agent' so the agent selects the book. "
                 "Do NOT pass tokens like STOCKS/CRYPTO — those are not tickers. "
                 f"Capital max ${HF_MAX_STRATEGY_USDC:.0f} USDC from deposited SOL/USDC. "
+                f"Each asset needs at least ${HF_MIN_PER_ASSET_USDC:.0f} capital — e.g. 2 assets need "
+                f"${HF_MIN_PER_ASSET_USDC * 2:.0f}+ total, so pick a book size the stated capital "
+                "actually supports (fewer assets if capital is small). "
                 "If the user states how many assets to pick (e.g. 'only 2 stocks', 'pick 3 tokens'), "
                 "set max_names to that exact number. "
                 "Put user wording in notes (including 'only stocks'). Confirm before deploy."
@@ -566,7 +570,8 @@ Flow:
    - Never pass STOCKS/CRYPTO as tokens.
    - Stocks resolve from hedge-fund-tokens.json; crypto via Jupiter.
    - Show mint addresses; user may correct via mint_overrides.
-   - Capital sleeve max **${HF_MAX_STRATEGY_USDC:.0f} USDC**.
+   - Capital sleeve max **${HF_MAX_STRATEGY_USDC:.0f} USDC**, min **${HF_MIN_PER_ASSET_USDC:.0f}/asset**
+     (2 assets needs ${HF_MIN_PER_ASSET_USDC * 2:.0f}+, 3 needs ${HF_MIN_PER_ASSET_USDC * 3:.0f}+, etc.).
 3. Confirm → `confirm_paper_strategy` spends deposit, takes 1% fee, then buys the book
    IN THE BACKGROUND — the tool call returns immediately (does not wait for the Jupiter
    swaps to finish), so relay its `message` as-is; do not imply the buys are already done.

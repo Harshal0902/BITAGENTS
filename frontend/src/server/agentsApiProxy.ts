@@ -202,17 +202,6 @@ export async function proxyHedgeFundPaperStrategyPnl(
   );
 }
 
-export async function proxyHedgeFundDebugSwap(
-  authToken: string,
-  body: Record<string, unknown>
-): Promise<Response> {
-  return fetch(`${getAgentsBaseUrl()}/hedge-fund/debug/swap`, {
-    method: "POST",
-    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
-    body: JSON.stringify(body),
-  });
-}
-
 export async function proxyHedgeFundPaperRetryStrategy(
   strategyId: string,
   authToken: string,

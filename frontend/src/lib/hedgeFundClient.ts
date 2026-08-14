@@ -318,31 +318,6 @@ export async function confirmPaperStrategy(
   );
 }
 
-export type DebugSwapResult = {
-  status?: string;
-  error?: string;
-  signature?: string;
-  explorer_url?: string;
-  output_amount_raw?: number;
-  [key: string]: unknown;
-};
-
-export async function debugHedgeFundSwap(
-  authToken: string,
-  body: {
-    input_mint: string;
-    output_mint: string;
-    amount: number;
-    input_decimals?: number;
-    slippage_bps?: number;
-  }
-): Promise<DebugSwapResult> {
-  return authFetch("/api/agents/hedge-fund/debug/swap", authToken, {
-    method: "POST",
-    body: JSON.stringify(body),
-  }) as Promise<DebugSwapResult>;
-}
-
 export async function retryPaperStrategy(
   authToken: string,
   strategyId: string,

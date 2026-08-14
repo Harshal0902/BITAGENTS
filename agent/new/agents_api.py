@@ -126,7 +126,6 @@ from hedge_fund_ledger import (
     verify_and_record_hf_deposit,
     withdraw_hf_tokens,
 )
-from hedge_fund_live import execute_hf_jupiter_swap as hf_execute_jupiter_swap
 from hedge_fund_live import list_live_trades as hf_list_live_trades
 from hedge_fund_paper import (
     HF_MAX_STRATEGY_USDC,
@@ -1602,34 +1601,6 @@ def hedge_fund_paper_retry(
 ) -> dict[str, Any]:
     body = body or HfRetryDeployBody()
     return hf_retry_strategy_deploy(strategy_id, auth_wallet, replace=body.replace, mint_overrides=body.mint_overrides)
-
-
-class HfDebugSwapBody(BaseModel):
-    input_mint: str
-    output_mint: str
-    amount: float
-    input_decimals: int = 6
-    slippage_bps: int = 150
-
-
-@app.post("/hedge-fund/debug/swap")
-def hedge_fund_debug_swap(
-    body: HfDebugSwapBody,
-    auth_wallet: str = Depends(require_wallet_session),
-) -> dict[str, Any]:
-    """
-    Manual one-off Jupiter swap using the Hedge Fund agent's own wallet — for
-    debugging routing/liquidity issues (e.g. "No routes found") against the
-    exact same swap path strategies use. Spends the HF wallet's own on-chain
-    balance directly; does NOT touch any user's ledger or strategy state.
-    """
-    return hf_execute_jupiter_swap(
-        input_mint=body.input_mint,
-        output_mint=body.output_mint,
-        amount=body.amount,
-        input_decimals=body.input_decimals,
-        slippage_bps=body.slippage_bps,
-    )
 
 
 @app.post("/hedge-fund/paper/strategies/{strategy_id}/dismiss")

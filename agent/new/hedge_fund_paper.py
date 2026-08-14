@@ -24,6 +24,10 @@ HF_SCHEDULER_POLL_SECONDS = int(os.environ.get("HF_SCHEDULER_POLL_SECONDS", "60"
 # Paper book defaults — strategy sleeves capped at $100 USDC (paper) for now
 HF_MAX_STRATEGY_USDC = float(os.environ.get("HF_MAX_STRATEGY_USDC", "100"))
 HF_MIN_STRATEGY_USDC = float(os.environ.get("HF_MIN_STRATEGY_USDC", "1"))
+# Minimum capital per individual asset in the book (before the 1% start fee
+# is deducted) — keeps each leg's swap size meaningful instead of Jupiter
+# routing a few cents through a token with thin liquidity.
+HF_MIN_PER_ASSET_USDC = float(os.environ.get("HF_MIN_PER_ASSET_USDC", "5"))
 DEFAULT_PAPER_CAPITAL = float(os.environ.get("HF_DEFAULT_PAPER_CAPITAL", str(HF_MAX_STRATEGY_USDC)))
 
 
@@ -36,6 +40,10 @@ def clamp_strategy_capital(amount: Optional[float]) -> float:
     except (TypeError, ValueError):
         return float(HF_MAX_STRATEGY_USDC)
     return max(HF_MIN_STRATEGY_USDC, min(HF_MAX_STRATEGY_USDC, val))
+
+
+def min_capital_for_book(num_assets: int) -> float:
+    return round(HF_MIN_PER_ASSET_USDC * max(1, num_assets), 2)
 
 
 def _horizon_label_for(days: Optional[int]) -> str:
@@ -435,6 +443,19 @@ def create_strategy(
             "hint": "Omit tickers to let the agent pick, or use e.g. AAPL, NVDA, BTC",
             "picker": pick_meta,
         }
+    min_required = min_capital_for_book(len(valid))
+    if sleeve_capital < min_required:
+        return {
+            "error": (
+                f"Capital too low for {len(valid)} asset(s) — need at least "
+                f"${min_required:.2f} (${HF_MIN_PER_ASSET_USDC:.0f}/asset minimum) so each leg's "
+                f"swap stays meaningful, got ${sleeve_capital:.2f}."
+            ),
+            "min_required_usd": min_required,
+            "per_asset_min_usd": HF_MIN_PER_ASSET_USDC,
+            "symbols": valid,
+            "hint": f"Raise capital to ${min_required:.2f}+ or ask for fewer assets.",
+        }
     rules_final_pref = dict(rules or {})
     rules_final_pref["asset_class_preference"] = asset_pref
     rules_final_pref["agent_picked"] = agent_picked
@@ -702,6 +723,16 @@ def confirm_strategy(
         sleeve = clamp_strategy_capital(capital_usd)
     else:
         sleeve = clamp_strategy_capital(rules.get("capital_usd"))
+    min_required = min_capital_for_book(len(symbols))
+    if sleeve < min_required:
+        return {
+            "error": (
+                f"Capital too low for {len(symbols)} asset(s) — need at least "
+                f"${min_required:.2f} (${HF_MIN_PER_ASSET_USDC:.0f}/asset minimum), got ${sleeve:.2f}."
+            ),
+            "min_required_usd": min_required,
+            "per_asset_min_usd": HF_MIN_PER_ASSET_USDC,
+        }
     rules["capital_usd"] = sleeve
     rules["max_capital_usd"] = HF_MAX_STRATEGY_USDC
     rules["trading_mode"] = trading_mode
