@@ -696,7 +696,7 @@ def liquidate_live_strategy(
     strategy: dict[str, Any],
     reason: str = "Liquidate to USDC",
 ) -> dict[str, Any]:
-    """Swap all live positions to USDC, credit ledger, take 10% of profit if any."""
+    """Swap positions to USDC; charge performance fee only after every leg exits."""
     strategy_id = strategy["id"]
     user_wallet = strategy["user_wallet"]
     rules = dict(strategy.get("rules") or {})
@@ -758,17 +758,62 @@ def liquidate_live_strategy(
             cost_delta_usd=0,
         )
 
-    # Credit full proceeds, then skim performance fee on profit vs deploy_usd
+    # Credit successful proceeds immediately. Failed legs remain open and are
+    # retried by the expiry scheduler (or the user).
+    first_signature = trades[0].get("signature") if trades else None
+    credit_reference = (
+        f"{strategy_id}-liquidate-{str(first_signature)[:20]}"
+        if first_signature
+        else f"{strategy_id}-liquidate"
+    )
     credit = record_hf_credit(
         user_wallet,
         "USDC",
         proceeds_usdc,
-        reference_id=f"{strategy_id}-liquidate",
+        reference_id=credit_reference,
         reference_type="hf_liquidate_return",
-        signature=(trades[0].get("signature") if trades else None),
+        signature=first_signature,
     )
-    profit = round(proceeds_usdc - deploy_usd, 6)
-    perf_fee = round(max(0.0, profit) * HF_PERF_FEE_RATE, 6)
+
+    remaining = list_live_positions(strategy_id)
+    fully_liquidated = not remaining and not errors
+    if not fully_liquidated:
+        return {
+            "ok": False,
+            "liquidated": False,
+            "partial": bool(trades),
+            "proceeds_usdc": round(proceeds_usdc, 8),
+            "perf_fee_usd": 0.0,
+            "net_credited_usdc": round(proceeds_usdc, 8),
+            "trades": trades,
+            "errors": errors,
+            "remaining_positions": remaining,
+            "credit": credit,
+            "to_asset": "USDC",
+            "to_mint": USDC_MINT,
+            "message": (
+                f"Partial liquidation: ${proceeds_usdc:,.6f} USDC credited; "
+                f"{len(remaining)} position(s) remain. No performance fee charged yet."
+            ),
+        }
+
+    # Final exit: calculate profit across every SELL, including earlier partial
+    # attempts, then charge only the remaining performance fee.
+    all_trades = list_live_trades(strategy_id, limit=500)
+    total_proceeds = sum(
+        float(t.get("notional_usd") or 0)
+        for t in all_trades
+        if str(t.get("side") or "").upper() == "SELL"
+    )
+    prior_perf_fees = sum(
+        float(t.get("fee_usd") or 0)
+        for t in all_trades
+        if str(t.get("side") or "").upper() == "FEE"
+        and "performance fee" in str(t.get("reason") or "").lower()
+    )
+    profit = round(total_proceeds - deploy_usd, 8)
+    target_perf_fee = round(max(0.0, profit) * HF_PERF_FEE_RATE, 8)
+    perf_fee = round(max(0.0, target_perf_fee - prior_perf_fees), 8)
     if perf_fee > 0:
         record_hf_spend(
             user_wallet,
@@ -790,11 +835,12 @@ def liquidate_live_strategy(
             reason=f"10% performance fee on profit ${profit}",
         )
 
-    net_to_user = round(proceeds_usdc - perf_fee, 6)
+    net_to_user = round(proceeds_usdc - perf_fee, 8)
     return {
         "ok": True,
         "liquidated": True,
-        "proceeds_usdc": round(proceeds_usdc, 6),
+        "proceeds_usdc": round(proceeds_usdc, 8),
+        "total_proceeds_usdc": round(total_proceeds, 8),
         "deploy_usd": deploy_usd,
         "profit_usd": profit,
         "perf_fee_usd": perf_fee,
@@ -805,8 +851,9 @@ def liquidate_live_strategy(
         "to_asset": "USDC",
         "to_mint": USDC_MINT,
         "message": (
-            f"Liquidated to USDC: proceeds ${proceeds_usdc:,.2f}, "
-            f"profit ${profit:,.2f}, perf fee ${perf_fee:,.2f}, net ${net_to_user:,.2f}."
+            f"Liquidated to USDC: total proceeds ${total_proceeds:,.6f}, "
+            f"profit ${profit:,.6f}, perf fee ${perf_fee:,.6f}, "
+            f"this credit ${net_to_user:,.6f}."
         ),
     }
 
@@ -836,9 +883,10 @@ def live_strategy_mark(strategy_id: str, user_wallet: str) -> dict[str, Any]:
         "mode": "live",
         "strategy_id": strategy_id,
         "positions": marked,
-        "sleeve_market_value_usd": round(mv, 4),
-        "cost_basis_usd": round(cost, 4),
-        "unrealized_pnl_usd": round(mv - cost, 4),
+        "sleeve_market_value_usd": round(mv, 8),
+        "cost_basis_usd": round(cost, 8),
+        "unrealized_pnl_usd": round(mv - cost, 8),
+        "unrealized_pnl_pct": round(((mv - cost) / cost) * 100, 8) if cost else 0.0,
         "trades": trades,
         "trade_counts": {
             "buys": sum(1 for t in trades if t.get("side") == "BUY"),

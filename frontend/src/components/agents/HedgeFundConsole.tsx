@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Panel } from "@/components/AppShell";
 import { HedgeFundDeposit } from "@/components/agents/HedgeFundDeposit";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   addPaperStrategyCapital,
   analyzePaperAsset,
@@ -41,7 +42,24 @@ function formatReply(text: string) {
 
 function money(n?: number | null) {
   if (n == null || Number.isNaN(n)) return "—";
-  return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  const abs = Math.abs(n);
+  if (abs === 0) return "$0.00";
+  if (abs >= 0.01) {
+    return `$${n.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+  }
+  // Preserve two significant digits for tiny values: 0.000567 → 0.00057.
+  return `$${Number(n.toPrecision(2)).toString()}`;
+}
+
+function preciseNumber(n?: number | null, suffix = "") {
+  if (n == null || Number.isNaN(n)) return `—${suffix}`;
+  const abs = Math.abs(n);
+  if (abs === 0) return `0.00${suffix}`;
+  if (abs >= 0.01) return `${n.toFixed(2)}${suffix}`;
+  return `${Number(n.toPrecision(2)).toString()}${suffix}`;
 }
 
 export function HedgeFundConsole() {
@@ -69,10 +87,12 @@ export function HedgeFundConsole() {
   const [editAddCap, setEditAddCap] = useState<Record<string, string>>({});
   const [depositTick, setDepositTick] = useState(0);
   const [hfBalances, setHfBalances] = useState<HfUserDepositBalances | null>(null);
-  const [lastBacktest, setLastBacktest] = useState<string | null>(null);
-  const [lastLivePnl, setLastLivePnl] = useState<string | null>(null);
+  const [strategyBacktests, setStrategyBacktests] = useState<Record<string, string>>({});
+  const [strategyLivePnl, setStrategyLivePnl] = useState<Record<string, string>>({});
   const [lastAnalysis, setLastAnalysis] = useState<string | null>(null);
   const [lastRetryMsg, setLastRetryMsg] = useState<string | null>(null);
+  const [liquidateStrategyId, setLiquidateStrategyId] = useState<string | null>(null);
+  const [liquidateBusy, setLiquidateBusy] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const refreshDashboard = useCallback(async () => {
@@ -98,6 +118,14 @@ export function HedgeFundConsole() {
 
   useEffect(() => {
     if (token) void refreshDashboard();
+  }, [token, refreshDashboard]);
+
+  useEffect(() => {
+    if (!token) return;
+    const interval = window.setInterval(() => {
+      void refreshDashboard();
+    }, 30_000);
+    return () => window.clearInterval(interval);
   }, [token, refreshDashboard]);
 
   useEffect(() => {
@@ -214,14 +242,18 @@ export function HedgeFundConsole() {
   async function onBacktest(strategyId: string, period: string) {
     if (!token) return;
     setDashBusy(true);
-    setLastBacktest(null);
     try {
       const res = await runPaperBacktest(token, { strategy_id: strategyId, period });
       const result = (res.result || res) as Record<string, unknown>;
       const net = result.net_pnl_pct ?? result.net_pnl_usd;
-      setLastBacktest(
-        `${period.toUpperCase()} · ${strategyId} · net ${typeof net === "number" ? (result.net_pnl_pct != null ? `${net}%` : money(net as number)) : "done"}`
-      );
+      const summary =
+        `${period.toUpperCase()} · net ` +
+        (typeof net === "number"
+          ? result.net_pnl_pct != null
+            ? preciseNumber(net, "%")
+            : money(net)
+          : "done");
+      setStrategyBacktests((prev) => ({ ...prev, [strategyId]: summary }));
       await refreshDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Backtest failed");
@@ -267,10 +299,11 @@ export function HedgeFundConsole() {
     setDashBusy(true);
     try {
       const pnl = (await fetchStrategyLivePnl(token, strategyId)) as Record<string, unknown>;
-      setLastLivePnl(
+      const summary =
         `${strategyId} · ${pnl.status} · sleeve ${money(pnl.sleeve_market_value_usd as number)} · ` +
-          `uPnL ${money(pnl.unrealized_pnl_usd as number)} (${pnl.unrealized_pnl_pct ?? 0}%)`
-      );
+        `uPnL ${money(pnl.unrealized_pnl_usd as number)} ` +
+        `(${preciseNumber(pnl.unrealized_pnl_pct as number, "%")})`;
+      setStrategyLivePnl((prev) => ({ ...prev, [strategyId]: summary }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Live PnL failed");
     } finally {
@@ -280,15 +313,16 @@ export function HedgeFundConsole() {
 
   async function onLiquidate(strategyId: string) {
     if (!token) return;
-    setDashBusy(true);
+    setLiquidateBusy(true);
     try {
       await liquidatePaperStrategy(token, strategyId);
       setDepositTick((t) => t + 1);
+      setLiquidateStrategyId(null);
       await refreshDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Liquidate failed");
     } finally {
-      setDashBusy(false);
+      setLiquidateBusy(false);
     }
   }
 
@@ -529,7 +563,7 @@ export function HedgeFundConsole() {
                       <button
                         type="button"
                         disabled={!token || dashBusy}
-                        onClick={() => void onLiquidate(s.id)}
+                        onClick={() => setLiquidateStrategyId(s.id)}
                         className="border border-warn/40 px-2 py-0.5 uppercase text-warn disabled:opacity-40"
                       >
                         Liquidate USDC
@@ -608,13 +642,21 @@ export function HedgeFundConsole() {
                     </button>
                   ))}
                 </div>
+                {strategyLivePnl[s.id] && (
+                  <div className="mt-2 border border-signal/30 bg-signal/5 px-2 py-1.5 text-signal">
+                    Live PnL: {strategyLivePnl[s.id]}
+                  </div>
+                )}
+                {strategyBacktests[s.id] && (
+                  <div className="mt-2 border border-grid bg-background/50 px-2 py-1.5 text-muted-foreground">
+                    Backtest: {strategyBacktests[s.id]}
+                  </div>
+                )}
               </div>
             );
             })}
-            {lastLivePnl && <p className="font-mono text-[11px] text-signal">Live PnL: {lastLivePnl}</p>}
             {lastAnalysis && <p className="font-mono text-[11px] text-signal">Analysis: {lastAnalysis}</p>}
             {lastRetryMsg && <p className="font-mono text-[11px] text-signal">Retry: {lastRetryMsg}</p>}
-            {lastBacktest && <p className="font-mono text-[11px] text-muted-foreground">Mock backtest: {lastBacktest}</p>}
           </div>
         </Panel>
 
@@ -997,6 +1039,33 @@ export function HedgeFundConsole() {
           Connect your wallet to sign in.
         </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(liquidateStrategyId)}
+        onOpenChange={(open) => {
+          if (!open && !liquidateBusy) setLiquidateStrategyId(null);
+        }}
+        title="Confirm liquidation to USDC"
+        description={
+          <div className="space-y-2">
+            <p>
+              This will sell every open position in{" "}
+              <strong className="text-foreground">{liquidateStrategyId}</strong> through Jupiter
+              and credit the proceeds to your USDC balance.
+            </p>
+            <p>
+              A 10% performance fee is charged only if the completed strategy has a profit.
+              This action cannot be undone.
+            </p>
+          </div>
+        }
+        confirmLabel="Liquidate to USDC"
+        cancelLabel="Keep strategy"
+        busy={liquidateBusy}
+        onConfirm={() => {
+          if (liquidateStrategyId) return onLiquidate(liquidateStrategyId);
+        }}
+      />
     </div>
   );
 }

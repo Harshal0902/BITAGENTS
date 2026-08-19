@@ -1065,6 +1065,41 @@ def liquidate_strategy(
         return {"error": "Strategy not found"}
     if strategy.get("status") == "closed":
         return {"strategy": strategy, "note": "Already closed", "trades": []}
+    if strategy.get("status") == "liquidating":
+        return {
+            "strategy": strategy,
+            "note": "Liquidation already in progress",
+            "liquidating": True,
+            "trades": [],
+        }
+    if strategy.get("status") not in ("active", "paused"):
+        return {"error": f"Cannot liquidate strategy in status={strategy.get('status')}"}
+
+    # Atomically claim liquidation so a user click and scheduler tick cannot
+    # submit duplicate Jupiter sells.
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE hf_strategies
+                SET status = 'liquidating', updated_at = NOW()
+                WHERE id = %s AND user_wallet = %s
+                  AND status IN ('active', 'paused')
+                RETURNING *
+                """,
+                (strategy_id, user_wallet.strip()),
+            )
+            claimed = cur.fetchone()
+    if not claimed:
+        latest = get_strategy(strategy_id, user_wallet)
+        return {
+            "strategy": latest,
+            "note": "Liquidation already in progress or strategy is no longer active",
+            "liquidating": True,
+            "trades": [],
+        }
+    strategy = _row(claimed)
 
     rules0 = dict(strategy.get("rules") or {})
     trading_mode = (strategy.get("trading_mode") or rules0.get("trading_mode") or "live").lower()
@@ -1072,8 +1107,27 @@ def liquidate_strategy(
         from hedge_fund_live import liquidate_live_strategy
 
         live = liquidate_live_strategy(strategy, reason=reason)
+        if not live.get("liquidated"):
+            rules0["last_liquidation_attempt_at"] = _now().isoformat()
+            rules0["liquidation_errors"] = live.get("errors") or []
+            init_db()
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE hf_strategies
+                        SET status = 'active', rules = %s, updated_at = NOW()
+                        WHERE id = %s RETURNING *
+                        """,
+                        (Json(rules0), strategy_id),
+                    )
+                    strategy = _row(cur.fetchone())
+            return {**live, "strategy": strategy, "trading_mode": "live"}
+
         rules0["liquidated_at"] = _now().isoformat()
         rules0["liquidation_proceeds_usd"] = live.get("proceeds_usdc")
+        rules0["liquidation_total_proceeds_usd"] = live.get("total_proceeds_usdc")
+        rules0["liquidation_profit_usd"] = live.get("profit_usd")
         rules0["perf_fee_usd"] = live.get("perf_fee_usd")
         rules0["liquidation_mint"] = USDC_MINT
         init_db()
@@ -1215,12 +1269,27 @@ def maybe_liquidate_expired(strategy_id: str) -> Optional[dict[str, Any]]:
     strategy = get_strategy(strategy_id)
     if not strategy or strategy.get("status") != "active":
         return None
-    pnl = strategy_live_pnl(strategy_id, strategy["user_wallet"])
-    if pnl.get("expired"):
+    rules = strategy.get("rules") or {}
+    horizon = int(strategy.get("horizon_days") or rules.get("horizon_days") or 0)
+    created = strategy.get("created_at")
+    if not horizon or not created:
+        return None
+    try:
+        created_dt = (
+            datetime.fromisoformat(created.replace("Z", "+00:00"))
+            if isinstance(created, str)
+            else created
+        )
+        if created_dt.tzinfo is None:
+            created_dt = created_dt.replace(tzinfo=timezone.utc)
+        expired = _now() >= created_dt + timedelta(days=horizon)
+    except Exception:
+        expired = False
+    if expired:
         return liquidate_strategy(
             strategy_id,
             strategy["user_wallet"],
-            reason=f"Horizon {strategy.get('horizon_days')}d ended — auto-liquidate to USDC",
+            reason=f"Horizon {horizon}d ended — auto-liquidate to USDC",
         )
     return None
 
@@ -2054,6 +2123,35 @@ def evaluate_all_active_strategies() -> dict[str, Any]:
     return {"strategies_evaluated": len(ids), "results": results}
 
 
+def liquidate_all_expired_strategies() -> dict[str, Any]:
+    """Cheap scheduler pass: check every active horizon without market-data calls."""
+    init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Recover a claim if the API process died during an on-chain call.
+            cur.execute(
+                """
+                UPDATE hf_strategies
+                SET status = 'active', updated_at = NOW()
+                WHERE status = 'liquidating'
+                  AND updated_at < NOW() - INTERVAL '10 minutes'
+                """
+            )
+            cur.execute(
+                """
+                SELECT id FROM hf_strategies
+                WHERE status = 'active' AND horizon_days IS NOT NULL AND horizon_days > 0
+                """
+            )
+            ids = [r["id"] for r in cur.fetchall()]
+    results = []
+    for sid in ids:
+        result = maybe_liquidate_expired(sid)
+        if result:
+            results.append({"strategy_id": sid, **result})
+    return {"checked": len(ids), "liquidations": results, "count": len(results)}
+
+
 def monitor_cycle(force_prices: bool = False) -> dict[str, Any]:
     """Refresh shared market data for watched symbols, then evaluate strategies."""
     global _last_market_refresh_at
@@ -2328,19 +2426,23 @@ def _scheduler_loop() -> None:
     time.sleep(5)
     while not _scheduler_stop.is_set():
         try:
+            # Check horizon expiry every scheduler poll, independent of Yahoo
+            # symbols and the slower 4h market-analysis cadence.
+            expired = liquidate_all_expired_strategies()
+            if expired["count"]:
+                print(f"  HF auto-liquidation: {expired['count']} expired strategy attempt(s)")
+
             due = True
             if _last_market_refresh_at is not None:
                 age = (_now() - _last_market_refresh_at).total_seconds()
                 due = age >= HF_MONITOR_INTERVAL_SECONDS
-            if due and list_watched_symbols():
+            if due:
                 print(f"\n  📈 Hedge Fund paper monitor cycle ({HF_MONITOR_INTERVAL_SECONDS // 3600}h)")
                 result = monitor_cycle(force_prices=True)
                 print(
                     f"  HF monitor: {result.get('market', {}).get('count', 0)} symbols · "
                     f"{result.get('evaluations', {}).get('strategies_evaluated', 0)} strategies"
                 )
-            elif due:
-                _last_market_refresh_at = _now()
         except Exception as exc:
             print(f"  ⚠️  HF paper scheduler error: {exc}")
         _scheduler_stop.wait(HF_SCHEDULER_POLL_SECONDS)
