@@ -5,7 +5,7 @@ import { DCA_AGENT } from "@/lib/dcaAgentSimulation";
 
 export const metadata: Metadata = {
   title: "DCA Agent - BIT Agents",
-  description: "Run the Solana DCA Agent - recurring buys, Jupiter swaps, and plan management.",
+  description: "Run the Solana DCA Agent - recurring buys, and plan management.",
 };
 
 export default function DcaAgentPage() {

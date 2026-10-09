@@ -2,6 +2,8 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Panel } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { InstructionsDialog } from "@/components/agents/InstructionsDialog";
 import {
   fetchKickstartHealth,
   mapKickstartActions,
@@ -11,14 +13,176 @@ import {
 import { KICKSTART_COPILOT, KICKSTART_EXAMPLE_PROMPTS } from "@/lib/kickstartCopilotConfig";
 import { useKickstartWalletAuth } from "@/hooks/useKickstartWalletAuth";
 import { EasyaTradingDeposit } from "@/components/agents/EasyaTradingDeposit";
+import { EasyaOrderPanel } from "@/components/agents/EasyaOrderPanel";
 import type { AgentAction } from "@/lib/dcaAgentClient";
+import { findLatestConfirmationRequired, type ConfirmationDetails } from "@/lib/dcaActionResults";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { getCustomInstructions, saveCustomInstructions } from "@/lib/customInstructionsClient";
 
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
 };
+
+function TradingConfirmDetailsView({ details }: { details?: ConfirmationDetails }) {
+  if (!details) return null;
+
+  if (
+    details.action === "place_limit_buy" ||
+    details.action === "place_threshold_buy" ||
+    details.action === "place_market_buy" ||
+    details.action === "cancel_trading_order"
+  ) {
+    return (
+      <dl className="mt-3 space-y-2 border-t border-grid pt-3 font-mono text-[11px]">
+        <div className="grid grid-cols-[110px_1fr] gap-1">
+          {details.order_type && (
+            <>
+              <dt className="text-muted-foreground">Type</dt>
+              <dd className="uppercase text-foreground">{details.order_type}</dd>
+            </>
+          )}
+          {details.input_token && (
+            <>
+              <dt className="text-muted-foreground">From</dt>
+              <dd>{details.input_token}</dd>
+            </>
+          )}
+          {details.output_token && (
+            <>
+              <dt className="text-muted-foreground">To</dt>
+              <dd>
+                {details.output_token}{" "}
+                {details.output_mint && (
+                  <code className="block break-all text-[10px] text-foreground">{details.output_mint}</code>
+                )}
+              </dd>
+            </>
+          )}
+          {details.amount_sol != null && (
+            <>
+              <dt className="text-muted-foreground">SOL amount</dt>
+              <dd>{details.amount_sol}</dd>
+            </>
+          )}
+          {details.limit_price_usd != null && (
+            <>
+              <dt className="text-muted-foreground">Limit price</dt>
+              <dd>${details.limit_price_usd}</dd>
+            </>
+          )}
+          {details.limit_market_cap_usd != null && (
+            <>
+              <dt className="text-muted-foreground">Limit market cap</dt>
+              <dd>${details.limit_market_cap_usd.toLocaleString()}</dd>
+            </>
+          )}
+          {details.current_price_usd != null && (
+            <>
+              <dt className="text-muted-foreground">Current price</dt>
+              <dd>${details.current_price_usd}</dd>
+            </>
+          )}
+          {details.current_market_cap_usd != null && (
+            <>
+              <dt className="text-muted-foreground">Current market cap</dt>
+              <dd>${details.current_market_cap_usd.toLocaleString()}</dd>
+            </>
+          )}
+          {details.trigger_condition && (
+            <>
+              <dt className="text-muted-foreground">Buy when</dt>
+              <dd>{details.trigger_condition}</dd>
+            </>
+          )}
+          {details.stop_condition && details.stop_condition !== "Stops when SOL runs out or max executions reached" && (
+            <>
+              <dt className="text-muted-foreground">Stop when</dt>
+              <dd>{details.stop_condition}</dd>
+            </>
+          )}
+          {details.executions != null && (
+            <>
+              <dt className="text-muted-foreground">Executions</dt>
+              <dd>
+                {details.action === "place_threshold_buy"
+                  ? details.max_executions != null
+                    ? `Up to ${details.max_executions} buys`
+                    : "Until SOL runs out"
+                  : `${details.executions} (one-time buy)`}
+              </dd>
+            </>
+          )}
+          {(details.check_interval_seconds != null || details.check_interval_minutes != null) && (
+            <>
+              <dt className="text-muted-foreground">Check interval</dt>
+              <dd>{formatCheckInterval(details)}</dd>
+            </>
+          )}
+          {details.max_executions != null && details.action === "place_threshold_buy" && (
+            <>
+              <dt className="text-muted-foreground">Max buys</dt>
+              <dd>{details.max_executions}</dd>
+            </>
+          )}
+          {details.slippage_bps != null && (
+            <>
+              <dt className="text-muted-foreground">Slippage</dt>
+              <dd>{details.slippage_bps} bps</dd>
+            </>
+          )}
+          {details.platform_fee != null && (
+            <>
+              <dt className="text-muted-foreground">Platform fee</dt>
+              <dd>
+                {details.platform_fee} SOL (0.1%)
+              </dd>
+            </>
+          )}
+          {details.total_cost != null && (
+            <>
+              <dt className="text-muted-foreground">Total cost</dt>
+              <dd>{details.total_cost} SOL (swap + fee)</dd>
+            </>
+          )}
+          {details.total_cost_per_buy != null && (
+            <>
+              <dt className="text-muted-foreground">Cost per buy</dt>
+              <dd>{details.total_cost_per_buy} SOL (swap + fee)</dd>
+            </>
+          )}
+          {details.order_id && (
+            <>
+              <dt className="text-muted-foreground">Order ID</dt>
+              <dd>{details.order_id}</dd>
+            </>
+          )}
+        </div>
+      </dl>
+    );
+  }
+
+  return null;
+}
+
+function formatCheckInterval(details: ConfirmationDetails) {
+  if (details.check_interval_seconds != null) {
+    const seconds = details.check_interval_seconds;
+    if (seconds < 60) return `Every ${seconds}s`;
+    if (seconds % 60 === 0) {
+      const mins = seconds / 60;
+      return mins === 1 ? "Every 1 min" : `Every ${mins} min`;
+    }
+    return `Every ${seconds}s`;
+  }
+  if (details.check_interval_minutes != null) {
+    return details.check_interval_minutes === 1
+      ? "Every 1 min"
+      : `Every ${details.check_interval_minutes} min`;
+  }
+  return null;
+}
 
 function formatReply(text: string) {
   return text.split("\n").map((line, i) => {
@@ -86,6 +250,12 @@ export function KickstartCopilotConsole() {
   const [error, setError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [actions, setActions] = useState<AgentAction[]>([]);
+  const [dataRefreshTick, setDataRefreshTick] = useState(0);
+  const [agentConfirmOpen, setAgentConfirmOpen] = useState(false);
+  const [agentConfirmMessage, setAgentConfirmMessage] = useState<string | null>(null);
+  const [agentConfirmDetails, setAgentConfirmDetails] = useState<ConfirmationDetails | undefined>();
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
+  const [customInstructions, setCustomInstructions] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
   const actionsEndRef = useRef<HTMLDivElement>(null);
 
@@ -95,6 +265,14 @@ export function KickstartCopilotConsole() {
       setAgentOnline(h?.status === "ok");
     });
   }, []);
+
+  useEffect(() => {
+    if (token) {
+      void getCustomInstructions("easya", token)
+        .then((instr) => setCustomInstructions(instr))
+        .catch((err) => console.error("Failed to load custom instructions:", err));
+    }
+  }, [token]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -108,17 +286,30 @@ export function KickstartCopilotConsole() {
     if (!token || !text.trim()) return;
     setBusy(true);
     setError(null);
-    setMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: "user", content: text.trim() }]);
+    const trimmed = text.trim();
+    const messageWithInstructions = customInstructions.trim()
+      ? `[Custom Instructions: ${customInstructions.trim()}]\n\n${trimmed}`
+      : trimmed;
+    setMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: "user", content: trimmed }]);
 
     try {
       const history = messages.map((m) => ({ role: m.role, content: m.content }));
-      const res = await sendKickstartMessage(text.trim(), token, sessionId, history);
+      const res = await sendKickstartMessage(messageWithInstructions, token, sessionId, history);
       setSessionId(res.session_id);
       setMessages((prev) => [
         ...prev,
         { id: `a-${Date.now()}`, role: "assistant", content: res.reply },
       ]);
-      setActions(mapKickstartActions(res.actions));
+      const mapped = mapKickstartActions(res.actions);
+      setActions(mapped);
+      setDataRefreshTick((tick) => tick + 1);
+
+      const pendingConfirm = findLatestConfirmationRequired(mapped);
+      if (pendingConfirm) {
+        setAgentConfirmMessage(pendingConfirm.message);
+        setAgentConfirmDetails(pendingConfirm.details);
+        setAgentConfirmOpen(true);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Request failed";
       setError(msg);
@@ -137,6 +328,18 @@ export function KickstartCopilotConsole() {
     if (!text) return;
     setInput("");
     void runCommand(text);
+  }
+
+  async function onSaveInstructions(instructions: string) {
+    if (!token) return;
+    try {
+      await saveCustomInstructions("easya", instructions, token);
+      setCustomInstructions(instructions);
+      setInstructionsOpen(false);
+    } catch (err) {
+      console.error("Failed to save custom instructions:", err);
+      alert("Failed to save custom instructions. Please try again.");
+    }
   }
 
   return (
@@ -184,11 +387,26 @@ export function KickstartCopilotConsole() {
       )}
 
       {publicKey && token && (
-        <EasyaTradingDeposit cluster={KICKSTART_COPILOT.cluster} authToken={token} />
+        <EasyaTradingDeposit
+          cluster={KICKSTART_COPILOT.cluster}
+          authToken={token}
+          refreshTick={dataRefreshTick}
+        />
       )}
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <Panel title="EasyA Analysis Agent" className="lg:col-span-2">
+        <Panel 
+          title="EasyA Analysis Agent" 
+          className="lg:col-span-2"
+          action={
+            <button
+              onClick={() => setInstructionsOpen(true)}
+              className="rounded border border-grid bg-surface px-3 py-1.5 text-xs font-medium uppercase tracking-wider transition hover:border-signal hover:text-signal"
+            >
+              Instructions
+            </button>
+          }
+        >
           <div className="flex max-h-[420px] flex-col gap-4 overflow-y-auto pr-1">
             {messages.length === 0 && (
               <p className="text-sm text-muted-foreground">
@@ -269,11 +487,61 @@ export function KickstartCopilotConsole() {
         </Panel>
       </div>
 
+      {token && (
+        <EasyaOrderPanel
+          authToken={token}
+          cluster={KICKSTART_COPILOT.cluster}
+          refreshTick={dataRefreshTick}
+        />
+      )}
+
       {publicKey && !isAuthenticated && !authBusy && (
         <div className="border border-grid bg-surface/40 px-4 py-3 font-mono text-xs text-muted-foreground">
           Approve the wallet sign-in prompt to start chatting.
         </div>
       )}
+
+      <ConfirmDialog
+        open={agentConfirmOpen}
+        onOpenChange={(open) => {
+          setAgentConfirmOpen(open);
+          if (!open) {
+            setAgentConfirmMessage(null);
+            setAgentConfirmDetails(undefined);
+          }
+        }}
+        title="Confirm trading order"
+        description={
+          <>
+            <p className="whitespace-pre-wrap">
+              {agentConfirmMessage ?? "Please confirm before the agent places this order."}
+            </p>
+            <TradingConfirmDetailsView details={agentConfirmDetails} />
+          </>
+        }
+        confirmLabel="Yes, proceed"
+        cancelLabel="No, cancel"
+        busy={busy}
+        onCancel={() => {
+          setAgentConfirmOpen(false);
+          setAgentConfirmMessage(null);
+          setAgentConfirmDetails(undefined);
+          void runCommand("no, cancel");
+        }}
+        onConfirm={() => {
+          setAgentConfirmOpen(false);
+          setAgentConfirmMessage(null);
+          setAgentConfirmDetails(undefined);
+          void runCommand("yes, confirm");
+        }}
+      />
+
+      <InstructionsDialog
+        open={instructionsOpen}
+        onOpenChange={setInstructionsOpen}
+        instructions={customInstructions}
+        onSave={onSaveInstructions}
+      />
     </div>
   );
 }

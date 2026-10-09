@@ -230,12 +230,12 @@ export const DCA_AGENT = {
   id: "dca",
   name: "DCA Agent",
   slug: "dca",
-  tagline: "Recurring buys · Jupiter swaps",
+  tagline: "Recurring buys",
   description:
     "Set up dollar-cost averaging on Solana.",
   status: "Running" as const,
   task: "Monitoring 2 active DCA plans on devnet",
   strategy: "dca-scheduler",
-  model: "llama3.1",
+  model: "meta-llama/llama-3.1-8b-instruct",
   cluster: "devnet",
 };

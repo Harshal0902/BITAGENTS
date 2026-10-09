@@ -21,16 +21,30 @@ export async function POST(request: Request) {
 
   try {
     const res = await proxyDcaChat({ message, session_id: body.session_id }, authToken);
-    const data = await res.json();
+    const text = await res.text();
+    let data: Record<string, unknown>;
+    try {
+      data = text.trim() ? (JSON.parse(text) as Record<string, unknown>) : {};
+    } catch {
+      return NextResponse.json(
+        {
+          error: "DCA agent API returned non-JSON",
+          detail: text.trim().slice(0, 240) || `HTTP ${res.status}`,
+        },
+        { status: 502 }
+      );
+    }
     if (!res.ok) {
       return NextResponse.json(data, { status: res.status });
     }
     return NextResponse.json(data);
-  } catch {
+  } catch (err) {
+    const detail =
+      err instanceof Error ? err.message : "Cannot reach DCA agent API";
     return NextResponse.json(
       {
         error: "Cannot reach DCA agent API",
-        detail: "Start the agent locally: cd agent/new && python dca_api.py",
+        detail: `${detail}. Start the agent locally: cd agent/new && python agents_api.py`,
       },
       { status: 503 }
     );

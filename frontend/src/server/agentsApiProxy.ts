@@ -25,8 +25,9 @@ function getAuthToken(request?: Request): string | undefined {
   return header.slice("Bearer ".length).trim();
 }
 
-export async function proxyAgentsHealth(): Promise<Response> {
-  return fetch(`${getAgentsBaseUrl()}/health`, {
+export async function proxyAgentsHealth(pingLlm = false): Promise<Response> {
+  const params = pingLlm ? "?ping_llm=true" : "";
+  return fetch(`${getAgentsBaseUrl()}/health${params}`, {
     cache: "no-store",
     headers: buildHeaders(),
   });
@@ -81,10 +82,320 @@ export async function proxyKickstartChat(
   });
 }
 
-export async function proxyKickstartWalletAgent(): Promise<Response> {
-  return fetch(`${getAgentsBaseUrl()}/kickstart/wallet/agent`, {
+export async function proxyResearchAgentHealth(slug: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/${slug}/health`, {
     cache: "no-store",
     headers: buildHeaders(),
+  });
+}
+
+export async function proxyResearchAgentChat(
+  slug: string,
+  body: {
+    message: string;
+    session_id?: string;
+    history?: { role: "user" | "assistant"; content: string }[];
+  },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/${slug}/chat`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyHedgeFundFees(): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/fees`, {
+    cache: "no-store",
+    headers: buildHeaders(),
+  });
+}
+
+export async function proxyHedgeFundPaperDashboard(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/paper/dashboard`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyHedgeFundPaperStrategies(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/paper/strategies`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyHedgeFundPaperCreateStrategy(
+  body: Record<string, unknown>,
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/paper/strategies`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyHedgeFundPaperUpdateStrategy(
+  strategyId: string,
+  body: Record<string, unknown>,
+  authToken: string
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}`,
+    {
+      method: "PATCH",
+      headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+export async function proxyHedgeFundPaperMonitor(
+  authToken: string,
+  force = false
+): Promise<Response> {
+  const params = force ? "?force=true" : "";
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/paper/monitor${params}`, {
+    method: "POST",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyHedgeFundPaperBacktest(
+  body: Record<string, unknown>,
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/paper/backtest`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyHedgeFundPaperConfirmStrategy(
+  strategyId: string,
+  authToken: string,
+  body: Record<string, unknown> = {}
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/confirm`,
+    {
+      method: "POST",
+      headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+export async function proxyHedgeFundPaperStrategyPnl(
+  strategyId: string,
+  authToken: string
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/pnl`,
+    {
+      cache: "no-store",
+      headers: buildHeaders(authToken),
+    }
+  );
+}
+
+export async function proxyHedgeFundPaperRetryStrategy(
+  strategyId: string,
+  authToken: string,
+  body: Record<string, unknown> = {}
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/retry`,
+    {
+      method: "POST",
+      headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+export async function proxyHedgeFundPaperLiquidateStrategy(
+  strategyId: string,
+  authToken: string
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/liquidate`,
+    {
+      method: "POST",
+      headers: buildHeaders(authToken),
+    }
+  );
+}
+
+export async function proxyHedgeFundPaperDismissStrategy(
+  strategyId: string,
+  authToken: string
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/dismiss`,
+    {
+      method: "POST",
+      headers: buildHeaders(authToken),
+    }
+  );
+}
+
+export async function proxyHedgeFundPaperAddCapital(
+  strategyId: string,
+  body: Record<string, unknown>,
+  authToken: string
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/add-capital`,
+    {
+      method: "POST",
+      headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+export async function proxyHedgeFundPaperAnalyze(
+  body: Record<string, unknown>,
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/paper/analyze`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyHedgeFundLiveTrades(
+  strategyId: string,
+  authToken: string,
+  limit = 100
+): Promise<Response> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return fetch(
+    `${getAgentsBaseUrl()}/hedge-fund/paper/strategies/${encodeURIComponent(strategyId)}/live-trades?${params}`,
+    {
+      cache: "no-store",
+      headers: buildHeaders(authToken),
+    }
+  );
+}
+
+export async function proxyHedgeFundWalletAgent(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/wallet/agent`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyHedgeFundWalletBalance(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/wallet/balance`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyHedgeFundDepositVerify(
+  body: { signature: string },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/wallet/deposit/verify`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyHedgeFundWithdraw(
+  body: { token: string; amount: number },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/wallet/withdraw`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyHedgeFundWalletLedger(
+  authToken: string,
+  limit = 50
+): Promise<Response> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return fetch(`${getAgentsBaseUrl()}/hedge-fund/wallet/ledger?${params}`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyYieldWalletAgent(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/yield/wallet/agent`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyYieldWalletBalance(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/yield/wallet/balance`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyYieldDepositVerify(
+  body: { signature: string },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/yield/wallet/deposit/verify`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyYieldWithdraw(
+  body: { token: string; amount: number },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/yield/wallet/withdraw`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyYieldInvest(
+  body: {
+    asset: string;
+    capital: number;
+    duration_days: number;
+    yield_type?: string;
+    skip_deposit_ledger?: boolean;
+    force_protocol?: string;
+  },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/yield/invest`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyYieldDashboard(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/yield/dashboard`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyKickstartWalletAgent(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/kickstart/wallet/agent`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
   });
 }
 
@@ -117,8 +428,60 @@ export async function proxyKickstartWithdraw(
   });
 }
 
-export async function proxyDcaHealth(): Promise<Response> {
-  return proxyAgentsHealth();
+export async function proxyKickstartOrders(
+  authToken: string,
+  params?: { active_only?: boolean; limit?: number; refresh_metrics?: boolean }
+): Promise<Response> {
+  const search = new URLSearchParams();
+  if (params?.active_only) search.set("active_only", "true");
+  if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.refresh_metrics) search.set("refresh_metrics", "true");
+  const qs = search.toString();
+  return fetch(`${getAgentsBaseUrl()}/kickstart/orders${qs ? `?${qs}` : ""}`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyKickstartOrderExecutions(
+  orderId: string,
+  authToken: string,
+  limit = 50
+): Promise<Response> {
+  const search = new URLSearchParams({ limit: String(limit) });
+  return fetch(
+    `${getAgentsBaseUrl()}/kickstart/orders/${encodeURIComponent(orderId)}/executions?${search}`,
+    {
+      cache: "no-store",
+      headers: buildHeaders(authToken),
+    }
+  );
+}
+
+export async function proxyKickstartCancelOrder(
+  orderId: string,
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/kickstart/orders/${encodeURIComponent(orderId)}/cancel`, {
+    method: "POST",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyKickstartUpdateOrder(
+  orderId: string,
+  body: { amount_sol?: number; limit_price_usd?: number; slippage_bps?: number },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/kickstart/orders/${encodeURIComponent(orderId)}`, {
+    method: "PATCH",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyDcaHealth(pingLlm = false): Promise<Response> {
+  return proxyAgentsHealth(pingLlm);
 }
 
 export async function proxyDcaAuthChallenge(userWallet: string): Promise<Response> {
@@ -148,10 +511,10 @@ export async function proxyDcaChat(
   });
 }
 
-export async function proxyDcaWalletAgent(): Promise<Response> {
+export async function proxyDcaWalletAgent(authToken: string): Promise<Response> {
   return fetch(`${getAgentsBaseUrl()}/wallet/agent`, {
     cache: "no-store",
-    headers: buildHeaders(),
+    headers: buildHeaders(authToken),
   });
 }
 
@@ -228,6 +591,24 @@ export async function proxyDcaPlanStatus(
   });
 }
 
+export async function proxyDcaUpdatePlan(
+  planId: string,
+  body: {
+    amount_per_buy?: number;
+    interval?: string;
+    max_executions?: number | null;
+    total_budget?: number | null;
+    slippage_bps?: number;
+  },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/plans/${encodeURIComponent(planId)}`, {
+    method: "PATCH",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
 export async function proxyDcaWalletLedger(
   authToken: string,
   limit = 50
@@ -255,6 +636,311 @@ export async function proxyDcaMetrics(refresh = false): Promise<Response> {
   return fetch(`${getAgentsBaseUrl()}/metrics${params}`, {
     cache: "no-store",
     headers: buildHeaders(),
+  });
+}
+
+export async function proxyVolumeHealth(): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/volume/health`, {
+    cache: "no-store",
+    headers: buildHeaders(),
+  });
+}
+
+export async function proxyVolumeChat(
+  body: { message: string; session_id?: string },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/volume/chat`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyVolumeWalletAgent(): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/volume/wallet/agent`, {
+    cache: "no-store",
+    headers: buildHeaders(),
+  });
+}
+
+export async function proxyVolumeWalletBalance(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/volume/wallet/balance`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyVolumeDepositVerify(
+  body: { signature: string },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/volume/wallet/deposit/verify`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyVolumeWithdraw(
+  body: { token: string; amount: number; convert_to_quote?: boolean; quote_token?: string },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/volume/wallet/withdraw`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyVolumeWalletLedger(
+  authToken: string,
+  limit = 50
+): Promise<Response> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return fetch(`${getAgentsBaseUrl()}/volume/wallet/ledger?${params}`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyVolumePoolCheck(baseToken: string, quoteToken = "SOL"): Promise<Response> {
+  const params = new URLSearchParams({
+    base_token: baseToken,
+    quote_token: quoteToken,
+  });
+  return fetch(`${getAgentsBaseUrl()}/volume/pool/check?${params}`, {
+    cache: "no-store",
+    headers: buildHeaders(),
+  });
+}
+
+export async function proxyVolumePoolEnsure(
+  body: { base_token: string; quote_token: string; create_if_missing: boolean },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/volume/pool/ensure`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyVolumeCampaigns(
+  authToken: string,
+  params?: { active_only?: boolean; status?: string }
+): Promise<Response> {
+  const search = new URLSearchParams();
+  if (params?.active_only) search.set("active_only", "true");
+  if (params?.status) search.set("status", params.status);
+  const qs = search.toString();
+  return fetch(`${getAgentsBaseUrl()}/volume/campaigns${qs ? `?${qs}` : ""}`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyVolumeCreateCampaign(
+  body: {
+    base_token: string;
+    quote_token?: string;
+    trade_amount: number;
+    interval: string;
+    max_executions: number;
+    name?: string;
+    total_budget?: number;
+    slippage_bps?: number;
+    seed_token_amount?: number;
+  },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/volume/campaigns`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyVolumeCampaignExecutions(
+  campaignId: string,
+  authToken: string
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/volume/campaigns/${encodeURIComponent(campaignId)}/executions`,
+    {
+      cache: "no-store",
+      headers: buildHeaders(authToken),
+    }
+  );
+}
+
+export async function proxyVolumeCampaignStatus(
+  campaignId: string,
+  action: string,
+  authToken: string
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/volume/campaigns/${encodeURIComponent(campaignId)}/status`,
+    {
+      method: "POST",
+      headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+      body: JSON.stringify({ action }),
+    }
+  );
+}
+
+export async function proxyVolumeCampaignProvision(
+  campaignId: string,
+  authToken: string
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/volume/campaigns/${encodeURIComponent(campaignId)}/provision`,
+    {
+      method: "POST",
+      headers: buildHeaders(authToken),
+    }
+  );
+}
+
+export async function proxyVolumeAuthChallenge(userWallet: string): Promise<Response> {
+  return proxyAgentsAuthChallenge(userWallet);
+}
+
+export async function proxyVolumeAuthVerify(body: {
+  user_wallet: string;
+  message: string;
+  signature: string;
+}): Promise<Response> {
+  return proxyAgentsAuthVerify(body);
+}
+
+export async function proxyVolumeAuthMe(authToken: string): Promise<Response> {
+  return proxyAgentsAuthMe(authToken);
+}
+
+export async function proxyVolumeResolveToken(query: string): Promise<Response> {
+  return proxyDcaResolveToken(query);
+}
+
+export async function proxyGetCustomInstructions(
+  agentType: string,
+  authToken: string
+): Promise<Response> {
+  return fetch(
+    `${getAgentsBaseUrl()}/v1/custom-instructions/${encodeURIComponent(agentType)}`,
+    {
+      cache: "no-store",
+      headers: buildHeaders(authToken),
+    }
+  );
+}
+
+export async function proxySaveCustomInstructions(
+  body: { agent_type: string; instructions: string },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/v1/custom-instructions`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyLaunchConfig(): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/launch/config`, {
+    cache: "no-store",
+    headers: buildHeaders(),
+  });
+}
+
+export async function proxyLaunchPublicAgents(limit = 100): Promise<Response> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return fetch(`${getAgentsBaseUrl()}/launch/public?${params}`, {
+    cache: "no-store",
+    headers: buildHeaders(),
+  });
+}
+
+export async function proxyLaunchPublicAgent(agentId: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/launch/public/${encodeURIComponent(agentId)}`, {
+    cache: "no-store",
+    headers: buildHeaders(),
+  });
+}
+
+export async function proxyLaunchAgentsList(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/launch`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyLaunchDashboard(authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/launch/dashboard`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyLaunchAgent(
+  body: {
+    name: string;
+    description?: string;
+    task: string;
+    modules: string[];
+    signature?: string;
+    visibility?: "public" | "private";
+    price_per_month_sol?: number | null;
+  },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/launch`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxySubscribeAgent(
+  agentId: string,
+  body: { signature?: string },
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/launch/${encodeURIComponent(agentId)}/subscribe`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyLaunchAgentGet(agentId: string, authToken: string): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/launch/${encodeURIComponent(agentId)}`, {
+    cache: "no-store",
+    headers: buildHeaders(authToken),
+  });
+}
+
+export async function proxyUpdateLaunchAgent(
+  agentId: string,
+  body: Record<string, unknown>,
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/launch/${encodeURIComponent(agentId)}`, {
+    method: "PATCH",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function proxyLaunchAgentChat(
+  agentId: string,
+  body: Record<string, unknown>,
+  authToken: string
+): Promise<Response> {
+  return fetch(`${getAgentsBaseUrl()}/launch/${encodeURIComponent(agentId)}/chat`, {
+    method: "POST",
+    headers: buildHeaders(authToken, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
   });
 }
 

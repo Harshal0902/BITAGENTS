@@ -6,7 +6,11 @@ import { PhantomWalletAdapter } from "@solana/wallet-adapter-phantom";
 import { useMemo, type ComponentType, type ReactNode } from "react";
 import { getClientSolanaRpcEndpoint } from "@/lib/solana/config";
 
-type ConnectionProviderProps = { endpoint: string; children: ReactNode };
+type ConnectionProviderProps = {
+  endpoint: string;
+  config?: { commitment?: "processed" | "confirmed" | "finalized"; disableRetryOnRateLimit?: boolean };
+  children: ReactNode;
+};
 type WalletProviderProps = { wallets: PhantomWalletAdapter[]; autoConnect?: boolean; children: ReactNode };
 type WalletModalProviderProps = { children: ReactNode };
 
@@ -22,7 +26,10 @@ export function SolanaProviders({ children }: { children: ReactNode }) {
   const wallets = useMemo(() => [new PhantomWalletAdapter()], []);
 
   return (
-    <WalletConnectionProvider endpoint={endpoint}>
+    <WalletConnectionProvider
+      endpoint={endpoint}
+      config={{ commitment: "confirmed", disableRetryOnRateLimit: true }}
+    >
       <WalletRootProvider wallets={wallets} autoConnect>
         <WalletModalRootProvider>{children}</WalletModalRootProvider>
       </WalletRootProvider>
